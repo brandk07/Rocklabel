@@ -1,0 +1,73 @@
+{
+  "tool_version": "0.2.0",
+  "config": {
+    "topics": {
+      "pointcloud_topic": "/multiscan/lidar_scan",
+      "odom_frame": "odom",
+      "base_frame": "base_link",
+      "lidar_frame": "lidar_link",
+      "tf_topic": "/tf",
+      "tf_static_topic": "/tf_static",
+      "pose_tolerance_s": 0.15,
+      "static_lidar_to_base": null,
+      "min_range_m": 0.7
+    },
+    "labeler": {
+      "accumulator_voxel_m": 0.03,
+      "default_rock_radius_m": 0.15,
+      "stride": 1,
+      "z_min": null,
+      "z_max": null
+    },
+    "generator": {
+      "frame_stride": 5,
+      "frame_window_s": 0.0,
+      "crop_forward_m": 6.0,
+      "crop_backward_m": 2.0,
+      "crop_left_m": 4.0,
+      "crop_right_m": 4.0,
+      "crop_up_m": 1.5,
+      "crop_down_m": 1.0,
+      "boundary_shell_m": 0.05,
+      "centers_voxel_m": 0.05,
+      "neighborhood_radius_m": 0.5,
+      "min_neighbors": 20,
+      "neighborhood_points": 256,
+      "negative_keep_prob": 0.05,
+      "bev_cell_m": 0.1,
+      "seed": 42
+    }
+  },
+  "config_hash": "dae84b6faa534157108961ded07a568d6ddaca464ff6e236bb9192eea769e5d4",
+  "runs": {
+    "myroom1": {
+      "run_id": "myroom1",
+      "mcap_path": "/home/brandon/Documents/perception-2026-testing/rocklabel/recordings/myroom1.mcap",
+      "labels_path": "/home/brandon/Documents/perception-2026-testing/rocklabel/labels/myroom1.labels.json",
+      "rock_count": 4,
+      "intensity_available": true,
+      "generated": "2026-07-19T20:42:35Z",
+      "frames_kept": 1228,
+      "frames_skipped_pose": 0,
+      "frames_skipped_empty": 5,
+      "point_samples": 18160,
+      "bev_frames": 1228,
+      "sample_labels": {
+        "rock": 7978,
+        "clear": 10182
+      },
+      "point_labels": {
+        "rock": 12194,
+        "clear": 313514,
+        "ignore": 4677
+      },
+      "bev_cells": {
+        "rock": 4578,
+        "clear": 94801,
+        "ignore": 7759821
+      },
+      "stamp_fallbacks": 0
+    }
+  },
+  "generated": "2026-07-19T20:42:35Z"
+}

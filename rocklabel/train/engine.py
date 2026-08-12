@@ -1,0 +1,259 @@
+"""Training/eval harness shared by both models.
+
+One fold = one resumable run directory:
+    training/runs/<name>/
+        config.json      exact settings (re-running with different ones errors)
+        history.csv      per-epoch train/val metrics (plots regenerate from this)
+        last.pt          model+optimizer+epoch (resume point)
+        best.pt          best val PR-AUC weights
+        test_metrics.json, predictions.npz   written by evaluate()
+
+Batching is hand-rolled over in-RAM tensors instead of a DataLoader: the whole
+pooled training set is ~300 MB, so worker processes would only add overhead.
+Heading invariance is a training-time augmentation by design (the odom-frame
+crop is deliberately axis-aligned, see config.example.yaml), hence the random
+z-rotation + mirror applied to dx/dy on the GPU each batch.
+"""
+
+from __future__ import annotations
+
+import csv
+import json
+import os
+
+import numpy as np
+import torch
+from tqdm import tqdm
+
+from . import data as D
+from . import metrics as M
+from .models import build_model
+
+VAL_METRIC = "val_pr_auc"
+
+
+def _seed_all(seed: int) -> None:
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
+
+def _device(arg: str | None) -> torch.device:
+    if arg:
+        return torch.device(arg)
+    return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+class Split:
+    """Tensors for one side of a split, kept on CPU; batches move to device."""
+
+    def __init__(self, runs: list[D.RunData], masks: list[np.ndarray] | None = None):
+        def cat(key):
+            return np.concatenate([getattr(r, key)[m] for r, m in
+                                   zip(runs, masks or [slice(None)] * len(runs))])
+        self.points = torch.from_numpy(cat("points"))
+        self.labels = torch.from_numpy(cat("labels").astype(np.float32))
+        self.counts = torch.from_numpy(cat("counts").astype(np.int64))
+        self.frame = cat("frame")
+        self.centers = cat("centers")
+        self.run_id = np.concatenate([
+            np.full(int(np.sum(m) if not isinstance(m, slice) else len(r)), r.run_id, dtype=object)
+            for r, m in zip(runs, masks or [slice(None)] * len(runs))])
+
+    def __len__(self) -> int:
+        return len(self.labels)
+
+
+def _augment(pts: torch.Tensor, gen: torch.Generator) -> torch.Tensor:
+    """Random z-rotation + mirror of the center-relative dx/dy channels."""
+    b = pts.shape[0]
+    theta = torch.rand(b, generator=gen, device=pts.device) * (2 * torch.pi)
+    c, s = torch.cos(theta), torch.sin(theta)
+    flip = torch.where(torch.rand(b, generator=gen, device=pts.device) < 0.5, -1.0, 1.0)
+    rot = torch.stack([torch.stack([c, -s], -1), torch.stack([s * flip, c * flip], -1)], 1)
+    out = pts.clone()
+    out[..., :2] = torch.bmm(pts[..., :2], rot.transpose(1, 2))
+    return out
+
+
+@torch.no_grad()
+def predict(model: torch.nn.Module, split: Split, device: torch.device,
+            batch: int = 512, progress: bool = False) -> np.ndarray:
+    model.eval()
+    probs = []
+    rng = range(0, len(split), batch)
+    for i in tqdm(rng, desc="predict", disable=not progress, leave=False):
+        pts = split.points[i:i + batch].to(device, non_blocking=True)
+        cnt = split.counts[i:i + batch].to(device, non_blocking=True)
+        probs.append(torch.sigmoid(model(pts, cnt)).float().cpu().numpy())
+    return np.concatenate(probs)
+
+
+def _epoch_metrics(labels: np.ndarray, probs: np.ndarray) -> dict:
+    return {"pr_auc": M.average_precision(labels, probs),
+            "roc_auc": M.roc_auc(labels, probs),
+            "f1_at_0.5": M.confusion(labels, probs, 0.5)["f1"]}
+
+
+def train_fold(cfg: dict, run_dir: str, resume: bool = True) -> dict:
+    """Train one model on one split; returns the final test summary dict."""
+    os.makedirs(run_dir, exist_ok=True)
+    cfg_path = os.path.join(run_dir, "config.json")
+    if os.path.exists(cfg_path):
+        with open(cfg_path) as f:
+            old = json.load(f)
+        if old != cfg:
+            raise SystemExit(f"{run_dir} was created with different settings; "
+                             "pick a new --run-dir or delete it")
+    else:
+        with open(cfg_path, "w") as f:
+            json.dump(cfg, f, indent=2)
+
+    _seed_all(cfg["seed"])
+    device = _device(cfg.get("device"))
+    meta = D.load_cache_meta(cfg["cache_dir"])
+
+    train_runs = [D.RunData(cfg["cache_dir"], r) for r in cfg["train_runs"]]
+    # Early-stopping val: tail frame block of each training run, with a
+    # temporal gap so no neighborhood pair straddles the boundary.
+    tr_masks, va_masks = zip(*(D.block_val_mask(r.frame, cfg["val_frac"], cfg["gap_frames"])
+                               for r in train_runs))
+    D.check_no_frame_overlap(
+        {r.run_id: r.frame[m] for r, m in zip(train_runs, tr_masks)},
+        {r.run_id: r.frame[m] for r, m in zip(train_runs, va_masks)})
+    tr = Split(train_runs, list(tr_masks))
+    va = Split(train_runs, list(va_masks))
+
+    n_pos = float((tr.labels == 1).sum())
+    n_neg = float(len(tr) - n_pos)
+    print(f"[{os.path.basename(run_dir)}] train {len(tr)} ({n_pos / len(tr):.1%} rock), "
+          f"val {len(va)}, test run {cfg['test_run']}, device {device}")
+
+    model = build_model(cfg["model"], tnet=cfg["tnet"], dropout=cfg.get("dropout")).to(device)
+    opt = torch.optim.AdamW(model.parameters(), lr=cfg["lr"], weight_decay=cfg["weight_decay"])
+    sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=cfg["epochs"])
+    loss_fn = torch.nn.BCEWithLogitsLoss(pos_weight=torch.tensor(n_neg / max(n_pos, 1.0),
+                                                                 device=device))
+
+    start_epoch, best_metric, bad_epochs = 0, -1.0, 0
+    history: list[dict] = []
+    last_path, best_path = os.path.join(run_dir, "last.pt"), os.path.join(run_dir, "best.pt")
+    if resume and os.path.exists(last_path):
+        ck = torch.load(last_path, map_location=device, weights_only=False)
+        model.load_state_dict(ck["model"])
+        opt.load_state_dict(ck["optimizer"])
+        sched.load_state_dict(ck["scheduler"])
+        start_epoch, best_metric, bad_epochs = ck["epoch"] + 1, ck["best_metric"], ck["bad_epochs"]
+        history = ck["history"]
+        print(f"  resumed at epoch {start_epoch}")
+
+    gen = torch.Generator(device=device).manual_seed(cfg["seed"])
+    labels_va = va.labels.numpy()
+    for epoch in range(start_epoch, cfg["epochs"]):
+        model.train()
+        perm = torch.randperm(len(tr))
+        losses = []
+        steps = range(0, len(tr) - cfg["batch"] + 1, cfg["batch"])  # drop last (BatchNorm)
+        for i in tqdm(steps, desc=f"epoch {epoch}", leave=False):
+            idx = perm[i:i + cfg["batch"]]
+            pts = tr.points[idx].to(device, non_blocking=True)
+            cnt = tr.counts[idx].to(device, non_blocking=True)
+            y = tr.labels[idx].to(device, non_blocking=True)
+            if cfg["augment"]:
+                pts = _augment(pts, gen)
+            logits = model(pts, cnt)
+            loss = loss_fn(logits, y) + cfg["tnet_reg"] * model.pop_regularizer()
+            opt.zero_grad(set_to_none=True)
+            loss.backward()
+            opt.step()
+            losses.append(float(loss.detach()))
+        sched.step()
+
+        probs_va = predict(model, va, device, cfg["batch"])
+        with torch.no_grad():
+            val_loss = float(torch.nn.functional.binary_cross_entropy(
+                torch.from_numpy(probs_va).clamp(1e-6, 1 - 1e-6),
+                torch.from_numpy(labels_va)))
+        row = {"epoch": epoch, "train_loss": float(np.mean(losses)), "val_loss": val_loss,
+               **{f"val_{k}": v for k, v in _epoch_metrics(labels_va, probs_va).items()},
+               "lr": sched.get_last_lr()[0]}
+        history.append(row)
+        print(f"  epoch {epoch}: train_loss {row['train_loss']:.4f}  "
+              f"val_loss {val_loss:.4f}  val_pr_auc {row['val_pr_auc']:.4f}  "
+              f"val_roc_auc {row['val_roc_auc']:.4f}")
+
+        improved = row[VAL_METRIC] > best_metric
+        if improved:
+            best_metric, bad_epochs = row[VAL_METRIC], 0
+            torch.save({"model": model.state_dict(), "config": cfg, "epoch": epoch,
+                        "config_hash": meta["config_hash"], "generator": meta["generator"]},
+                       best_path)
+        else:
+            bad_epochs += 1
+        torch.save({"model": model.state_dict(), "optimizer": opt.state_dict(),
+                    "scheduler": sched.state_dict(), "epoch": epoch, "history": history,
+                    "best_metric": best_metric, "bad_epochs": bad_epochs}, last_path)
+        _write_history(run_dir, history)
+        if bad_epochs >= cfg["patience"]:
+            print(f"  early stop: no {VAL_METRIC} gain in {cfg['patience']} epochs")
+            break
+
+    # Final: best weights, threshold picked on val, evaluated on the held-out run.
+    ck = torch.load(best_path, map_location=device, weights_only=False)
+    model.load_state_dict(ck["model"])
+    probs_va = predict(model, va, device, cfg["batch"])
+    threshold = M.best_f1_threshold(labels_va, probs_va)
+    ck["threshold"] = threshold
+    torch.save(ck, best_path)
+    return evaluate(model, cfg, run_dir, threshold, device)
+
+
+def evaluate(model: torch.nn.Module, cfg: dict, run_dir: str, threshold: float,
+             device: torch.device) -> dict:
+    te = Split([D.RunData(cfg["cache_dir"], cfg["test_run"])])
+    probs = predict(model, te, device, cfg["batch"], progress=True)
+    labels = te.labels.numpy().astype(np.int8)
+    summary = M.summarize(labels, probs, threshold)
+    summary.update({"test_run": cfg["test_run"], "model": cfg["model"],
+                    "val_threshold": threshold})
+    with open(os.path.join(run_dir, "test_metrics.json"), "w") as f:
+        json.dump(summary, f, indent=2)
+    np.savez_compressed(os.path.join(run_dir, "predictions.npz"),
+                        probs=probs, labels=labels, frame=te.frame,
+                        centers=te.centers, run_id=str(cfg["test_run"]),
+                        threshold=threshold)
+    print(f"  test [{cfg['test_run']}] pr_auc {summary['pr_auc']:.4f}  "
+          f"roc_auc {summary['roc_auc']:.4f}  f1@{threshold:.2f} {summary['f1']:.4f}  "
+          f"(baseline acc {summary['baseline_accuracy']:.3f})")
+    return summary
+
+
+def _write_history(run_dir: str, history: list[dict]) -> None:
+    with open(os.path.join(run_dir, "history.csv"), "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=list(history[0].keys()))
+        w.writeheader()
+        w.writerows(history)
+
+
+def default_config(**overrides) -> dict:
+    cfg = {
+        "model": "pointnet",
+        "tnet": False,
+        "tnet_reg": 1e-3,
+        "dropout": None,
+        "cache_dir": "training/cache",
+        "train_runs": [],
+        "test_run": "",
+        "val_frac": 0.15,
+        "gap_frames": 25,
+        "epochs": 30,
+        "batch": 256,
+        "lr": 1e-3,
+        "weight_decay": 1e-4,
+        "patience": 6,
+        "augment": True,
+        "seed": 42,
+        "device": None,
+    }
+    cfg.update({k: v for k, v in overrides.items() if v is not None or k in ("device", "dropout")})
+    return cfg

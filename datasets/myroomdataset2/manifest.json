@@ -1,0 +1,73 @@
+{
+  "tool_version": "0.2.0",
+  "config": {
+    "topics": {
+      "pointcloud_topic": "/multiscan/lidar_scan",
+      "odom_frame": "odom",
+      "base_frame": "base_link",
+      "lidar_frame": "lidar_link",
+      "tf_topic": "/tf",
+      "tf_static_topic": "/tf_static",
+      "pose_tolerance_s": 0.15,
+      "static_lidar_to_base": null,
+      "min_range_m": 0.7
+    },
+    "labeler": {
+      "accumulator_voxel_m": 0.03,
+      "default_rock_radius_m": 0.15,
+      "stride": 1,
+      "z_min": null,
+      "z_max": null
+    },
+    "generator": {
+      "frame_stride": 5,
+      "frame_window_s": 0.0,
+      "crop_forward_m": 6.0,
+      "crop_backward_m": 2.0,
+      "crop_left_m": 4.0,
+      "crop_right_m": 4.0,
+      "crop_up_m": 1.5,
+      "crop_down_m": 1.0,
+      "boundary_shell_m": 0.05,
+      "centers_voxel_m": 0.05,
+      "neighborhood_radius_m": 0.5,
+      "min_neighbors": 20,
+      "neighborhood_points": 256,
+      "negative_keep_prob": 0.05,
+      "bev_cell_m": 0.1,
+      "seed": 42
+    }
+  },
+  "config_hash": "dae84b6faa534157108961ded07a568d6ddaca464ff6e236bb9192eea769e5d4",
+  "runs": {
+    "myroom2": {
+      "run_id": "myroom2",
+      "mcap_path": "/home/brandon/Documents/perception-2026-testing/rocklabel/recordings/myroom2.mcap",
+      "labels_path": "/home/brandon/Documents/perception-2026-testing/rocklabel/labels/myroom2.labels.json",
+      "rock_count": 4,
+      "intensity_available": true,
+      "generated": "2026-07-19T20:43:12Z",
+      "frames_kept": 1733,
+      "frames_skipped_pose": 0,
+      "frames_skipped_empty": 18,
+      "point_samples": 21817,
+      "bev_frames": 1733,
+      "sample_labels": {
+        "rock": 5172,
+        "clear": 16645
+      },
+      "point_labels": {
+        "rock": 7606,
+        "clear": 494496,
+        "ignore": 5151
+      },
+      "bev_cells": {
+        "rock": 3292,
+        "clear": 133063,
+        "ignore": 10954845
+      },
+      "stamp_fallbacks": 0
+    }
+  },
+  "generated": "2026-07-19T20:43:12Z"
+}

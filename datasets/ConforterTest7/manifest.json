@@ -1,0 +1,73 @@
+{
+  "tool_version": "0.2.0",
+  "config": {
+    "topics": {
+      "pointcloud_topic": "/multiscan/lidar_scan",
+      "odom_frame": "odom",
+      "base_frame": "base_link",
+      "lidar_frame": "lidar_link",
+      "tf_topic": "/tf",
+      "tf_static_topic": "/tf_static",
+      "pose_tolerance_s": 0.15,
+      "static_lidar_to_base": null,
+      "min_range_m": 0.0
+    },
+    "labeler": {
+      "accumulator_voxel_m": 0.03,
+      "default_rock_radius_m": 0.15,
+      "stride": 1,
+      "z_min": null,
+      "z_max": null
+    },
+    "generator": {
+      "frame_stride": 5,
+      "frame_window_s": 0.0,
+      "crop_forward_m": 6.0,
+      "crop_backward_m": 2.0,
+      "crop_left_m": 4.0,
+      "crop_right_m": 4.0,
+      "crop_up_m": 1.5,
+      "crop_down_m": 1.0,
+      "boundary_shell_m": 0.05,
+      "centers_voxel_m": 0.05,
+      "neighborhood_radius_m": 0.5,
+      "min_neighbors": 20,
+      "neighborhood_points": 256,
+      "negative_keep_prob": 0.05,
+      "bev_cell_m": 0.1,
+      "seed": 42
+    }
+  },
+  "config_hash": "f244fbe8df950849fd05514bfda117d541695c39dab02f76fc46960ba4dfe613",
+  "runs": {
+    "ConforterTest7": {
+      "run_id": "ConforterTest7",
+      "mcap_path": "/home/brandon/Documents/perception-2026-testing/rocklabel/recordings/ConforterTest7.mcap",
+      "labels_path": "/home/brandon/Documents/perception-2026-testing/rocklabel/labels/ConforterTest7.labels.json",
+      "rock_count": 3,
+      "intensity_available": true,
+      "generated": "2026-08-08T20:33:50Z",
+      "frames_kept": 1121,
+      "frames_skipped_pose": 0,
+      "frames_skipped_empty": 0,
+      "point_samples": 7393,
+      "bev_frames": 1121,
+      "sample_labels": {
+        "rock": 1622,
+        "clear": 5771
+      },
+      "point_labels": {
+        "rock": 2607,
+        "clear": 270578,
+        "ignore": 1985
+      },
+      "bev_cells": {
+        "rock": 987,
+        "clear": 111779,
+        "ignore": 7061634
+      },
+      "stamp_fallbacks": 0
+    }
+  },
+  "generated": "2026-08-08T20:33:50Z"
+}

@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rocklabel"
+version = "0.2.0"
+description = "Offline LiDAR rock labeling and training-dataset generation for Lunabotics"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "open3d>=0.17",
+    "pyyaml>=6.0",
+    "tqdm>=4.60",
+    "mcap>=1.0",
+    "mcap-ros2-support>=0.5",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+# Training stack is optional so the core labeling/generation CLI stays light.
+train = ["torch>=2.1", "matplotlib>=3.7", "onnx>=1.15"]
+# Web surfaces: `rocklabel dash` and `rocklabel live --web-ui` (which reuses
+# the dashboard's stylesheet). psutil powers dash's CPU/RAM strip and is
+# degradable; live --web-ui needs only Flask.
+dash = ["flask>=3.0", "psutil>=5.9"]
+
+[project.scripts]
+rocklabel = "rocklabel.cli:main"
+rocklabel-train = "rocklabel.train.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["rocklabel*"]
+
+[tool.setuptools.package-data]
+# Both web pages are shipped as data, not code.
+rocklabel = [
+    "dashboard/templates/*.html", "dashboard/static/*",
+    "live/webui/templates/*.html", "live/webui/static/*",
+]

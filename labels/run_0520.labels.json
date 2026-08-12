@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "mcap_file": "run_0520.mcap",
+  "run_id": "run_0520",
+  "odom_frame": "odom",
+  "created": "2026-07-08T02:40:29Z",
+  "tool_version": "0.2.0",
+  "intensity_available": true,
+  "accumulator_voxel_m": 0.03,
+  "rocks": [
+    {
+      "id": 1,
+      "center": [
+        -2.6255,
+        -1.6145,
+        0.1992
+      ],
+      "radius": 0.27
+    }
+  ]
+}

@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "mcap_file": "backroomweightreflect.mcap",
+  "run_id": "backroomweightreflect",
+  "odom_frame": "world",
+  "created": "2026-07-18T15:51:37Z",
+  "tool_version": "0.2.0",
+  "intensity_available": true,
+  "accumulator_voxel_m": 0.03,
+  "rocks": [
+    {
+      "id": 1,
+      "center": [
+        -1.3356,
+        -0.5177,
+        -0.7347
+      ],
+      "radius": 0.15
+    },
+    {
+      "id": 2,
+      "center": [
+        -1.0644,
+        -0.9717,
+        -0.7413
+      ],
+      "radius": 0.07
+    },
+    {
+      "id": 3,
+      "center": [
+        -0.989,
+        -0.8463,
+        -0.6815
+      ],
+      "radius": 0.07
+    },
+    {
+      "id": 4,
+      "center": [
+        -0.7012,
+        -0.3995,
+        -0.824
+      ],
+      "radius": 0.21
+    }
+  ]
+}

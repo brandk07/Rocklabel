@@ -1,0 +1,30 @@
+{
+  "model": "pointnet",
+  "task": "binary rock classification (per neighborhood sample)",
+  "input": {
+    "points": "[batch, 256, 4] float32, channels [dx, dy, dz, intensity]",
+    "counts": "[batch] int64, number of real (non-padded) points; pass 256 if unknown",
+    "neighborhood_points": 256,
+    "neighborhood_radius_m": 0.5,
+    "centers_voxel_m": 0.05,
+    "min_neighbors": 20
+  },
+  "preprocessing_contract": "Neighborhood = all points within neighborhood_radius_m of a candidate center from a centers_voxel_m voxel grid. dx/dy = point xy minus center xy (odom frame, axis-aligned); dz = point z minus the neighborhood's minimum z (local ground ~ 0); intensity = LiDAR reflectivity as recorded (observed range ~[0, 1], passed through unchanged). If fewer than neighborhood_points points: pad by repeating real points AFTER them (real points come first); if more: random subsample. Inputs are already canonicalized - do not re-center or re-normalize.",
+  "output": "rock probability in [0, 1] (sigmoid applied)",
+  "decision_threshold": 0.74,
+  "source_config_hash": "dae84b6faa534157108961ded07a568d6ddaca464ff6e236bb9192eea769e5d4",
+  "training": {
+    "train_runs": [
+      "myroom1",
+      "myroom2",
+      "myroom3"
+    ],
+    "held_out_run": "myroom4",
+    "epochs_trained": 11,
+    "seed": 42,
+    "tnet": false,
+    "class_weighting": "BCE pos_weight = n_clear / n_rock of the train split",
+    "augmentation": "random z-rotation + xy mirror"
+  },
+  "exported": "2026-07-19T22:46:42Z"
+}

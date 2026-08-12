@@ -1,0 +1,11 @@
+{
+  "schema_version": 2,
+  "mcap_file": "garageTest50seconds.mcap",
+  "run_id": "garageTest50seconds",
+  "odom_frame": "world",
+  "created": "2026-08-08T19:17:52Z",
+  "tool_version": "0.2.0",
+  "intensity_available": true,
+  "accumulator_voxel_m": 0.03,
+  "rocks": []
+}

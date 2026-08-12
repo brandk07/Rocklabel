@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "mcap_file": "lance_raw_data_2026_05_20-12_50_53_0.mcap",
+  "run_id": "lance_raw_data_2026_05_20-12_50_53_0",
+  "odom_frame": "odom",
+  "created": "2026-07-18T15:05:39Z",
+  "tool_version": "0.2.0",
+  "intensity_available": true,
+  "accumulator_voxel_m": 0.03,
+  "rocks": [
+    {
+      "id": 1,
+      "center": [
+        -2.2081,
+        0.6774,
+        0.2211
+      ],
+      "radius": 0.25
+    }
+  ]
+}

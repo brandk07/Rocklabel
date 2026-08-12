@@ -1,0 +1,61 @@
+# ---------------------------------------------------------------------------
+# Python
+# ---------------------------------------------------------------------------
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# ---------------------------------------------------------------------------
+# Raw sensor data — far too large for git (a single .mcap here is 23 GB).
+# Keep these on local disk or object storage, not in the repo.
+# ---------------------------------------------------------------------------
+recordings/
+*.mcap
+*.pcap
+*.bag
+
+# ---------------------------------------------------------------------------
+# Datasets: track only the manifests that describe each dataset, never the
+# extracted point clouds. The manifest is enough to rebuild a dataset from
+# its source recording.
+# ---------------------------------------------------------------------------
+/datasets/*
+!/datasets/*/
+/datasets/*/*
+!/datasets/*/manifest.json
+
+# ---------------------------------------------------------------------------
+# Training artifacts
+#   cache/    regenerable point-cloud cache (600 MB+ of .npy)
+#   runs/     per-run checkpoints (best.pt / last.pt, ~190 MB)
+# training/exported/ IS tracked — those are the deployable models.
+# ---------------------------------------------------------------------------
+training/cache/
+training/runs/
+*.npy
+*.npz
+
+# ...but the exported models are the point of the repo, so keep them.
+!training/exported/**
+
+# ---------------------------------------------------------------------------
+# Local runtime output
+# ---------------------------------------------------------------------------
+.dashboard/
+out/
+*.log
+
+# ---------------------------------------------------------------------------
+# Editor / tooling scratch
+# ---------------------------------------------------------------------------
+.claude/
+.vscode/
+.idea/
+tempCodeRunnerFile.py
+.DS_Store

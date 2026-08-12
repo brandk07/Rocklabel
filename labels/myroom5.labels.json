@@ -1,0 +1,11 @@
+{
+  "schema_version": 2,
+  "mcap_file": "myroom5.mcap",
+  "run_id": "myroom5",
+  "odom_frame": "world",
+  "created": "2026-08-08T19:15:10Z",
+  "tool_version": "0.2.0",
+  "intensity_available": true,
+  "accumulator_voxel_m": 0.03,
+  "rocks": []
+}

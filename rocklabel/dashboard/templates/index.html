@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>rocklabel · {{ project }}</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>🪨</text></svg>">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark" aria-hidden="true"></span>
+    <div class="brand-text">
+      <strong>rocklabel</strong>
+      <span class="brand-sub" title="{{ root }}">{{ project }} · v{{ version }}</span>
+    </div>
+  </div>
+
+  <nav class="nav" id="nav" aria-label="Sections">
+    <button class="nav-item is-active" data-view="overview">Overview</button>
+    <button class="nav-item" data-view="commands">Commands</button>
+    <button class="nav-item" data-view="live">Live LiDAR</button>
+    <button class="nav-item" data-view="data">Data</button>
+    <button class="nav-item" data-view="models">Models</button>
+    <button class="nav-item" data-view="jobs">Jobs <span class="nav-badge" id="jobsBadge" hidden>0</span></button>
+  </nav>
+
+  <div class="topbar-right">
+    <div class="machine-strip" id="machineStrip"></div>
+    <button class="icon-btn" id="themeToggle" title="Switch light / dark theme" aria-label="Switch theme">◐</button>
+  </div>
+</header>
+
+<main id="main">
+
+  <!-- ================================================== OVERVIEW -->
+  <section class="view is-active" id="view-overview">
+    <div class="view-head">
+      <h1>Overview</h1>
+      <p class="lede">Every stage of the rock-detection pipeline, and where this project currently stands.</p>
+    </div>
+
+    <div class="hero-row">
+      <div class="card hero-card">
+        <div class="stat-label">Best held-out F1</div>
+        <div class="hero-figure" id="heroF1">—</div>
+        <div class="stat-sub" id="heroF1Sub">no completed training runs yet</div>
+        <div class="hero-meter"><div class="hero-meter-fill" id="heroF1Meter"></div></div>
+      </div>
+      <div class="tiles" id="tiles"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <h2>The pipeline</h2>
+        <p class="card-sub">Click any stage to jump to its commands. The counts are what this project has at each step.</p>
+      </div>
+      <div class="flow" id="flow"></div>
+    </div>
+
+    <div class="grid-2">
+      <div class="card">
+        <div class="card-head">
+          <h2>Quick actions</h2>
+          <p class="card-sub">The things you do most, one click away.</p>
+        </div>
+        <div class="quick" id="quickActions"></div>
+      </div>
+      <div class="card">
+        <div class="card-head">
+          <h2>Recent activity</h2>
+          <p class="card-sub">Newest files this project produced.</p>
+        </div>
+        <ul class="activity" id="activity"></ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================================================== COMMANDS -->
+  <section class="view" id="view-commands">
+    <div class="view-head">
+      <h1>Commands</h1>
+      <p class="lede">Every command in the toolchain. Pick one, fill in the form, and see the exact
+        command line before it runs — the dashboard runs the CLI, it does not replace it.</p>
+    </div>
+    <div class="filter-row">
+      <input type="search" id="cmdSearch" class="input search" placeholder="Search commands…" aria-label="Search commands">
+      <div class="chips" id="stageChips"></div>
+    </div>
+    <div id="commandGroups"></div>
+  </section>
+
+  <!-- ================================================== LIVE -->
+  <section class="view" id="view-live">
+    <div class="view-head">
+      <h1>Live LiDAR</h1>
+      <p class="lede">Is the sensor streaming, and what can you launch against it right now?</p>
+    </div>
+    <div class="grid-2">
+      <div class="card sensor-card" id="sensorCard">
+        <div class="card-head">
+          <h2>SICK multiScan136</h2>
+          <p class="card-sub">Two independent checks — a powered sensor that answers ping is not
+            necessarily streaming.</p>
+        </div>
+        <div id="sensorBody" class="sensor-body"><div class="muted">probing…</div></div>
+      </div>
+      <div class="card">
+        <div class="card-head">
+          <h2>Launch a view</h2>
+          <p class="card-sub">Same commands as the Commands page, pre-filled for the handheld rig.</p>
+        </div>
+        <div class="quick" id="liveActions"></div>
+        <div class="hint" id="liveHint"></div>
+      </div>
+    </div>
+    <!-- The running job's control panel, embedded. Everything that used to be
+         crammed into the Open3D window's side panel lives here instead, so the
+         3D window can give the scene its whole screen. -->
+    <div class="card panel-card" id="panelCard" hidden>
+      <div class="card-head panel-head">
+        <div>
+          <h2 id="panelTitle">Control panel</h2>
+          <p class="card-sub" id="panelSub"></p>
+        </div>
+        <div class="panel-actions">
+          <button class="btn btn-sm" id="panelPop" title="Open in its own window">Pop out ↗</button>
+          <button class="btn btn-sm" id="panelReload" title="Reload the panel">Reload</button>
+        </div>
+      </div>
+      <iframe class="panel-frame" id="panelFrame" title="Live control panel"></iframe>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <h2>Running live jobs</h2>
+        <p class="card-sub">Output from any capture or viewer the dashboard started.</p>
+      </div>
+      <div id="liveJobs"></div>
+    </div>
+  </section>
+
+  <!-- ================================================== DATA -->
+  <section class="view" id="view-data">
+    <div class="view-head">
+      <h1>Data</h1>
+      <p class="lede">Recordings, the labels made on them, and the datasets generated from those labels.</p>
+    </div>
+    <div class="tabs" id="dataTabs">
+      <button class="tab is-active" data-tab="recordings">Recordings</button>
+      <button class="tab" data-tab="labels">Labels</button>
+      <button class="tab" data-tab="datasets">Datasets</button>
+    </div>
+    <div class="tab-panel is-active" id="tab-recordings"></div>
+    <div class="tab-panel" id="tab-labels"></div>
+    <div class="tab-panel" id="tab-datasets"></div>
+  </section>
+
+  <!-- ================================================== MODELS -->
+  <section class="view" id="view-models">
+    <div class="view-head">
+      <h1>Models</h1>
+      <p class="lede">Leave-one-run-out folds, their held-out scores, and the checkpoints they produced.</p>
+    </div>
+    <div id="modelsBody"></div>
+  </section>
+
+  <!-- ================================================== JOBS -->
+  <section class="view" id="view-jobs">
+    <div class="view-head">
+      <h1>Jobs</h1>
+      <p class="lede">Everything the dashboard has launched this session. Output is also written to
+        <code>.dashboard/logs/</code>.</p>
+    </div>
+    <div class="grid-jobs">
+      <div class="card job-list-card">
+        <div class="card-head"><h2>History</h2></div>
+        <ul class="job-list" id="jobList"></ul>
+      </div>
+      <div class="card job-log-card">
+        <div class="card-head job-log-head">
+          <div>
+            <h2 id="jobLogTitle">No job selected</h2>
+            <code class="job-cmd" id="jobLogCmd"></code>
+          </div>
+          <div class="job-log-actions">
+            <button class="btn btn-ghost" id="jobFollow" aria-pressed="true">Following</button>
+            <button class="btn" id="jobRerun" hidden>Rerun</button>
+            <button class="btn btn-danger" id="jobStop" hidden>Stop</button>
+          </div>
+        </div>
+        <pre class="log" id="jobLog" tabindex="0"></pre>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<!-- ================================================== RUN DRAWER -->
+<div class="drawer-scrim" id="scrim" hidden></div>
+<aside class="drawer" id="drawer" hidden aria-labelledby="drawerTitle" role="dialog" aria-modal="true">
+  <header class="drawer-head">
+    <div>
+      <div class="drawer-eyebrow" id="drawerEyebrow"></div>
+      <h2 id="drawerTitle"></h2>
+      <p class="drawer-tagline" id="drawerTagline"></p>
+    </div>
+    <button class="icon-btn" id="drawerClose" aria-label="Close">✕</button>
+  </header>
+
+  <div class="drawer-body">
+    <section class="explainer" id="drawerExplainer"></section>
+    <form class="run-form" id="runForm" autocomplete="off"></form>
+  </div>
+
+  <footer class="drawer-foot">
+    <div class="cmd-preview">
+      <div class="cmd-preview-label">Command line</div>
+      <code id="cmdPreview">—</code>
+    </div>
+    <div class="drawer-actions">
+      <button type="button" class="btn btn-ghost" id="copyCmd">Copy</button>
+      <button type="button" class="btn btn-primary" id="runBtn">Run</button>
+    </div>
+  </footer>
+</aside>
+
+<div class="toasts" id="toasts" aria-live="polite"></div>
+
+<template id="tpl-help">
+  <button type="button" class="help-btn" aria-label="What does this do?">?</button>
+</template>
+
+<script src="{{ url_for('static', filename='charts.js') }}"></script>
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
