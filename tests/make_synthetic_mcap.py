@@ -179,7 +179,11 @@ def make_tf_msg(parent: str, child: str, stamp_s: float, translation, quat_xyzw)
     }]}
 
 
-def write_synthetic_mcap(path: str, seed: int = 0, n_scans: int = N_SCANS) -> None:
+def write_synthetic_mcap(path: str, seed: int = 0, n_scans: int = N_SCANS,
+                         intensity_scale: float = 1.0) -> None:
+    """``intensity_scale`` mimics a driver that publishes raw RSSI counts in a
+    float32 field (the SICK multiScan writes 0-65535 that way): pass 65535.0 to
+    get an unnormalized bag."""
     rng = np.random.default_rng(seed)
     T_bl = T_base_lidar()
     with open(path, "wb") as f:
@@ -217,7 +221,7 @@ def write_synthetic_mcap(path: str, seed: int = 0, n_scans: int = N_SCANS) -> No
             lidar_pts = world @ T_lo[:3, :3].T + T_lo[:3, 3]
             writer.write_message(
                 "/multiscan/lidar_scan", pc2_schema,
-                make_pointcloud2_msg(lidar_pts, inten, stamp),
+                make_pointcloud2_msg(lidar_pts, inten * intensity_scale, stamp),
                 log_time=int(stamp * 1e9), publish_time=int(stamp * 1e9),
             )
         writer.finish()

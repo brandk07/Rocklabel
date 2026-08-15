@@ -20,6 +20,7 @@ import os
 import numpy as np
 
 from ..generate import MANIFEST_NAME
+from ..neighborhoods import FEATURES, resolve_features
 
 # The four comparable "my room" runs (all generated with the same config).
 DEFAULT_DATASETS = [
@@ -143,6 +144,24 @@ def load_cache_meta(cache_dir: str) -> dict:
         raise DataError(f"{cache_dir!r} has no meta.json - run 'rocklabel-train cache' first")
     with open(path) as f:
         return json.load(f)
+
+
+def run_suffix(features: list[str] | None) -> str:
+    """Name fragment identifying a non-default input-channel selection.
+
+    Empty for the full channel set, so directories written before the setting
+    existed keep their names and keep resuming. Anything else is tagged, which
+    is what lets 'same fold, different channels' experiments sit side by side
+    instead of colliding on one run directory - the whole point of being able
+    to train with and without reflectivity off one cache.
+    """
+    chosen = resolve_features(features)
+    return "" if chosen == list(FEATURES) else "_" + "-".join(chosen)
+
+
+def run_dir_name(model: str, fold_name: str, features: list[str] | None = None) -> str:
+    """Directory name for one trained fold, e.g. ``pointnet_loro_run3_dx-dy-dz``."""
+    return f"{model}_{fold_name}{run_suffix(features)}"
 
 
 def loro_folds(run_ids: list[str]) -> list[dict]:

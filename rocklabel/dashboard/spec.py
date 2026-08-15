@@ -36,7 +36,7 @@ class Param:
     """
 
     name: str
-    kind: str                      # path|dir|outpath|outdir|enum|int|float|bool|text
+    kind: str                      # path|dir|outpath|outdir|enum|multi|int|float|bool|text
     label: str
     help: str = ""
     arg: str | None = None         # None => positional
@@ -50,6 +50,9 @@ class Param:
     placeholder: str = ""
     advanced: bool = False         # tucked under "Advanced" in the form
     repeat: bool = False           # repeatable flag (comma-split in the UI)
+    #: With repeat: emit one flag followed by every value (argparse nargs="+")
+    #: instead of repeating the flag per value.
+    nargs: bool = False
     unit: str = ""
 
 
@@ -126,6 +129,47 @@ def _device() -> Param:
         advanced=True,
         help="Leave on auto unless you want to force CPU (e.g. the GPU is busy "
              "with a training run).",
+    )
+
+
+#: The two architectures, in the order the CLI declares them.
+MODEL_CHOICES = ["pointnet", "pointnet2"]
+
+
+def _models(help: str) -> Param:
+    """Which architectures a sweep or report covers.
+
+    A checkbox pair rather than free text: the vocabulary is closed, and a
+    typo here costs a whole training sweep before anything complains.
+    """
+    return Param(
+        "models", "multi", "Models", arg="--models", repeat=True, nargs=True,
+        choices=MODEL_CHOICES, default=list(MODEL_CHOICES), help=help,
+    )
+
+
+def _features() -> Param:
+    """Which channels of the stored sample tensor reach the model.
+
+    Shared by both training commands. The vocabulary comes from
+    :data:`rocklabel.neighborhoods.FEATURES` so the form can never drift from
+    what the generator actually writes.
+    """
+    from ..neighborhoods import FEATURES
+
+    return Param(
+        "features", "multi", "Input channels", arg="--features", repeat=True,
+        nargs=True, choices=list(FEATURES), default=list(FEATURES),
+        help="The per-point values fed to the network. dx/dy are horizontal "
+             "offsets from the sample center, dz is height above the "
+             "neighborhood's lowest point, intensity is LiDAR reflectivity. "
+             "Untick intensity to train on shape alone — reflectivity is the "
+             "channel least likely to survive a change of surface, and a model "
+             "that leans on it learns your test surface rather than what a rock "
+             "is. Selection happens inside the model, so no dataset needs "
+             "regenerating and any two selections stay directly comparable on "
+             "the same cache. PointNet++ groups points by position and so needs "
+             "dx, dy and dz; PointNet takes any subset.",
     )
 
 
@@ -499,7 +543,7 @@ COMMANDS: list[Command] = [
         ],
         params=[
             Param("datasets", "text", "Datasets", arg="--datasets", repeat=True,
-                  source="datasets",
+                  nargs=True, source="datasets",
                   help="Comma-separated dataset directories. Leave empty for the "
                        "built-in default set."),
         ],
@@ -523,6 +567,10 @@ COMMANDS: list[Command] = [
             "move, so a random sample split leaks near-duplicates and produces "
             "meaningless scores.",
             "Runs resume from last.pt unless you tick Fresh.",
+            "A non-default Input channels selection is tagged into the run "
+            "directory name (pointnet_loro_run3_dx-dy-dz), so training the same "
+            "fold with and without reflectivity gives you two runs to compare "
+            "rather than a collision on one directory.",
             "Class imbalance (~29% rock) is handled with class-weighted BCE — "
             "read PR-AUC and F1, never bare accuracy.",
         ],
@@ -535,6 +583,7 @@ COMMANDS: list[Command] = [
                   source="cache_runs",
                   help="The run kept out of training and used as the test set. "
                        "Must be a run present in the cache."),
+            _features(),
             Param("epochs", "int", "Epochs", arg="--epochs", default=30, min=1, max=500),
             Param("batch", "int", "Batch size", arg="--batch", default=256, min=8, max=4096),
             Param("lr", "float", "Learning rate", arg="--lr", default=0.001,
@@ -581,9 +630,9 @@ COMMANDS: list[Command] = [
             "run only trains what is missing (unless you tick Fresh).",
         ],
         params=[
-            Param("models", "text", "Models", arg="--models", repeat=True,
-                  placeholder="pointnet, pointnet2",
-                  help="Comma-separated. Leave empty for both."),
+            _models("Which architectures to sweep. Both is the point of the "
+                    "command — untick one only to finish a half-done sweep."),
+            _features(),
             Param("epochs", "int", "Epochs", arg="--epochs", default=30, min=1, max=500),
             Param("batch", "int", "Batch size", arg="--batch", default=256, min=8, max=4096),
             Param("lr", "float", "Learning rate", arg="--lr", default=0.001, step=0.0001),
@@ -605,8 +654,8 @@ COMMANDS: list[Command] = [
         why="Cheap and safe. Reach for it after deleting a bad fold, or whenever "
             "the figures look stale.",
         params=[
-            Param("models", "text", "Models", arg="--models", repeat=True,
-                  placeholder="pointnet, pointnet2"),
+            _models("Which architectures to report on. Every ticked model needs "
+                    "a finished run for every fold, or the render fails."),
         ],
     ),
     Command(
@@ -738,7 +787,7 @@ def build_argv(cmd: Command, values: dict, panel_port: int | None = None) -> lis
             parts = [s.strip() for s in str(raw).split(",") if s.strip()]
             if p.arg is None:
                 positional.extend(parts)
-            elif p.name in ("datasets", "models"):
+            elif p.nargs:
                 # nargs="+" style: one flag, many values
                 flags.append(p.arg)
                 flags.extend(parts)

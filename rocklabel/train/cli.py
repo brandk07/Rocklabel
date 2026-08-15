@@ -15,7 +15,8 @@ from __future__ import annotations
 import argparse
 import os
 
-from .data import DEFAULT_DATASETS
+from ..neighborhoods import FEATURES
+from .data import DEFAULT_DATASETS, run_dir_name, run_suffix
 
 DEFAULT_ROOT = "training"
 
@@ -23,10 +24,34 @@ DEFAULT_ROOT = "training"
 def _add_common(p: argparse.ArgumentParser) -> None:
     p.add_argument("--cache-dir", default=os.path.join(DEFAULT_ROOT, "cache"))
     p.add_argument("--runs-root", default=os.path.join(DEFAULT_ROOT, "runs"))
-    p.add_argument("--results-dir", default=os.path.join(DEFAULT_ROOT, "results"))
+    p.add_argument("--results-dir", default=None,
+                   help=f"default: {DEFAULT_ROOT}/results, tagged with the input "
+                        "channels when they are not the full set, so one "
+                        "channel selection's figures never overwrite another's")
+
+
+def _features_arg(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--features", nargs="+", default=None, choices=list(FEATURES),
+                   metavar="CHANNEL",
+                   help="channels of the stored sample tensor to feed the model "
+                        f"(default: all of {' '.join(FEATURES)}). Drop 'intensity' "
+                        "to train on shape alone - reflectivity is the channel "
+                        "least likely to transfer between arenas. Selection is a "
+                        "model setting, so no dataset regeneration is needed; a "
+                        "non-default selection is tagged into the run directory "
+                        "name so it sits beside the runs it is compared against. "
+                        "pointnet2 needs dx dy dz (it groups by position).")
+
+
+def _results_dir(args) -> str:
+    """Explicit --results-dir wins; otherwise tag the default by channel set."""
+    if args.results_dir:
+        return args.results_dir
+    return os.path.join(DEFAULT_ROOT, "results") + run_suffix(args.features)
 
 
 def _add_train_args(p: argparse.ArgumentParser) -> None:
+    _features_arg(p)
     p.add_argument("--epochs", type=int, default=30)
     p.add_argument("--batch", type=int, default=256)
     p.add_argument("--lr", type=float, default=1e-3)
@@ -48,7 +73,8 @@ def _add_train_args(p: argparse.ArgumentParser) -> None:
 def _train_cfg(args, model: str, train_runs: list[str], test_run: str) -> dict:
     from .engine import default_config
     return default_config(
-        model=model, tnet=args.tnet, dropout=args.dropout, cache_dir=args.cache_dir,
+        model=model, features=args.features, tnet=args.tnet,
+        dropout=args.dropout, cache_dir=args.cache_dir,
         train_runs=train_runs, test_run=test_run, val_frac=args.val_frac,
         gap_frames=args.gap_frames, epochs=args.epochs, batch=args.batch, lr=args.lr,
         weight_decay=args.weight_decay, patience=args.patience, augment=args.augment,
@@ -84,6 +110,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("report", help="regenerate figures/tables from existing runs")
     p.add_argument("--models", nargs="+", default=["pointnet", "pointnet2"])
     _add_common(p)
+    _features_arg(p)  # names which channel selection's runs to report on
 
     p = sub.add_parser("export", help="export a checkpoint to TorchScript + ONNX + metadata")
     p.add_argument("checkpoint", help="path to a best.pt")
@@ -139,7 +166,9 @@ def main(argv: list[str] | None = None) -> int:
             raise SystemExit(f"test run {args.test_run!r} not in cache; available: {runs}")
         cfg = _train_cfg(args, args.model, [r for r in runs if r != args.test_run],
                          args.test_run)
-        run_dir = os.path.join(args.runs_root, f"{args.model}_loro_{args.test_run}")
+        run_dir = os.path.join(args.runs_root,
+                               run_dir_name(args.model, f"loro_{args.test_run}",
+                                            args.features))
         train_fold(cfg, run_dir, resume=not args.fresh)
         return 0
 
@@ -151,22 +180,23 @@ def main(argv: list[str] | None = None) -> int:
         folds = loro_folds(runs)
         for model in args.models:
             for fold in folds:
-                run_dir = os.path.join(args.runs_root, f"{model}_{fold['name']}")
+                run_dir = os.path.join(
+                    args.runs_root, run_dir_name(model, fold["name"], args.features))
                 if os.path.exists(os.path.join(run_dir, "test_metrics.json")) and not args.fresh:
                     print(f"skip {run_dir} (already evaluated)")
                     continue
                 cfg = _train_cfg(args, model, fold["train"], fold["test"])
                 train_fold(cfg, run_dir, resume=not args.fresh)
-        render_all(args.runs_root, args.results_dir, args.models,
-                   [f["name"] for f in folds])
+        render_all(args.runs_root, _results_dir(args), args.models,
+                   [f["name"] for f in folds], features=args.features)
         return 0
 
     if args.command == "report":
         from .data import load_cache_meta, loro_folds
         from .plots import render_all
         runs = sorted(load_cache_meta(args.cache_dir)["runs"])
-        render_all(args.runs_root, args.results_dir, args.models,
-                   [f["name"] for f in loro_folds(runs)])
+        render_all(args.runs_root, _results_dir(args), args.models,
+                   [f["name"] for f in loro_folds(runs)], features=args.features)
         return 0
 
     if args.command == "export":

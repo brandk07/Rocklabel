@@ -543,6 +543,15 @@ select.input { cursor: pointer; }
 .checkbox input { margin-top: 2px; accent-color: var(--accent); width: 15px; height: 15px; flex: none; }
 .checkbox .field-label { margin-bottom: 1px; }
 
+/* Multi-select: one checkbox per choice, wrapping into chips. */
+.multi-group { display: flex; flex-wrap: wrap; gap: 6px; flex: 1; }
+.multi-item {
+  align-items: center; gap: 6px; padding: 5px 10px 5px 8px;
+  border: 1px solid var(--hairline); border-radius: var(--radius-sm);
+  background: var(--surface-2); font-size: 12px; user-select: none;
+}
+.multi-item:has(input:checked) { border-color: var(--accent); color: var(--text); }
+
 .advanced { border: 1px solid var(--hairline); border-radius: var(--radius-sm); overflow: hidden; }
 .advanced summary {
   cursor: pointer; padding: 9px 12px; font-size: 12.5px; color: var(--text-secondary);

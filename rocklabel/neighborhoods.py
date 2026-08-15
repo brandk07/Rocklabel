@@ -8,6 +8,38 @@ from scipy.spatial import cKDTree
 from .accumulate import voxel_downsample_centroids
 from .labeling import LABEL_CLEAR, LABEL_IGNORE, LABEL_ROCK, label_rocks
 
+#: Channels of the per-point sample row, in the order both builders below
+#: write them. Models select a subset of these by name (see train/models.py);
+#: the stored tensor always holds all four, so which channels a model reads is
+#: a training setting rather than a property of the dataset.
+FEATURES = ("dx", "dy", "dz", "intensity")
+#: The three that carry geometry. Anything that samples or groups by position
+#: (PointNet++, the T-Nets, the z-rotation augmentation) needs all of them.
+GEOMETRY = ("dx", "dy", "dz")
+
+
+def resolve_features(features: list[str] | tuple[str, ...] | None) -> list[str]:
+    """Validate a feature selection and put it back in storage order.
+
+    Canonical order is not cosmetic: the augmentation rotates channels 0/1 of
+    the stored tensor and the T-Nets slice the leading three, so 'dx, dy first'
+    has to be a property of the selection rather than of how it was typed.
+
+    Lives here rather than with the models so the plain CLI and the run-naming
+    helpers can reach it without importing torch.
+    """
+    if features is None:
+        return list(FEATURES)
+    chosen = [str(f).strip() for f in features if str(f).strip()]
+    unknown = [f for f in chosen if f not in FEATURES]
+    if unknown:
+        raise ValueError(f"unknown feature(s) {unknown}; pick from {list(FEATURES)}")
+    if len(set(chosen)) != len(chosen):
+        raise ValueError(f"duplicate feature in {chosen}")
+    if not chosen:
+        raise ValueError(f"select at least one feature from {list(FEATURES)}")
+    return [f for f in FEATURES if f in chosen]
+
 
 def build_neighborhood_samples(
     xyz: np.ndarray,

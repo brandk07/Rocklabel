@@ -1,5 +1,7 @@
 """Tests for the optional training stack (skipped wholesale without torch)."""
 
+import json
+
 import numpy as np
 import pytest
 
@@ -7,7 +9,7 @@ torch = pytest.importorskip("torch")
 
 from rocklabel.train import metrics as M
 from rocklabel.train.data import DataError, block_val_mask, check_no_frame_overlap, loro_folds
-from rocklabel.train.models import build_model
+from rocklabel.train.models import FEATURES, build_model, resolve_features
 
 
 # -- metrics -----------------------------------------------------------------
@@ -98,3 +100,84 @@ def test_pointnet2_shapes_with_tiny_counts():
     with torch.no_grad():
         out = model(torch.randn(2, 256, 4) * 0.2, torch.tensor([20, 21]))
     assert out.shape == (2,) and torch.isfinite(out).all()
+
+
+# -- feature selection -------------------------------------------------------
+
+def test_resolve_features_canonicalizes_and_defaults():
+    assert resolve_features(None) == list(FEATURES)
+    # Order is normalized, so a config comparison cannot see two spellings of
+    # the same selection as two different runs.
+    assert resolve_features(["intensity", "dz", "dx"]) == ["dx", "dz", "intensity"]
+    for bad in ([], ["dx", "dx"], ["rgb"]):
+        with pytest.raises(ValueError):
+            resolve_features(bad)
+
+
+@pytest.mark.parametrize("name", ["pointnet", "pointnet2"])
+def test_deselected_intensity_cannot_reach_the_model(name):
+    """The whole point of the switch: with intensity off, whatever sits in
+    channel 3 must not move the output by even a float."""
+    torch.manual_seed(0)
+    model = build_model(name, features=["dx", "dy", "dz"]).eval()
+    pts = torch.randn(3, 256, 4) * 0.2
+    counts = torch.tensor([25, 256, 90])
+    poisoned = pts.clone()
+    poisoned[..., 3] = 1234.5
+    with torch.no_grad():
+        assert torch.equal(model(pts, counts), model(poisoned, counts))
+
+
+def test_selection_keeps_the_stored_tensor_shape():
+    """Channels are picked inside the model, so the [B, N, 4] contract (and
+    therefore the dataset, the cache and the export signature) never changes."""
+    model = build_model("pointnet", features=["dz"]).eval()
+    with torch.no_grad():
+        out = model(torch.randn(2, 256, 4), torch.tensor([256, 100]))
+    assert out.shape == (2,)
+    assert model.mlp1[0].in_channels == 1
+
+
+def test_pointnet2_and_tnets_refuse_to_lose_a_geometry_channel():
+    with pytest.raises(ValueError, match="dx"):
+        build_model("pointnet2", features=["dz", "intensity"])
+    with pytest.raises(ValueError, match="T-Net"):
+        build_model("pointnet", tnet=True, features=["dx", "dy"])
+
+
+def test_run_dir_name_tags_only_a_non_default_selection():
+    """The full channel set keeps the historical name so existing run
+    directories stay resumable; anything else is tagged so two channel
+    selections on the same fold cannot collide on one directory."""
+    from rocklabel.train.data import run_dir_name
+
+    assert run_dir_name("pointnet", "loro_run3") == "pointnet_loro_run3"
+    assert run_dir_name("pointnet", "loro_run3", list(FEATURES)) == "pointnet_loro_run3"
+    assert run_dir_name("pointnet", "loro_run3",
+                        ["dx", "dy", "dz"]) == "pointnet_loro_run3_dx-dy-dz"
+    # Order of typing must not spawn a second directory for one selection.
+    assert (run_dir_name("pointnet2", "loro_a", ["dz", "dx", "dy"])
+            == run_dir_name("pointnet2", "loro_a", ["dx", "dy", "dz"]))
+
+
+def test_a_run_predating_the_feature_setting_still_resumes(tmp_path):
+    """Configs written before --features existed have no such key; they were
+    trained on every channel and must not read as a settings change."""
+    from rocklabel.train.engine import default_config, train_fold
+
+    cfg = default_config(train_runs=["a"], test_run="b", cache_dir=str(tmp_path))
+    old = {k: v for k, v in cfg.items() if k != "features"}
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "config.json").write_text(json.dumps(old))
+
+    # Gets past the settings guard and fails later, on the absent cache.
+    with pytest.raises(DataError):
+        train_fold(cfg, str(run_dir))
+
+
+def test_default_config_stores_a_canonical_feature_list():
+    from rocklabel.train.engine import default_config
+
+    assert default_config()["features"] == list(FEATURES)
+    assert default_config(features=["intensity", "dx"])["features"] == ["dx", "intensity"]

@@ -36,6 +36,31 @@ def test_float32_with_uint16_intensity_roundtrip():
     assert available
 
 
+def test_float32_intensity_is_passed_through_for_the_stream_to_scale():
+    """A float field carries no dtype max to divide by, so decode leaves it
+    alone and the scan stream probes instead - see
+    test_pipeline_normalizes_raw_counts_in_a_float_intensity_field."""
+    rows = np.zeros(2, np.dtype([("x", "<f4"), ("y", "<f4"), ("z", "<f4"), ("intensity", "<f4")]))
+    rows["intensity"] = [0.0, 65535.0]
+    msg = _msg(rows.tobytes(), [
+        _field("x", 0, 7), _field("y", 4, 7), _field("z", 8, 7), _field("intensity", 12, 7),
+    ], width=2, point_step=16)
+    _xyz, out_inten, available = decode_pointcloud2(msg)
+    np.testing.assert_allclose(out_inten, [0.0, 65535.0])
+    assert available
+
+
+@pytest.mark.parametrize("peak, expect", [
+    (0.0, 1.0), (1.0, 1.0), (1.5, 1.0),           # already normalized
+    (200.0, 1 / 255.0), (255.0, 1 / 255.0),       # 8-bit
+    (4000.0, 1 / 65535.0), (65535.0, 1 / 65535.0),  # raw u16 counts
+])
+def test_intensity_scale_ladder(peak, expect):
+    from rocklabel.mcap_io import intensity_scale_for_peak
+
+    assert intensity_scale_for_peak(peak) == pytest.approx(expect)
+
+
 def test_bigendian_decode():
     xyz = np.array([[1.5, -2.5, 3.25]], np.float32)
     rows = np.zeros(1, np.dtype([("x", ">f4"), ("y", ">f4"), ("z", ">f4")]))

@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 
 import torch
 
-from .models import build_model
+from .models import FEATURES, build_model
 
 EXAMPLE = '''\
 """Standalone scoring example - needs only torch (or onnxruntime), not rocklabel.
@@ -65,7 +65,8 @@ class InferenceModel(torch.nn.Module):
 def export_model(checkpoint_path: str, out_dir: str) -> None:
     ck = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     cfg, gcfg = ck["config"], ck["generator"]
-    model = build_model(cfg["model"], tnet=cfg["tnet"], dropout=cfg.get("dropout"))
+    model = build_model(cfg["model"], tnet=cfg["tnet"], dropout=cfg.get("dropout"),
+                        features=cfg.get("features"))
     model.load_state_dict(ck["model"])
     wrapped = InferenceModel(model).eval()
 
@@ -89,6 +90,8 @@ def export_model(checkpoint_path: str, out_dir: str) -> None:
         dynamo=False,
     )
 
+    used = list(model.features)
+    ignored = [f for f in FEATURES if f not in used]
     meta = {
         "model": cfg["model"],
         "task": "binary rock classification (per neighborhood sample)",
@@ -100,6 +103,8 @@ def export_model(checkpoint_path: str, out_dir: str) -> None:
             "neighborhood_radius_m": gcfg["neighborhood_radius_m"],
             "centers_voxel_m": gcfg["centers_voxel_m"],
             "min_neighbors": gcfg["min_neighbors"],
+            "features_used": used,
+            "features_ignored": ignored,
         },
         "preprocessing_contract": (
             "Neighborhood = all points within neighborhood_radius_m of a candidate "
@@ -110,6 +115,10 @@ def export_model(checkpoint_path: str, out_dir: str) -> None:
             "neighborhood_points points: pad by repeating real points AFTER them "
             "(real points come first); if more: random subsample. Inputs are already "
             "canonicalized - do not re-center or re-normalize."
+            + ("" if not ignored else
+               f" This model was trained on {used} only: the shape stays [B, "
+               f"{n_pts}, 4] but {ignored} is selected out inside the model, so "
+               "you may pass anything (zeros included) in those channels.")
         ),
         "output": "rock probability in [0, 1] (sigmoid applied)",
         "decision_threshold": ck.get("threshold", 0.5),
@@ -137,5 +146,5 @@ def export_model(checkpoint_path: str, out_dir: str) -> None:
         a, b = wrapped(pts, cnt), ts(pts, cnt)
     if not torch.allclose(a, b, atol=1e-5):
         raise SystemExit("TorchScript output diverged from the eager model")
-    print(f"exported {cfg['model']} -> {ts_path}, {onnx_path}, metadata.json, "
-          f"infer_example.py (torchscript round-trip OK)")
+    print(f"exported {cfg['model']} [{', '.join(used)}] -> {ts_path}, {onnx_path}, "
+          f"metadata.json, infer_example.py (torchscript round-trip OK)")

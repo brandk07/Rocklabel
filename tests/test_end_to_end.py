@@ -149,6 +149,30 @@ def test_min_range_filter_drops_self_hits(synthetic_recording):
     assert len(scan.xyz_odom) > 1000  # only the near ring removed, not the scene
 
 
+def test_pipeline_normalizes_raw_counts_in_a_float_intensity_field(tmp_path):
+    """Regression: the SICK multiScan publishes RSSI as 0-65535 *floats*, which
+    decode_pointcloud2 cannot normalize (no dtype max to divide by). Left
+    unscaled, generating from such a bag would write intensity ~40000 while
+    every lidarrig recording writes ~0.6, silently poisoning any pooled cache.
+    """
+    from tests import make_synthetic_mcap as synth
+
+    from rocklabel.pipeline import ScanStream
+
+    raw = str(tmp_path / "raw_counts.mcap")
+    synth.write_synthetic_mcap(raw, n_scans=6, intensity_scale=65535.0)
+    plain = str(tmp_path / "normalized.mcap")
+    synth.write_synthetic_mcap(plain, n_scans=6)
+
+    cfg = load_config(None)
+    scan = next(iter(ScanStream(raw, cfg, progress=False)))
+    assert scan.intensity.max() <= 1.0
+    # ...and the same bag written already-normalized must be left untouched,
+    # so the probe never double-scales.
+    ref = next(iter(ScanStream(plain, cfg, progress=False)))
+    np.testing.assert_allclose(scan.intensity, ref.intensity, atol=1e-4)
+
+
 def test_accumulate_and_ply_dump(synthetic_recording, tmp_path):
     mcap_path, _ = synthetic_recording
     cfg = load_config(None)

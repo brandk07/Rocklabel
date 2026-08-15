@@ -35,8 +35,10 @@ def test_every_command_has_prose_and_a_known_stage():
         assert len(cmd.why) > 30, f"{cmd.id} needs a real 'when you reach for it'"
         assert cmd.tagline and not cmd.tagline.endswith(".."), cmd.id
         for p in cmd.params:
-            assert p.kind in ("path", "dir", "outpath", "outdir", "enum",
+            assert p.kind in ("path", "dir", "outpath", "outdir", "enum", "multi",
                               "int", "float", "bool", "text"), (cmd.id, p.name)
+            if p.kind in ("enum", "multi"):
+                assert p.choices, f"{cmd.id}.{p.name} needs choices"
             if p.kind == "enum":
                 assert p.choices, f"{cmd.id}.{p.name} is an enum with no choices"
             assert p.help or p.kind == "bool" or p.arg is None or p.label, p.name
@@ -86,6 +88,18 @@ def test_build_argv_handles_both_repeat_styles():
                             {"datasets": "datasets/one, datasets/two"})
     assert cache == ["rocklabel-train", "cache", "--datasets",
                      "datasets/one", "datasets/two"]
+
+
+def test_multi_select_emits_one_flag_with_every_ticked_choice():
+    argv = spec.build_argv(spec.COMMANDS_BY_ID["train-train"],
+                           {"model": "pointnet", "test_run": "r1",
+                            "features": "dx, dy, dz"})
+    i = argv.index("--features")
+    assert argv[i + 1:i + 4] == ["dx", "dy", "dz"]
+    # Leaving it empty falls through to the CLI's own default (all channels).
+    plain = spec.build_argv(spec.COMMANDS_BY_ID["train-train"],
+                            {"model": "pointnet", "test_run": "r1", "features": ""})
+    assert "--features" not in plain
 
 
 def test_build_argv_rejects_a_missing_required_value():
@@ -255,6 +269,17 @@ def test_snapshot_summarizes_datasets_runs_and_checkpoints(project):
     assert [c["name"] for c in snap["checkpoints"]] == ["pointnet_loro_run1/best.pt"]
     assert [r["name"] for r in snap["cache_runs"]] == ["run1", "run2"]
     assert snap["runs"][0]["epochs_run"] == 2  # from history.csv
+
+
+def test_last_pt_is_listed_but_flagged_unusable(project):
+    # last.pt has no config/generator/threshold, so every consumer of the
+    # checkpoint pickers would KeyError on it — the UI greys it out.
+    (project / "training" / "runs" / "pointnet_loro_run1" / "last.pt").write_bytes(b"x")
+    cks = {c["name"]: c for c in inventory.snapshot(str(project))["checkpoints"]}
+    assert list(cks) == ["pointnet_loro_run1/best.pt", "pointnet_loro_run1/last.pt"]
+    assert cks["pointnet_loro_run1/best.pt"]["disabled"] is False
+    assert cks["pointnet_loro_run1/last.pt"]["disabled"] is True
+    assert cks["pointnet_loro_run1/last.pt"]["note"]
 
 
 def test_snapshot_survives_a_dataset_with_no_manifest(project, tmp_path):

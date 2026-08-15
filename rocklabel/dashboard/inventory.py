@@ -484,7 +484,14 @@ def runs(root: str) -> list[dict]:
 
 
 def checkpoints(root: str) -> list[dict]:
-    """Every .pt the run pickers can offer, best.pt first."""
+    """Every .pt the run pickers can offer, best.pt first.
+
+    last.pt is listed but flagged unusable: it is the resume point, carrying
+    optimizer/scheduler state but none of the config, generator settings or
+    threshold every consumer of this list needs, so loading one raises
+    KeyError. Showing it greyed out beats hiding it — the file is on disk and
+    people go looking for it.
+    """
     out = []
     base = os.path.join(root, DIRS["runs"])
     if not os.path.isdir(base):
@@ -499,6 +506,8 @@ def checkpoints(root: str) -> list[dict]:
                     "path": os.path.relpath(full, root),
                     "size": st["size"],
                     "mtime": st["mtime"],
+                    "disabled": ck == "last.pt",
+                    "note": "resume point, not loadable" if ck == "last.pt" else "",
                 })
     out.sort(key=lambda c: (not c["name"].endswith("best.pt"), c["name"]))
     return out

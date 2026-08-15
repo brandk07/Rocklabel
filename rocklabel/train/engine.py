@@ -27,7 +27,7 @@ from tqdm import tqdm
 
 from . import data as D
 from . import metrics as M
-from .models import build_model
+from .models import FEATURES, build_model, resolve_features
 
 VAL_METRIC = "val_pr_auc"
 
@@ -102,6 +102,10 @@ def train_fold(cfg: dict, run_dir: str, resume: bool = True) -> dict:
     if os.path.exists(cfg_path):
         with open(cfg_path) as f:
             old = json.load(f)
+        # Runs predating the input-channel setting were trained on every
+        # channel. Filling the default in keeps them resumable instead of
+        # reading as a settings change nobody made.
+        old.setdefault("features", list(FEATURES))
         if old != cfg:
             raise SystemExit(f"{run_dir} was created with different settings; "
                              "pick a new --run-dir or delete it")
@@ -129,7 +133,9 @@ def train_fold(cfg: dict, run_dir: str, resume: bool = True) -> dict:
     print(f"[{os.path.basename(run_dir)}] train {len(tr)} ({n_pos / len(tr):.1%} rock), "
           f"val {len(va)}, test run {cfg['test_run']}, device {device}")
 
-    model = build_model(cfg["model"], tnet=cfg["tnet"], dropout=cfg.get("dropout")).to(device)
+    model = build_model(cfg["model"], tnet=cfg["tnet"], dropout=cfg.get("dropout"),
+                        features=cfg.get("features")).to(device)
+    print(f"  input channels: {', '.join(model.features)}")
     opt = torch.optim.AdamW(model.parameters(), lr=cfg["lr"], weight_decay=cfg["weight_decay"])
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=cfg["epochs"])
     loss_fn = torch.nn.BCEWithLogitsLoss(pos_weight=torch.tensor(n_neg / max(n_pos, 1.0),
@@ -238,6 +244,7 @@ def _write_history(run_dir: str, history: list[dict]) -> None:
 def default_config(**overrides) -> dict:
     cfg = {
         "model": "pointnet",
+        "features": list(FEATURES),
         "tnet": False,
         "tnet_reg": 1e-3,
         "dropout": None,
@@ -256,4 +263,7 @@ def default_config(**overrides) -> dict:
         "device": None,
     }
     cfg.update({k: v for k, v in overrides.items() if v is not None or k in ("device", "dropout")})
+    # Canonicalize here, not at build time: config.json is compared verbatim on
+    # resume, so "dz,dx,dy" and "dx,dy,dz" must not look like different runs.
+    cfg["features"] = resolve_features(cfg["features"])
     return cfg

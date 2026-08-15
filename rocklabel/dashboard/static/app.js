@@ -1312,7 +1312,10 @@ function sourceOptions(source) {
   };
   const list = map[source];
   if (!list) return null;
-  return list.map((x) => ({ label: x.name, value: x.path }));
+  // disabled/note are optional — only the checkpoint list sets them so far.
+  return list.map((x) => ({
+    label: x.name, value: x.path, disabled: !!x.disabled, note: x.note || '',
+  }));
 }
 
 function buildForm(cmd, prefill) {
@@ -1396,7 +1399,42 @@ function field(p, prefill) {
 
   const row = h('div', 'field-row');
 
-  if (p.kind === 'enum') {
+  if (p.kind === 'multi') {
+    // A checkbox per choice, backed by a hidden comma-joined input so the
+    // whole repeat/nargs pipeline (formValues, preview, presets) is unchanged.
+    const store = h('input');
+    store.type = 'hidden';
+    store.dataset.param = p.name;
+    const boxes = [];
+    const group = h('div', 'multi-group');
+    const selected = new Set(
+      (Array.isArray(initial) ? initial : String(initial ?? '').split(','))
+        .map((s) => String(s).trim()).filter(Boolean),
+    );
+    const sync = () => { store.value = boxes.filter((b) => b.checked).map((b) => b.value).join(', '); };
+    p.choices.forEach((c) => {
+      const label = h('label', 'checkbox multi-item');
+      const box = h('input');
+      box.type = 'checkbox';
+      box.value = c;
+      box.checked = selected.has(c);
+      box.onchange = () => { sync(); updatePreview(); };
+      boxes.push(box);
+      label.appendChild(box);
+      label.appendChild(h('span', null, c));
+      group.appendChild(label);
+    });
+    sync();
+    // setFieldValue writes the hidden input; the boxes have to follow it.
+    store._sync = (value) => {
+      const want = new Set((Array.isArray(value) ? value : String(value ?? '').split(','))
+        .map((s) => String(s).trim()).filter(Boolean));
+      boxes.forEach((b) => { b.checked = want.has(b.value); });
+      sync();
+    };
+    row.appendChild(group);
+    row.appendChild(store);
+  } else if (p.kind === 'enum') {
     const sel = h('select', 'input');
     sel.dataset.param = p.name;
     p.choices.forEach((c) => {
@@ -1415,8 +1453,9 @@ function field(p, prefill) {
       blank.value = '';
       sel.appendChild(blank);
       opts.forEach((o) => {
-        const opt = h('option', null, o.label);
+        const opt = h('option', null, o.note ? `${o.label} — ${o.note}` : o.label);
         opt.value = o.value;
+        opt.disabled = o.disabled;
         sel.appendChild(opt);
       });
       row.appendChild(sel);
@@ -1473,6 +1512,7 @@ function setFieldValue(name, value) {
   const node = $(`[data-param="${name}"]`, $('#runForm'));
   if (!node) return;
   if (node.type === 'checkbox') node.checked = Boolean(value);
+  else if (node._sync) node._sync(value);
   else node.value = value == null ? '' : String(value);
 }
 

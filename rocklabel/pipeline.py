@@ -20,8 +20,10 @@ from tqdm import tqdm
 
 from . import lidarrig_io
 from .mcap_io import (
+    INTENSITY_PROBE_FRAMES,
     McapFormatError,
     decode_pointcloud2,
+    intensity_scale_for_peak,
     iter_decoded,
     read_info,
     resolve_pointcloud_topic,
@@ -150,10 +152,34 @@ class Ros2ScanStream:
         self.pose_buffer = build_pose_buffer(mcap_path, cfg["topics"], check_lidar_mount=False)
         self._warned_intensity = False
         self._verified_frame: str | None = None
+        self._inten_scale: float | None = None
 
     @property
     def scan_count(self) -> int:
         return self.info.message_count(self.topic)
+
+    def _probe_intensity_scale(self) -> float:
+        """Bring this bag's intensity into [0, 1].
+
+        :func:`decode_pointcloud2` divides *integer* intensity channels by
+        their dtype max, but a driver is free to publish RSSI counts in a
+        float32 field - the SICK multiScan does exactly that, writing 0-65535
+        as floats - and those arrive unscaled. Probing the first messages
+        catches that case; already-normalized input probes at <= 1.5 and is
+        left alone, so this never double-scales the integer path.
+        """
+        peak, probed = 0.0, 0
+        for _topic, _log_ns, msg in iter_decoded(self.mcap_path, [self.topic]):
+            _xyz, inten, has_intensity = decode_pointcloud2(msg)
+            if not has_intensity:
+                return 1.0
+            finite = inten[np.isfinite(inten)]
+            if finite.size:
+                peak = max(peak, float(finite.max()))
+            probed += 1
+            if probed >= INTENSITY_PROBE_FRAMES:
+                break
+        return intensity_scale_for_peak(peak)
 
     def _source_frame(self, msg) -> str:
         """The frame the cloud's points are expressed in: the message's own
@@ -209,6 +235,13 @@ class Ros2ScanStream:
                         "intensity will be 0 for all points and outputs will record "
                         '"intensity_available": false.'
                     )
+            if self._inten_scale is None:
+                self._inten_scale = self._probe_intensity_scale()
+                if self._inten_scale != 1.0:
+                    tqdm.write(f"intensity: rescaling by {self._inten_scale:g} "
+                               "(driver publishes raw counts in a float field)")
+            if self._inten_scale != 1.0:
+                inten = inten * self._inten_scale
             xyz_odom = xyz @ T_odom_lidar[:3, :3].T.astype(np.float32) + T_odom_lidar[:3, 3].astype(np.float32)
 
             min_range = topics.get("min_range_m") or 0.0
@@ -257,7 +290,7 @@ class LidarrigScanStream:
 
         The multiScan RSSI arrives as u16 counts; older recordings may hold
         normalized floats or u8. Probe the first frames' max instead of
-        trusting anything.
+        trusting anything (see :func:`intensity_scale_for_peak`).
         """
         peak, probed = 0.0, 0
         for frame in lidarrig_io.iter_frames(self.mcap_path, self.topic):
@@ -267,13 +300,9 @@ class LidarrigScanStream:
             if finite.size:
                 peak = max(peak, float(finite.max()))
             probed += 1
-            if probed >= 25:
+            if probed >= INTENSITY_PROBE_FRAMES:
                 break
-        if peak <= 1.5:
-            return 1.0          # already normalized
-        if peak <= 255.0:
-            return 1.0 / 255.0  # 8-bit reflectivity
-        return 1.0 / 65535.0    # raw u16 RSSI
+        return intensity_scale_for_peak(peak)
 
     def __iter__(self):
         min_range = self.cfg["topics"].get("min_range_m") or 0.0

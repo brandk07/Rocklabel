@@ -113,10 +113,12 @@ def run_mcap_replay(mcap_path: str, checkpoint: str, cfg: dict,
     dev = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
     ck = torch.load(checkpoint, map_location="cpu", weights_only=False)
     tcfg, gcfg = ck["config"], ck["generator"]
-    model = build_model(tcfg["model"], tnet=tcfg["tnet"], dropout=tcfg.get("dropout"))
+    model = build_model(tcfg["model"], tnet=tcfg["tnet"], dropout=tcfg.get("dropout"),
+                        features=tcfg.get("features"))
     model.load_state_dict(ck["model"])
     print(f"model: {tcfg['model']} (trained on {', '.join(tcfg['train_runs'])}; "
           f"held out {tcfg['test_run']}), threshold {ck.get('threshold', 0.5):.2f}")
+    print(f"input channels: {', '.join(model.features)}")
 
     recs = _score_recording(mcap_path, cfg, gcfg, model, dev, stride, window_s,
                             z_min=z_min, z_max=z_max, max_range=max_range)

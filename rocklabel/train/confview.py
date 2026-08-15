@@ -72,7 +72,8 @@ def run_confview(out_dir: str, run_id: str | None, checkpoint: str,
     elif ds.run_id in cfg.get("train_runs", []):
         print(f"note: {ds.run_id} was in this checkpoint's TRAINING set - expect "
               "optimistic-looking predictions")
-    model = build_model(cfg["model"], tnet=cfg["tnet"], dropout=cfg.get("dropout"))
+    model = build_model(cfg["model"], tnet=cfg["tnet"], dropout=cfg.get("dropout"),
+                        features=cfg.get("features"))
     model.load_state_dict(ck["model"])
     probs_by_frame = _predict_run(ds, model, dev)
 

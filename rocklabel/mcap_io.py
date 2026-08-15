@@ -21,6 +21,31 @@ _PF_DTYPES = {1: "i1", 2: "u1", 3: "i2", 4: "u2", 5: "i4", 6: "u4", 7: "f4", 8: 
 # Intensity channel candidates, tried in this order.
 _INTENSITY_NAMES = ("intensity", "reflectivity", "i")
 
+#: Messages/frames to look at before deciding an intensity scale.
+INTENSITY_PROBE_FRAMES = 25
+
+
+def intensity_scale_for_peak(peak: float) -> float:
+    """Multiplier that brings an observed intensity peak into [0, 1].
+
+    The units a driver writes are not discoverable from the message: the SICK
+    multiScan publishes RSSI as u16 counts, but *as a float32 field* in its ROS
+    bags (0-65535 stored in a float), while other rigs write u8 or already
+    normalized floats. :func:`decode_pointcloud2` can only divide *integer*
+    channels by their dtype max, so every stream additionally probes its first
+    :data:`INTENSITY_PROBE_FRAMES` frames and applies this ladder. Already
+    normalized input probes at peak <= 1.5 and gets 1.0, so the two steps
+    compose rather than double-scaling.
+
+    Shared by both offline stream classes and the live scorer so a model can
+    never be trained on one scale and served on another.
+    """
+    if peak <= 1.5:
+        return 1.0             # already normalized
+    if peak <= 255.0:
+        return 1.0 / 255.0     # 8-bit reflectivity
+    return 1.0 / 65535.0       # raw u16 RSSI
+
 
 class McapFormatError(Exception):
     pass

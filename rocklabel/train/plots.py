@@ -216,18 +216,26 @@ def write_summary_table(results: dict[str, dict[str, dict]], out_path: str) -> N
     print(f"wrote {out_path}")
 
 
-def render_all(runs_root: str, results_dir: str, models: list[str], folds: list[str]) -> dict:
-    """Regenerate every figure from artifacts on disk; returns pooled results."""
+def render_all(runs_root: str, results_dir: str, models: list[str], folds: list[str],
+               features: list[str] | None = None) -> dict:
+    """Regenerate every figure from artifacts on disk; returns pooled results.
+
+    ``features`` selects *which* runs to report on: a non-default input-channel
+    selection is tagged into the run directory name, so reporting has to look
+    under the same tag the training wrote.
+    """
+    from .data import run_dir_name
+
     results: dict[str, dict[str, dict]] = {}
     for model in models:
         results[model] = {}
         for fold in folds:
-            run_dir = os.path.join(runs_root, f"{model}_{fold}")
+            run_dir = os.path.join(runs_root, run_dir_name(model, fold, features))
             with open(os.path.join(run_dir, "test_metrics.json")) as f:
                 results[model][fold] = json.load(f)
             plot_history(run_dir)
     for fold in folds:
-        dirs = {m: os.path.join(runs_root, f"{m}_{fold}") for m in models}
+        dirs = {m: os.path.join(runs_root, run_dir_name(m, fold, features)) for m in models}
         plot_roc_pr(dirs, fold, os.path.join(results_dir, f"roc_pr_{fold}.png"))
         plot_confusions(dirs, fold, os.path.join(results_dir, f"confusion_{fold}.png"))
         plot_threshold_sweep(dirs, fold, os.path.join(results_dir, f"threshold_{fold}.png"))

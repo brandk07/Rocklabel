@@ -121,6 +121,7 @@ class LiveScorer:
             self._tcfg["model"],
             tnet=self._tcfg["tnet"],
             dropout=self._tcfg.get("dropout"),
+            features=self._tcfg.get("features"),
         )
         self._model.load_state_dict(ck["model"])
         self._model.eval().to(self._device)
@@ -173,15 +174,16 @@ class LiveScorer:
 
     # -- scoring loop ------------------------------------------------------- #
     def _probe_intensity_scale(self, inten: np.ndarray) -> float:
-        """Bring live intensity into [0, 1] — the range the model trained on
-        (mirrors LidarrigScanStream._probe_intensity_scale)."""
+        """Bring live intensity into [0, 1] — the range the model trained on.
+
+        Same ladder as both offline stream classes, from one shared function:
+        training and serving disagreeing about this would be invisible in every
+        metric and fatal in the field.
+        """
+        from rocklabel.mcap_io import intensity_scale_for_peak
+
         finite = inten[np.isfinite(inten)]
-        peak = float(finite.max()) if finite.size else 0.0
-        if peak <= 1.5:
-            return 1.0
-        if peak <= 255.0:
-            return 1.0 / 255.0
-        return 1.0 / 65535.0  # raw u16 RSSI
+        return intensity_scale_for_peak(float(finite.max()) if finite.size else 0.0)
 
     def _loop(self) -> None:
         while not self._stop.is_set():

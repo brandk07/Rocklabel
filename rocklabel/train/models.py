@@ -5,6 +5,14 @@ Input contract (matches neighborhoods.py): points [B, 256, 4] with channels
 ground-relative), counts [B] = number of REAL points. Padding repeats real
 points and is appended AFTER them, so the validity mask is arange(N) < counts.
 
+Feature selection happens INSIDE the model: every model always takes the full
+[B, N, 4] tensor and selects its own channels, so the dataset, the cache, the
+augmentation and the export signature are identical whatever ``features``
+holds. Training on geometry alone is therefore just a model setting, not a
+regenerate — which matters because reflectivity is the channel least likely to
+survive a change of arena (a white comforter and lunar regolith do not share
+an RSSI distribution).
+
 Padding policy: PointNet's max-pool is duplicate-safe, so masking there is
 belt-and-braces. PointNet++ is not: duplicates would waste FPS centroids and
 skew nothing else only because every pool here is a max. We therefore mask
@@ -20,7 +28,13 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from ..neighborhoods import FEATURES, GEOMETRY, resolve_features  # noqa: F401  (re-exported)
+
 SENTINEL = 1.0e3  # farther than any real neighborhood coordinate (meters)
+
+
+def _feature_buffer(names: list[str]) -> torch.Tensor:
+    return torch.tensor([FEATURES.index(n) for n in names], dtype=torch.long)
 
 
 def valid_mask(counts: torch.Tensor, n: int) -> torch.Tensor:
@@ -72,19 +86,28 @@ class PointNet(nn.Module):
     """Vanilla PointNet classifier; T-Nets optional (the data is already
     canonicalized, so they default off)."""
 
-    def __init__(self, tnet: bool = False, dropout: float = 0.3):
+    def __init__(self, tnet: bool = False, dropout: float = 0.3,
+                 features: list[str] | None = None):
         super().__init__()
+        self.features = resolve_features(features)
+        if tnet and self.features[:3] != list(GEOMETRY):
+            raise ValueError("T-Nets regress a 3x3 spatial transform, so they need "
+                             f"all of {list(GEOMETRY)} selected; got {self.features}")
         self.use_tnet = tnet
         self.input_tnet = TNet(3) if tnet else None
         self.feature_tnet = TNet(64) if tnet else None
-        self.mlp1 = _mlp1d([4, 64, 64])
+        self.mlp1 = _mlp1d([len(self.features), 64, 64])
         self.mlp2 = _mlp1d([64, 64, 128, 1024])
         self.head = _head(1024, dropout)
         self._reg = torch.zeros(())
+        # Not persistent: the selection lives in the training config, and a
+        # checkpoint that disagreed with it would be a silent contract break.
+        self.register_buffer("feature_idx", _feature_buffer(self.features),
+                             persistent=False)
 
     def forward(self, points: torch.Tensor, counts: torch.Tensor) -> torch.Tensor:
         mask = valid_mask(counts, points.shape[1])
-        x = points.transpose(1, 2)  # [B, 4, N]
+        x = points.index_select(-1, self.feature_idx).transpose(1, 2)  # [B, C, N]
         reg = x.new_zeros(())
         if self.input_tnet is not None:
             t = self.input_tnet(x[:, :3], mask)
@@ -183,9 +206,17 @@ class PointNetPP(nn.Module):
     real points inside the 0.5 m radius, so the hierarchy is shallow and the
     ball radii are coarse relative to the classic 1k-point configs."""
 
-    def __init__(self, dropout: float = 0.4):
+    def __init__(self, dropout: float = 0.4, features: list[str] | None = None):
         super().__init__()
-        self.sa1 = SetAbstraction(64, 0.15, 16, in_channel=1, mlp=[64, 64, 128])
+        self.features = resolve_features(features)
+        if self.features[:3] != list(GEOMETRY):
+            raise ValueError("pointnet2 samples and groups by position, so it needs "
+                             f"all of {list(GEOMETRY)} selected; got {self.features}. "
+                             "Deselect only the non-geometry channels here, or use "
+                             "model=pointnet for arbitrary subsets.")
+        extra = self.features[3:]  # everything past the xyz block becomes features
+        self.register_buffer("extra_idx", _feature_buffer(extra), persistent=False)
+        self.sa1 = SetAbstraction(64, 0.15, 16, in_channel=len(extra), mlp=[64, 64, 128])
         self.sa2 = SetAbstraction(16, 0.30, 16, in_channel=128, mlp=[128, 128, 256])
         self.global_mlp = _mlp1d([256 + 3, 256, 512, 1024])
         self.head = _head(1024, dropout)
@@ -194,7 +225,9 @@ class PointNetPP(nn.Module):
         mask = valid_mask(counts, points.shape[1])
         # Exile padded points so no ball query or FPS pick can reach them.
         xyz = torch.where(mask[..., None], points[..., :3], torch.full_like(points[..., :3], SENTINEL))
-        feats = points[..., 3:]  # intensity
+        # [B, N, 0] when only geometry is selected — every downstream cat and
+        # Conv2d handles the zero-width case, so no special branch is needed.
+        feats = points.index_select(-1, self.extra_idx)
         xyz, feats = self.sa1(xyz, feats, mask)
         # After SA1 every centroid is a real point (FPS was masked), so all
         # levels below are fully valid.
@@ -207,9 +240,14 @@ class PointNetPP(nn.Module):
         return torch.zeros((), device=next(self.parameters()).device)
 
 
-def build_model(name: str, tnet: bool = False, dropout: float | None = None) -> nn.Module:
+def build_model(name: str, tnet: bool = False, dropout: float | None = None,
+                features: list[str] | None = None) -> nn.Module:
+    """``features=None`` means all of :data:`FEATURES` — the historical
+    behavior, so checkpoints trained before the setting existed still load."""
     if name == "pointnet":
-        return PointNet(tnet=tnet, dropout=0.3 if dropout is None else dropout)
+        return PointNet(tnet=tnet, dropout=0.3 if dropout is None else dropout,
+                        features=features)
     if name == "pointnet2":
-        return PointNetPP(dropout=0.4 if dropout is None else dropout)
+        return PointNetPP(dropout=0.4 if dropout is None else dropout,
+                          features=features)
     raise ValueError(f"unknown model {name!r} (pointnet | pointnet2)")

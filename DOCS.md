@@ -641,6 +641,14 @@ Notable robustness knobs:
 - `topics.pose_tolerance_s` — max TF extrapolation before a frame is skipped.
 - Missing intensity field → one prominent warning, zeros written, and
   `"intensity_available": false` recorded in all output metadata.
+- Intensity is always normalized to `[0, 1]`, whatever units the driver wrote.
+  Integer channels are divided by their dtype max at decode; on top of that
+  every stream probes its first 25 frames and applies a scale, because a driver
+  may publish raw RSSI counts in a *float* field with no dtype max to divide by
+  — the SICK multiScan writes 0-65535 that way in its ROS bags. Already
+  normalized input probes at ≤ 1.5 and is left alone. The same ladder
+  (`mcap_io.intensity_scale_for_peak`) serves the offline streams and the live
+  scorer, so a model cannot be trained on one scale and served on another.
 - Zero/garbage header stamps fall back to mcap log time (counted in the
   end-of-run summary).
 - If your TF tree has a localization-corrected frame (e.g. `map -> odom`
@@ -754,6 +762,25 @@ Key design points (see the module docstrings for the details):
   repeating real ones (most samples have only ~20-120 real points).
   PointNet's max-pool is duplicate-safe; PointNet++ masks padded points out of
   FPS and ball queries entirely (`models.py`).
+- **Input channels are selectable** (`--features`, or the "Input channels"
+  tick-boxes on the dashboard's train cards). The stored sample tensor always
+  holds all four channels (`dx dy dz intensity`); a model selects its own
+  subset *inside* `forward`, so the dataset, the cache, the augmentation and
+  the exported `[B, 256, 4]` signature are identical whatever you pick, and two
+  selections are directly comparable on the same cache with no regeneration.
+  `--features dx dy dz` trains on shape alone — reflectivity is the channel
+  least likely to survive a change of surface, and a model that leans on it can
+  score well in the room it was recorded in while transferring to nothing.
+  PointNet++ samples and groups by position, so it requires all three geometry
+  channels; PointNet takes any subset. Deselected channels are provably
+  unreachable (`tests/test_train.py`), and `metadata.json` records
+  `features_used` / `features_ignored` for deployment.
+  A non-default selection is tagged into both the run directory and the default
+  results directory (`pointnet_loro_run3_dx-dy-dz`, `training/results_dx-dy-dz`)
+  so the two experiments you want to compare sit side by side instead of
+  colliding; the full set keeps the historical names, and runs trained before
+  the setting existed still resume. Pass the same `--features` to
+  `report` to regenerate that selection's figures.
 - **Class imbalance** (~29% rock) is handled with class-weighted BCE, and the
   headline metrics are PR-AUC / ROC-AUC / F1 with the majority-class baseline
   printed next to them - never bare accuracy.
