@@ -56,7 +56,7 @@ import open3d.visualization.gui as gui
 import open3d.visualization.rendering as rendering
 
 from rocklabel.camera import CAMERA_HELP, CAMERA_HINT, PivotCamera
-from rocklabel.live.colormap import apply_colormap, normalize
+from rocklabel.live.colormap import apply_colormap, normalize, reflectivity_values
 from rocklabel.live.config import AppConfig
 from rocklabel.live.motion import quat_to_matrix
 from rocklabel.live.pipeline import IngestEngine
@@ -149,7 +149,7 @@ class VizApp(PivotCamera):
         self._show_mesh = config.display.show_mesh
         self._show_accum = config.display.show_accum
         self._show_box = config.display.show_lidar_box
-        self._color_modes = ["height", "reflectivity"] + (
+        self._color_modes = ["height", "reflectivity", "reflectivity_stretch"] + (
             ["model"] if scorer is not None else []
         )
         self._color_mode = (
@@ -484,6 +484,7 @@ class VizApp(PivotCamera):
         for m in self._color_modes:
             self._color_combo.add_item(
                 {"height": "Height", "reflectivity": "Reflectivity",
+                 "reflectivity_stretch": "Reflectivity (contrast)",
                  "model": "Model prediction"}[m])
         self._color_combo.selected_index = self._color_modes.index(self._color_mode)
         self._color_combo.set_on_selection_changed(self._on_color_combo)
@@ -1022,16 +1023,13 @@ class VizApp(PivotCamera):
         """Per-point RGB for the active color mode; None = uniform color."""
         if self._color_mode == "model" and self._scorer is not None:
             return self._model_colors(pts)
-        if self._color_mode == "reflectivity":
+        if self._color_mode in ("reflectivity", "reflectivity_stretch"):
             finite = np.isfinite(inten)
             if not np.any(finite):
                 return None  # no RSSI available: fall back to uniform
-            # Fixed full-scale normalization: the sensor's RSSI is already
-            # calibrated. Per-frame percentile scaling compressed the whole
-            # room into one band and clipped retroreflectors into the same
-            # color as ordinary bright surfaces.
-            v = np.clip(inten / 65535.0, 0.0, 1.0)
-            v[~finite] = 0.5
+            v = reflectivity_values(
+                inten, finite, stretch=self._color_mode == "reflectivity_stretch",
+                pct=self._cfg.display.reflectivity_percentiles)
             return apply_colormap(v, self._cfg.display.reflectivity_colormap)
         return apply_colormap(normalize(pts[:, 2]), self._cfg.display.colormap)
 

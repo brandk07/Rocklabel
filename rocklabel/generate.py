@@ -123,7 +123,8 @@ def run_generate(mcap_path: str, labels_path: str, out_dir: str, cfg: dict) -> d
 
         # Seed per frame so output is reproducible regardless of skipped frames.
         rng = np.random.default_rng([int(gcfg["seed"]), scan.index])
-        samples = build_neighborhood_samples(xyz, inten, labelset.rocks, gcfg, rng)
+        samples = build_neighborhood_samples(xyz, inten, labelset.rocks, gcfg, rng,
+                                             arena=labelset.arena)
         if samples is not None:
             np.savez_compressed(
                 os.path.join(points_dir, f"frame_{scan.index:06d}.npz"), **samples, **common_meta
@@ -151,6 +152,11 @@ def run_generate(mcap_path: str, labels_path: str, out_dir: str, cfg: dict) -> d
         "mcap_path": os.path.abspath(mcap_path),
         "labels_path": os.path.abspath(labels_path),
         "rock_count": len(labelset.rocks),
+        # Recorded so a dataset says whether its samples were arena-bounded;
+        # pooling a bounded run with an unbounded one mixes two different
+        # definitions of "clear" and the manifest is the only place that shows.
+        "arena_vertices": (None if labelset.arena is None
+                           else int(len(labelset.arena))),
         "intensity_available": bool(stream.counters.intensity_available),
         "generated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         **stats,

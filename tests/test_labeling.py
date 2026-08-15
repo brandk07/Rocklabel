@@ -1,9 +1,14 @@
 """Shape membership labeling: rock / ignore shell / clear."""
 
+import json
+
 import numpy as np
+import pytest
 
 from rocklabel.labeling import (LABEL_CLEAR, LABEL_IGNORE, LABEL_ROCK,
-                                label_points, label_rocks, points_in_rock)
+                                inside_arena, label_points, label_rocks,
+                                points_in_rock)
+from rocklabel.neighborhoods import build_neighborhood_samples
 from rocklabel.labels import LabelSet, load_labels
 
 
@@ -106,3 +111,78 @@ def test_schema_v1_still_loads(tmp_path):
     assert ls.rocks[0].shape == "sphere"
     assert ls.rocks[0].radius == 0.4
     assert ls._next_id == 4
+
+
+# -- arena boundary -----------------------------------------------------------
+
+def test_inside_arena_accepts_everything_when_unset():
+    pts = np.random.default_rng(0).uniform(-50, 50, size=(100, 3))
+    assert inside_arena(pts, None).all()
+    assert len(inside_arena(np.empty((0, 3)), None)) == 0
+
+
+def test_inside_arena_is_an_xy_test():
+    square = np.array([[0.0, 0.0], [4.0, 0.0], [4.0, 4.0], [0.0, 4.0]])
+    pts = np.array([
+        [2.0, 2.0, 0.0],     # middle
+        [2.0, 2.0, 99.0],    # same xy, absurd height: still inside
+        [-1.0, 2.0, 0.0],    # outside in x
+        [2.0, 9.0, 0.0],     # outside in y
+    ])
+    np.testing.assert_array_equal(inside_arena(pts, square),
+                                  [True, True, False, False])
+
+
+def test_arena_survives_a_save_load_round_trip(tmp_path):
+    ls = LabelSet()
+    ls.add([1.0, 1.0, 0.0], 0.2)
+    ls.set_arena([[0, 0], [5, 0], [5, 5], [0, 5]])
+    path = str(tmp_path / "labels.json")
+    ls.save(path)
+    back = load_labels(path)
+    np.testing.assert_allclose(back.arena, [[0, 0], [5, 0], [5, 5], [0, 5]])
+    assert len(back.rocks) == 1
+
+
+def test_labels_without_an_arena_stay_arena_free(tmp_path):
+    ls = LabelSet()
+    ls.add([0.0, 0.0, 0.0], 0.3)
+    path = str(tmp_path / "labels.json")
+    ls.save(path)
+    assert "arena" not in json.loads(open(path).read())
+    assert load_labels(path).arena is None
+
+
+def test_set_arena_rejects_a_degenerate_polygon():
+    ls = LabelSet()
+    for bad in ([], [[0, 0]], [[0, 0], [1, 1]]):
+        with pytest.raises(ValueError, match="at least 3"):
+            ls.set_arena(bad)
+
+
+def test_arena_restricts_sample_centers_but_not_neighborhood_context():
+    """A center outside the arena is dropped; a center just inside keeps the
+    full ball of context, including the points beyond the boundary."""
+    rng = np.random.default_rng(0)
+    # dense ground slab spanning x = -2..2
+    g = rng.uniform([-2, -2, 0], [2, 2, 0.02], size=(20000, 3))
+    inten = np.full(len(g), 0.5)
+    gcfg = {"centers_voxel_m": 0.1, "neighborhood_radius_m": 0.5, "min_neighbors": 5,
+            "neighborhood_points": 64, "negative_keep_prob": 1.0,
+            "boundary_shell_m": 0.05}
+    half = np.array([[-2.0, -2.0], [0.0, -2.0], [0.0, 2.0], [-2.0, 2.0]])  # keep x <= 0
+
+    full = build_neighborhood_samples(g, inten, [], gcfg, np.random.default_rng(1))
+    bounded = build_neighborhood_samples(g, inten, [], gcfg, np.random.default_rng(1),
+                                         arena=half)
+    assert full is not None and bounded is not None
+    assert bounded["centers_odom"][:, 0].max() <= 1e-9      # no center past the line
+    assert len(bounded["labels"]) < len(full["labels"])     # and fewer of them
+
+    # A center within a ball's reach of the boundary still sees points from the
+    # far side: its neighbor count matches what it would have had unbounded.
+    edge = np.argmax(bounded["centers_odom"][:, 0])
+    assert bounded["true_counts"][edge] >= gcfg["min_neighbors"]
+    near = np.argmin(np.linalg.norm(
+        full["centers_odom"] - bounded["centers_odom"][edge], axis=1))
+    assert abs(int(full["true_counts"][near]) - int(bounded["true_counts"][edge])) <= 2

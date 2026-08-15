@@ -119,6 +119,7 @@ SECTIONS: list[Section] = [
                     choices=[
                         Choice("height", "Height"),
                         Choice("reflectivity", "Reflectivity"),
+                        Choice("reflectivity_stretch", "Reflectivity (contrast)"),
                         Choice("model", "Model prediction", requires="scorer"),
                     ]),
             Control("view.nav_mode", "enum", "Navigation",

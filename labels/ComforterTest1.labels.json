@@ -1,9 +1,9 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "mcap_file": "ComforterTest1.mcap",
   "run_id": "ComforterTest1",
   "odom_frame": "world",
-  "created": "2026-08-08T20:19:52Z",
+  "created": "2026-08-15T22:26:36Z",
   "tool_version": "0.2.0",
   "intensity_available": true,
   "accumulator_voxel_m": 0.03,
@@ -14,7 +14,7 @@
       "center": [
         0.5873,
         -0.6328,
-        -0.5462
+        -0.5463
       ],
       "radius": 0.2795,
       "vertices": [
@@ -158,9 +158,9 @@
       "center": [
         0.5891,
         0.5367,
-        -0.536
+        -0.5359
       ],
-      "radius": 0.2229,
+      "radius": 0.2228,
       "vertices": [
         [
           0.4856,

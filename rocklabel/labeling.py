@@ -112,6 +112,20 @@ def label_rocks(xyz: np.ndarray, rocks, shell_m: float) -> np.ndarray:
     return labels
 
 
+def inside_arena(xyz: np.ndarray, arena: np.ndarray | None) -> np.ndarray:
+    """Boolean mask of points whose xy falls inside the arena footprint.
+
+    ``arena=None`` accepts everything, so callers can pass it through
+    unconditionally and recordings without a boundary behave as they always
+    did. The test is xy-only on purpose: the vertical extent of what to keep
+    is already the generator's crop box, and an arena is a floor plan.
+    """
+    xyz = np.asarray(xyz, float)
+    if arena is None or len(xyz) == 0:
+        return np.ones(len(xyz), bool)
+    return points_in_polygon_xy(xyz[:, :2], np.asarray(arena, float))
+
+
 def label_points(xyz: np.ndarray, centers: np.ndarray, radii: np.ndarray, shell_m: float) -> np.ndarray:
     """Sphere-only convenience wrapper around label_rocks (kept for callers
     that carry plain centers/radii arrays)."""

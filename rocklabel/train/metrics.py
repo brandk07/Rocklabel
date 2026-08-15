@@ -65,15 +65,30 @@ def confusion(labels: np.ndarray, probs: np.ndarray, threshold: float) -> dict:
 def threshold_sweep(labels: np.ndarray, probs: np.ndarray,
                     thresholds: np.ndarray | None = None) -> dict:
     if thresholds is None:
-        thresholds = np.linspace(0.02, 0.98, 49)
+        thresholds = np.linspace(0.01, 0.99, 99)
     rows = [confusion(labels, probs, t) for t in thresholds]
     return {k: np.array([r[k] for r in rows]) for k in
             ("threshold", "precision", "recall", "f1", "accuracy")}
 
 
 def best_f1_threshold(labels: np.ndarray, probs: np.ndarray) -> float:
+    """Threshold maximizing F1 over the sweep grid.
+
+    An argmax that lands on either end of the grid means the real optimum is
+    outside it, so the returned number is a grid artifact rather than a choice
+    — worth saying out loud, because it is also a sign the probabilities are
+    badly calibrated. (A PointNet++ fold once selected the old grid's 0.02
+    floor exactly, and nothing said so.)
+    """
     sweep = threshold_sweep(labels, probs)
-    return float(sweep["threshold"][int(np.argmax(sweep["f1"]))])
+    i = int(np.argmax(sweep["f1"]))
+    if i in (0, len(sweep["f1"]) - 1):
+        import warnings
+        warnings.warn(
+            f"best-F1 threshold pinned to the sweep endpoint {sweep['threshold'][i]:.2f}; "
+            "the true optimum lies outside the grid and this model is likely miscalibrated",
+            RuntimeWarning, stacklevel=2)
+    return float(sweep["threshold"][i])
 
 
 def summarize(labels: np.ndarray, probs: np.ndarray, threshold: float = 0.5) -> dict:

@@ -25,6 +25,7 @@ import numpy as np
 import torch
 from tqdm import tqdm
 
+from . import TRAIN_DEFAULTS
 from . import data as D
 from . import metrics as M
 from .models import FEATURES, build_model, resolve_features
@@ -64,16 +65,74 @@ class Split:
         return len(self.labels)
 
 
-def _augment(pts: torch.Tensor, gen: torch.Generator) -> torch.Tensor:
-    """Random z-rotation + mirror of the center-relative dx/dy channels."""
+#: Never thin a neighborhood below this many real points, whatever the
+#: sampled fraction — the generator's own min_neighbors floor is 20, and a
+#: handful of returns is not a sample any sensor would hand us.
+MIN_KEEP = 8
+
+
+def _thin(pts: torch.Tensor, counts: torch.Tensor, min_frac: float,
+          gen: torch.Generator) -> tuple[torch.Tensor, torch.Tensor]:
+    """Randomly drop real points, keeping the 'real points first' contract.
+
+    Neither model reads the padded tail — PointNet masks it and PointNet++
+    exiles it to the sentinel — so the tail is refilled by cycling the
+    survivors purely to preserve the stored tensor's shape and its
+    duplicate-padding convention.
+    """
+    b, n, _ = pts.shape
+    dev = pts.device
+    real = torch.clamp(counts, max=n)
+    frac = min_frac + (1.0 - min_frac) * torch.rand(b, 1, generator=gen, device=dev)
+    keep = torch.clamp((real[:, None].float() * frac).round().long(), min=MIN_KEEP)
+    keep = torch.minimum(keep, real[:, None])                       # [B, 1]
+    # Shuffle the real rows to the front (invalid rows sort last), then take
+    # the first `keep` of them and cycle those into the remaining slots.
+    order = torch.rand(b, n, generator=gen, device=dev).masked_fill(
+        torch.arange(n, device=dev)[None, :] >= real[:, None], 2.0).argsort(dim=1)
+    pos = torch.arange(n, device=dev)[None, :].expand(b, n)
+    idx = order.gather(1, torch.where(pos < keep, pos, pos % keep))
+    return pts.gather(1, idx[..., None].expand(-1, -1, pts.shape[-1])), keep.squeeze(1)
+
+
+def _augment(pts: torch.Tensor, counts: torch.Tensor, cfg: dict,
+             gen: torch.Generator) -> tuple[torch.Tensor, torch.Tensor]:
+    """Training-time augmentation, all on-device.
+
+    *Heading*: random z-rotation + mirror of the center-relative dx/dy
+    channels (the odom-frame crop is deliberately axis-aligned).
+
+    *Reflectivity*: per-sample gain and offset on the intensity channel. This
+    is the one that matters for leaving the room. Rock and clear separate at
+    ROC-AUC 0.79-0.87 on mean intensity alone in this data, but the whole
+    separation lives in a ~0.045 gap between two absolute levels (~0.714 vs
+    ~0.669) that belong to one arena's surfaces, not to rocks. Jittering wider
+    than that gap denies the model the absolute cue and leaves only the
+    within-neighborhood contrast, which is the part that might transfer.
+
+    *Density*: random thinning with counts updated to match, so the model
+    cannot assume this sensor's return density. The measured cost of thinning
+    to 25% was 0.986 -> 0.957 PR-AUC untrained-for; the point is to make that
+    curve flatter still, and to widen it to sensors we do not own.
+    """
     b = pts.shape[0]
-    theta = torch.rand(b, generator=gen, device=pts.device) * (2 * torch.pi)
+    dev = pts.device
+    theta = torch.rand(b, generator=gen, device=dev) * (2 * torch.pi)
     c, s = torch.cos(theta), torch.sin(theta)
-    flip = torch.where(torch.rand(b, generator=gen, device=pts.device) < 0.5, -1.0, 1.0)
+    flip = torch.where(torch.rand(b, generator=gen, device=dev) < 0.5, -1.0, 1.0)
     rot = torch.stack([torch.stack([c, -s], -1), torch.stack([s * flip, c * flip], -1)], 1)
     out = pts.clone()
     out[..., :2] = torch.bmm(pts[..., :2], rot.transpose(1, 2))
-    return out
+
+    gain_amp, shift_amp = cfg["aug_intensity_gain"], cfg["aug_intensity_shift"]
+    if gain_amp or shift_amp:
+        gain = 1.0 + (torch.rand(b, 1, generator=gen, device=dev) * 2 - 1) * gain_amp
+        shift = (torch.rand(b, 1, generator=gen, device=dev) * 2 - 1) * shift_amp
+        out[..., 3] = (out[..., 3] * gain + shift).clamp(0.0, 1.0)
+
+    if cfg["aug_thin_min"] < 1.0:
+        out, counts = _thin(out, counts, cfg["aug_thin_min"], gen)
+    return out, counts
 
 
 @torch.no_grad()
@@ -120,8 +179,11 @@ def train_fold(cfg: dict, run_dir: str, resume: bool = True) -> dict:
     train_runs = [D.RunData(cfg["cache_dir"], r) for r in cfg["train_runs"]]
     # Early-stopping val: tail frame block of each training run, with a
     # temporal gap so no neighborhood pair straddles the boundary.
-    tr_masks, va_masks = zip(*(D.block_val_mask(r.frame, cfg["val_frac"], cfg["gap_frames"])
-                               for r in train_runs))
+    tr_masks, va_masks = zip(*(
+        D.block_val_mask(r.frame, cfg["val_frac"], cfg["gap_frames"],
+                         times=meta["runs"][r.run_id].get("frame_times"),
+                         gap_seconds=cfg.get("gap_seconds"))
+        for r in train_runs))
     D.check_no_frame_overlap(
         {r.run_id: r.frame[m] for r, m in zip(train_runs, tr_masks)},
         {r.run_id: r.frame[m] for r, m in zip(train_runs, va_masks)})
@@ -166,7 +228,7 @@ def train_fold(cfg: dict, run_dir: str, resume: bool = True) -> dict:
             cnt = tr.counts[idx].to(device, non_blocking=True)
             y = tr.labels[idx].to(device, non_blocking=True)
             if cfg["augment"]:
-                pts = _augment(pts, gen)
+                pts, cnt = _augment(pts, cnt, cfg, gen)
             logits = model(pts, cnt)
             loss = loss_fn(logits, y) + cfg["tnet_reg"] * model.pop_regularizer()
             opt.zero_grad(set_to_none=True)
@@ -242,26 +304,12 @@ def _write_history(run_dir: str, history: list[dict]) -> None:
 
 
 def default_config(**overrides) -> dict:
-    cfg = {
-        "model": "pointnet",
-        "features": list(FEATURES),
-        "tnet": False,
-        "tnet_reg": 1e-3,
-        "dropout": None,
-        "cache_dir": "training/cache",
-        "train_runs": [],
-        "test_run": "",
-        "val_frac": 0.15,
-        "gap_frames": 25,
-        "epochs": 30,
-        "batch": 256,
-        "lr": 1e-3,
-        "weight_decay": 1e-4,
-        "patience": 6,
-        "augment": True,
-        "seed": 42,
-        "device": None,
-    }
+    """Training config, defaults from :data:`rocklabel.train.TRAIN_DEFAULTS`.
+
+    ``None`` overrides are dropped rather than applied, which is what lets the
+    CLI pass every unset flag straight through without shadowing a default.
+    """
+    cfg = dict(TRAIN_DEFAULTS)
     cfg.update({k: v for k, v in overrides.items() if v is not None or k in ("device", "dropout")})
     # Canonicalize here, not at build time: config.json is compared verbatim on
     # resume, so "dz,dx,dy" and "dx,dy,dz" must not look like different runs.

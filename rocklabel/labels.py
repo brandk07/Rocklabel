@@ -9,6 +9,15 @@ Shapes:
   sphere   center [3], radius
   box      center [3], size [3] full extents, axis-aligned
   polygon  vertices [N, 2] odom xy, z_range (base, top); extruded prism
+
+Schema v3 adds an optional ``arena``: one odom-frame xy polygon marking the
+competition area. It is not a label - nothing inside it is called a rock -
+it marks which ground is *eligible* to become a training sample at all. The
+generator's crop is a box that follows the robot, so it cannot tell "four
+metres to port, arena floor" from "four metres to port, a couch"; without an
+arena the negative class ends up partly defined by whatever furniture shared
+the room. Measured on the comforter runs, 29% of clear samples contained
+structure over half a metre tall.
 """
 
 from __future__ import annotations
@@ -22,8 +31,8 @@ import numpy as np
 
 from . import __version__
 
-SCHEMA_VERSION = 2
-_READABLE_VERSIONS = (1, 2)  # v1 = spheres only
+SCHEMA_VERSION = 3
+_READABLE_VERSIONS = (1, 2, 3)  # v1 = spheres only, v2 = shaped, v3 = + arena
 
 
 @dataclass
@@ -67,7 +76,22 @@ class LabelSet:
     intensity_available: bool = True
     accumulator_voxel_m: float = 0.03
     rocks: list[Rock] = field(default_factory=list)
+    #: Optional arena footprint: [N, 2] odom xy, N >= 3. None = no boundary,
+    #: which is the pre-v3 behavior (every candidate center is eligible).
+    arena: np.ndarray | None = None
     _next_id: int = 1
+
+    def set_arena(self, vertices) -> np.ndarray:
+        """Replace the arena footprint. Only xy is used - the vertical extent
+        is already handled by the generator's crop box."""
+        v = np.asarray(vertices, float).reshape(-1, 2)
+        if len(v) < 3:
+            raise ValueError(f"an arena polygon needs at least 3 vertices, got {len(v)}")
+        self.arena = v
+        return v
+
+    def clear_arena(self) -> None:
+        self.arena = None
 
     def _append(self, rock: Rock) -> Rock:
         self._next_id += 1
@@ -120,6 +144,9 @@ class LabelSet:
             "accumulator_voxel_m": self.accumulator_voxel_m,
             "rocks": [_rock_to_dict(r) for r in self.rocks],
         }
+        if self.arena is not None:
+            data["arena"] = {"vertices": [[_r4(x), _r4(y)]
+                                          for x, y in np.asarray(self.arena, float)]}
         tmp = path + ".tmp"
         with open(tmp, "w") as f:
             json.dump(data, f, indent=2)
@@ -171,5 +198,8 @@ def load_labels(path: str) -> LabelSet:
         accumulator_voxel_m=data.get("accumulator_voxel_m", 0.03),
     )
     ls.rocks = [_rock_from_dict(r) for r in data.get("rocks", [])]
+    arena = data.get("arena")
+    if arena:
+        ls.arena = np.asarray(arena["vertices"], float).reshape(-1, 2)
     ls._next_id = max((r.id for r in ls.rocks), default=0) + 1
     return ls

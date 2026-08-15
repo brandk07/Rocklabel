@@ -95,11 +95,32 @@ def test_pointnet_tnet_regularizer():
 
 
 def test_pointnet2_shapes_with_tiny_counts():
-    # fewer valid points than SA1's 64 centroids: FPS must degrade gracefully
+    # fewer valid points than SA1's centroid budget: FPS must degrade gracefully
     model = build_model("pointnet2").eval()
     with torch.no_grad():
         out = model(torch.randn(2, 256, 4) * 0.2, torch.tensor([20, 21]))
     assert out.shape == (2,) and torch.isfinite(out).all()
+
+
+def test_set_abstraction_sees_absolute_position():
+    """A set-abstraction level must not be translation invariant.
+
+    The reference SSG stack feeds its MLPs only centroid-relative offsets, so
+    every level's output is *exactly* unchanged by translating the input - and
+    this task asks "is the query *center* standing on a rock". Measured on the
+    model trained that way, sliding a rock-centred neighborhood a full 2 m
+    moved its rock probability from 0.391 to 0.382.
+    """
+    from rocklabel.train.models import SetAbstraction
+
+    torch.manual_seed(0)
+    sa = SetAbstraction(8, 0.3, 8, in_channel=1, mlp=[16, 16]).eval()
+    xyz, feats = torch.randn(2, 32, 3) * 0.2, torch.randn(2, 32, 1)
+    mask = torch.ones(2, 32, dtype=torch.bool)
+    with torch.no_grad():
+        _, here = sa(xyz, feats, mask)
+        _, moved = sa(xyz + 2.0, feats, mask)
+    assert not torch.allclose(here, moved, atol=1e-4)
 
 
 # -- feature selection -------------------------------------------------------
@@ -181,3 +202,23 @@ def test_default_config_stores_a_canonical_feature_list():
 
     assert default_config()["features"] == list(FEATURES)
     assert default_config(features=["intensity", "dx"])["features"] == ["dx", "intensity"]
+
+
+def test_cli_defaults_cannot_shadow_the_training_defaults():
+    """An unset CLI flag must leave TRAIN_DEFAULTS alone.
+
+    argparse defaults used to be written down a second time in cli.py, so they
+    silently won over engine's for every overlapping key: --patience stayed at
+    6 after the default moved to 10 and an entire sweep trained with the
+    setting it was meant to change. Parsing with no flags must reproduce
+    TRAIN_DEFAULTS exactly.
+    """
+    from rocklabel.train import TRAIN_DEFAULTS
+    from rocklabel.train.cli import _train_cfg, build_parser
+
+    args = build_parser().parse_args(["train", "--model", "pointnet", "--test-run", "r1"])
+    cfg = _train_cfg(args, "pointnet", ["r2"], "r1")
+    drifted = {k: (TRAIN_DEFAULTS[k], cfg[k]) for k in TRAIN_DEFAULTS
+               if k not in ("model", "train_runs", "test_run", "cache_dir")
+               and cfg[k] != TRAIN_DEFAULTS[k]}
+    assert not drifted, f"CLI defaults shadowed TRAIN_DEFAULTS: {drifted}"

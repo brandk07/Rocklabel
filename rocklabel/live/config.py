@@ -311,12 +311,21 @@ class DisplayConfig:
     show_accum: bool = True
     #: Matplotlib-style colormap name for height coloring.
     colormap: str = "viridis"
-    #: Point-cloud color source: "height" (z colormap) or "reflectivity"
-    #: (multiScan RSSI per point). Toggle live with the V key. Reflectivity
-    #: needs the sensor's RSSI output enabled (DataContentEchos bit 1).
+    #: Point-cloud color source: "height" (z colormap), "reflectivity"
+    #: (multiScan RSSI on a fixed 0-65535 scale) or "reflectivity_stretch"
+    #: (the same RSSI, contrast-stretched across the frame's own percentile
+    #: range). Toggle live with the V key. Both reflectivity modes need the
+    #: sensor's RSSI output enabled (DataContentEchos bit 1).
     color_mode: str = "height"
-    #: Colormap used in reflectivity mode.
+    #: Colormap used in both reflectivity modes.
     reflectivity_colormap: str = "turbo"
+    #: Percentile window for "reflectivity_stretch". Real surfaces occupy a
+    #: narrow slice of the sensor's full scale - measured on arena data, the
+    #: middle 98% of returns spans roughly 0.26-0.82 of full scale - so on the
+    #: fixed scale an entire arena renders as one flat color. Stretching a
+    #: percentile window across the colormap makes rock/ground contrast
+    #: visible; the cost is that colors no longer compare between frames.
+    reflectivity_percentiles: tuple[float, float] = (5.0, 95.0)
     #: Show the oriented box marking the sensor's live pose (toggle: B).
     show_lidar_box: bool = True
     #: Lidar box dimensions (x, y, z) in meters (multiScan136 is ~0.08 ⌀ x 0.09).

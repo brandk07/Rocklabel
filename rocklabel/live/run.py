@@ -77,8 +77,13 @@ def add_live_args(p: argparse.ArgumentParser, record_cmd: bool) -> None:
                    help="apply only the yaw component of the IMU rotation")
     p.add_argument("--no-slam", action="store_true",
                    help="disable scan-to-map odometry (sensor must stay put)")
-    p.add_argument("--color-mode", choices=["height", "reflectivity", "model"],
-                   help="initial point coloring (V key cycles; 'model' needs --model)")
+    p.add_argument("--color-mode",
+                   choices=["height", "reflectivity", "reflectivity_stretch", "model"],
+                   help="initial point coloring (V key cycles; 'model' needs --model). "
+                        "'reflectivity' is the sensor's calibrated full scale, so colors "
+                        "compare across frames; 'reflectivity_stretch' spreads each "
+                        "frame's own percentile range across the ramp, which is what "
+                        "makes rock/ground contrast visible inside an arena")
     p.add_argument("--model", metavar="CHECKPOINT.pt",
                    help="trained rocklabel-train checkpoint (best.pt): score the live "
                         "cloud continuously and add the 'model' color mode")

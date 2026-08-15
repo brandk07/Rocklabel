@@ -35,6 +35,10 @@ HIGHLIGHT_COLOR = [0.10, 1.00, 0.85]
 PREVIEW_COLOR = [0.30, 0.85, 1.00]
 WIRE_SELECTED = [1.00, 0.85, 0.10]
 WIRE_NORMAL = [0.95, 0.20, 0.15]
+#: Arena boundary: green, so it never reads as a rock outline (red/yellow).
+ARENA_COLOR = [0.25, 0.90, 0.45]
+#: Editing tools, in dropdown order; index maps to the combo selection.
+TOOLS = ("navigate", "box", "lasso", "arena")
 
 BG_COLOR = [0.055, 0.06, 0.075, 1.0]
 ACCENT = gui.Color(0.30, 0.65, 1.00)
@@ -194,13 +198,19 @@ def _help_block(text: str) -> gui.Widget:
 HELP_TEXT = CAMERA_HELP + """
   Shift+click      place sphere rock (works in every tool)
   Ctrl+click       select nearest rock
-tools  (keys N / B / L or the Tool dropdown)
+tools  (keys N / B / L / A or the Tool dropdown)
   N  navigate      plain drags move the camera
   B  box           drag the footprint on the ground, release,
                    then edit width/depth/height sliders
   L  lasso         click the outline point by point;
                    Enter or double-click closes it, Esc cancels;
                    then edit base/top z sliders
+  A  arena         same clicking, but the closed outline becomes the
+                   competition boundary (green) instead of a rock.
+                   Candidate centers outside it never become training
+                   samples, so the couch across the room stops teaching
+                   the model what "clear ground" looks like.
+                   Shift+A removes it. Optional: no arena = keep everything.
   points inside the active shape light up in cyan
 keys
   C          cycle color: height / reflectivity
@@ -241,6 +251,7 @@ class _LabelerApp(PivotCamera):
         self._lasso: list[np.ndarray] = []
         self._lasso_gen = 0                    # invalidates in-flight vertex picks
         self._highlight_rock = None            # shape whose points glow cyan
+        self._shift_down = False               # KeyEvent has no modifier state
 
         app = _ensure_app()
         self.window = app.create_window("rocklabel - labeler", 1500, 940)
@@ -271,6 +282,7 @@ class _LabelerApp(PivotCamera):
         self._rebuild_cloud(first=True)
         for rock in self.labelset.rocks:
             self._draw_rock(rock)
+        self._draw_arena()
         self._refresh_rock_list()
         self._update_status()
 
@@ -291,6 +303,7 @@ class _LabelerApp(PivotCamera):
         self.tool_combo.add_item("Navigate (N)")
         self.tool_combo.add_item("Box: drag footprint (B)")
         self.tool_combo.add_item("Lasso: click outline (L)")
+        self.tool_combo.add_item("Arena: click outline (A)")
         self.tool_combo.set_on_selection_changed(self._on_tool_combo)
         tools.add_child(self.tool_combo)
         self.tool_hint = gui.Label("Shift+click always places a sphere")
@@ -484,6 +497,32 @@ class _LabelerApp(PivotCamera):
         self._remove(f"rock_{rock_id}")
         self._remove(f"rockw_{rock_id}")
 
+    # -- arena boundary -------------------------------------------------------
+
+    def _draw_arena(self) -> None:
+        """(Re)draw the arena outline, flat on the ground at the cloud's floor."""
+        self._remove("_arena")
+        arena = self.labelset.arena
+        if arena is None:
+            self.window.post_redraw()
+            return
+        z = (float(np.percentile(self._visible_pts[:, 2], 1.0))
+             if len(self._visible_pts) else 0.0)
+        ring = np.column_stack([arena, np.full(len(arena), z)])
+        line = _polyline_lineset(ring, close=True)
+        line.paint_uniform_color(ARENA_COLOR)
+        self.scene.scene.add_geometry("_arena", line, _line_material(3.0))
+        self.window.post_redraw()
+
+    def _clear_arena(self) -> None:
+        if self.labelset.arena is None:
+            self._update_status("no arena to clear")
+            return
+        self.labelset.clear_arena()
+        self._save()
+        self._draw_arena()
+        self._update_status("arena cleared - every candidate center is eligible again")
+
     def _refresh_rock_list(self) -> None:
         def fmt(r):
             if r.shape == "box":
@@ -542,19 +581,24 @@ class _LabelerApp(PivotCamera):
         self.window.post_redraw()
 
     def _on_tool_combo(self, _text, index) -> None:
-        self._set_tool(("navigate", "box", "lasso")[int(index)])
+        self._set_tool(TOOLS[int(index)])
 
     def _set_tool(self, tool: str) -> None:
-        if tool != "lasso":
+        # "arena" borrows the lasso's whole click-to-outline flow and only
+        # differs in what the closed polygon becomes, so its in-progress
+        # outline survives switching between the two.
+        if tool not in ("lasso", "arena"):
             self._cancel_lasso(quiet=True)
         self._box_active = False
         self._clear_preview()
         self.tool = tool
-        self.tool_combo.selected_index = ("navigate", "box", "lasso").index(tool)
+        self.tool_combo.selected_index = TOOLS.index(tool)
         hints = {
             "navigate": "Shift+click always places a sphere",
             "box": "drag the footprint on the ground,\nrelease, then set the sliders",
             "lasso": "click outline points; Enter or\ndouble-click closes, Esc cancels",
+            "arena": "click outline points; Enter or\ndouble-click closes, Esc cancels.\n"
+                     "Shift+A clears it",
         }
         self.tool_hint.text = hints[tool]
         self._update_status(f"tool: {tool}")
@@ -759,13 +803,21 @@ class _LabelerApp(PivotCamera):
         self.window.post_redraw()
 
     def _finish_lasso(self) -> None:
+        noun = "arena" if self.tool == "arena" else "lasso"
         if len(self._lasso) < 3:
-            self._update_status("lasso needs at least 3 points")
+            self._update_status(f"{noun} needs at least 3 points")
             return
         pts = np.stack(self._lasso)
         self._lasso = []
         self._lasso_gen += 1
         self._clear_preview()
+        if self.tool == "arena":
+            self.labelset.set_arena(pts[:, :2])
+            self._save()
+            self._draw_arena()
+            self._update_status(f"arena set ({len(pts)} vertices) - centers outside "
+                                "it will not become training samples")
+            return
         base = float(pts[:, 2].min()) - 0.03
         # Default the top to hug whatever points the outline actually contains.
         probe = SimpleNamespace(shape="polygon", vertices=pts[:, :2],
@@ -788,7 +840,8 @@ class _LabelerApp(PivotCamera):
         self._lasso_gen += 1
         self._clear_preview()
         if had and not quiet:
-            self._update_status("lasso cancelled")
+            self._update_status(
+                f"{'arena' if self.tool == 'arena' else 'lasso'} cancelled")
 
     # -- mouse dispatch -------------------------------------------------------
 
@@ -807,7 +860,7 @@ class _LabelerApp(PivotCamera):
                 return Result.IGNORED  # right/middle drags always navigate
 
             if self._double_click(x, y):
-                if self.tool == "lasso" and self._lasso:
+                if self.tool in ("lasso", "arena") and self._lasso:
                     self._finish_lasso()
                 else:
                     self._recenter_pivot(x, y)
@@ -832,8 +885,8 @@ class _LabelerApp(PivotCamera):
                 self._pick_depth(x, y, got_anchor)
                 return Result.CONSUMED
 
-            if self.tool == "lasso":
-                def got_vertex(p, x=x, y=y, gen=self._lasso_gen):
+            if self.tool in ("lasso", "arena"):
+                def got_vertex(p, x=x, y=y, gen=self._lasso_gen, noun=self.tool):
                     if gen != self._lasso_gen:
                         return  # the lasso was closed/cancelled while this pick ran
                     if p is None:
@@ -844,7 +897,7 @@ class _LabelerApp(PivotCamera):
                     self._lasso.append(np.asarray(p, float))
                     self._update_lasso_preview()
                     self._update_status(
-                        f"lasso: {len(self._lasso)} points - Enter or double-click closes")
+                        f"{noun}: {len(self._lasso)} points - Enter or double-click closes")
 
                 self._pick_depth(x, y, got_vertex)
                 return Result.CONSUMED
@@ -927,15 +980,20 @@ class _LabelerApp(PivotCamera):
         self._update_status()
 
     def _on_key(self, event):
+        k = event.key
+        # Unlike MouseEvent, KeyEvent carries no modifier state, so Shift has
+        # to be tracked from its own press/release events.
+        if k in (gui.KeyName.LEFT_SHIFT, gui.KeyName.RIGHT_SHIFT):
+            self._shift_down = event.type == gui.KeyEvent.Type.DOWN
+            return gui.Widget.EventCallbackResult.IGNORED
         if event.type != gui.KeyEvent.Type.DOWN:
             return gui.Widget.EventCallbackResult.IGNORED
-        k = event.key
         # WASD etc. belong to the fly controller; only Esc leaves fly mode.
         flying = self.camera_key_result(event)
         if flying is not None:
             return flying
         if k == gui.KeyName.ENTER:
-            if self.tool == "lasso" and self._lasso:
+            if self.tool in ("lasso", "arena") and self._lasso:
                 self._finish_lasso()
         elif k == gui.KeyName.N:
             self._set_tool("navigate")
@@ -943,6 +1001,13 @@ class _LabelerApp(PivotCamera):
             self._set_tool("box")
         elif k == gui.KeyName.L:
             self._set_tool("lasso")
+        elif k == gui.KeyName.A:
+            # Shift+A clears rather than redraws: replacing an arena is the
+            # common case, removing one is not, so removal takes the modifier.
+            if self._shift_down:
+                self._clear_arena()
+            else:
+                self._set_tool("arena")
         elif k == gui.KeyName.C:
             self.color_mode = "reflectivity" if self.color_mode == "height" else "height"
             self.color_combo.selected_index = 0 if self.color_mode == "height" else 1

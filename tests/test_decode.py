@@ -105,3 +105,38 @@ def test_uint8_reflectivity_detected():
     _, out_inten, available = decode_pointcloud2(msg)
     assert available
     np.testing.assert_allclose(out_inten, [1.0])
+
+
+# -- reflectivity color scales ------------------------------------------------
+
+def test_fixed_reflectivity_scale_is_absolute():
+    """Identical materials must keep identical colors between frames, so the
+    fixed scale is a plain divide by full scale and ignores the frame."""
+    from rocklabel.live.colormap import reflectivity_values
+
+    v = reflectivity_values(np.array([0.0, 32767.5, 65535.0]))
+    np.testing.assert_allclose(v, [0.0, 0.5, 1.0])
+    # a retroreflector in view must not move anything else
+    with_retro = reflectivity_values(np.array([100.0, 200.0, 65535.0]))
+    without = reflectivity_values(np.array([100.0, 200.0]))
+    np.testing.assert_allclose(with_retro[:2], without)
+
+
+def test_stretched_reflectivity_expands_a_narrow_band():
+    """Real arena returns occupy a narrow slice of full scale; the stretch mode
+    exists to spread that slice over the whole colormap."""
+    from rocklabel.live.colormap import reflectivity_values
+
+    band = np.linspace(0.26, 0.82, 500) * 65535.0
+    fixed = reflectivity_values(band)
+    stretched = reflectivity_values(band, stretch=True, pct=(5.0, 95.0))
+    assert fixed.max() - fixed.min() < 0.60          # squeezed into part of the ramp
+    assert stretched.max() - stretched.min() > 0.99  # uses all of it
+
+
+def test_reflectivity_marks_missing_data_mid_gray():
+    from rocklabel.live.colormap import reflectivity_values
+
+    v = reflectivity_values(np.array([np.nan, 65535.0, np.inf]))
+    assert v[0] == 0.5 and v[2] == 0.5 and v[1] == 1.0
+    assert np.all(reflectivity_values(np.full(4, np.nan)) == 0.5)

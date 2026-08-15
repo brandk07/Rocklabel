@@ -161,7 +161,10 @@ def plot_comparison(results: dict[str, dict[str, dict]], out_path: str) -> None:
               "f1": "F1 @ val threshold", "recall": "Recall @ val threshold"}
     models = list(results)
     runs = sorted(next(iter(results.values())))
-    fig, axes = plt.subplots(2, 2, figsize=(10, 6.5), sharex=True)
+    # Width tracks the fold count: this figure was laid out for four myroom
+    # folds and the labels collided into an unreadable smear at eight.
+    fig, axes = plt.subplots(2, 2, figsize=(max(10.0, 1.3 * (len(runs) + 1) + 3.0), 7.0),
+                             sharex=True)
     width = 0.36
     x = np.arange(len(runs) + 1)  # +1 slot for mean±std
     for ax, metric in zip(axes.flat, metrics):
@@ -170,10 +173,13 @@ def plot_comparison(results: dict[str, dict[str, dict]], out_path: str) -> None:
             off = (k - (len(models) - 1) / 2) * width
             bars = ax.bar(x[:-1] + off, vals, width * 0.94, color=MODEL_COLOR[model],
                           label=MODEL_LABEL[model])
-            ax.bar_label(bars, fmt="%.2f", fontsize=7, color=MUTED, padding=1)
+            ax.bar_label(bars, fmt="%.2f", fontsize=6, color=MUTED, padding=1)
+            # ddof=1: this is a sample of folds standing in for the spread over
+            # runs, and it is printed as an error bar - the population form
+            # would quietly understate it.
             mb = ax.bar(x[-1] + off, vals.mean(), width * 0.94, color=MODEL_COLOR[model],
-                        yerr=vals.std(), error_kw={"ecolor": INK, "capsize": 3, "lw": 1})
-            ax.bar_label(mb, fmt="%.2f", fontsize=7, color=MUTED, padding=1)
+                        yerr=vals.std(ddof=1), error_kw={"ecolor": INK, "capsize": 3, "lw": 1})
+            ax.bar_label(mb, fmt="%.2f", fontsize=6, color=MUTED, padding=1)
         if metric == "pr_auc":
             # no-skill PR-AUC = prevalence of the held-out run
             prev = [results[models[0]][r]["rock_frac"] for r in runs]
@@ -181,11 +187,14 @@ def plot_comparison(results: dict[str, dict[str, dict]], out_path: str) -> None:
                        label="no-skill baseline")
         ax.set_title(titles[metric])
         ax.set_ylim(0, 1.1)
-        ax.set_xticks(x, [r.replace("loro_", "") for r in runs] + ["mean±std"])
+        ax.set_xticks(x, [r.replace("loro_", "") for r in runs] + ["mean±std"],
+                      rotation=30, ha="right", fontsize=8)
     handles, labels_ = axes[0, 0].get_legend_handles_labels()
     fig.legend(handles, labels_, loc="upper right", ncols=3, fontsize=8,
                bbox_to_anchor=(0.99, 0.965))  # figure-level: bars fill every panel
-    fig.suptitle("Leave-one-run-out: PointNet vs PointNet++ (each fold tests one unseen room run)",
+    names = ", ".join(MODEL_LABEL.get(m, m) for m in models)
+    fig.suptitle(f"Leave-one-run-out: {names} "
+                 f"({len(runs)} folds, each testing one unseen recording)",
                  x=0.02, ha="left")
     _save(fig, out_path)
 
@@ -208,7 +217,8 @@ def write_summary_table(results: dict[str, dict[str, dict]], out_path: str) -> N
                          + " | ".join(f"{m[c]:.3f}" for c in cols)
                          + f" | {m['baseline_accuracy']:.3f} | {m['rock_frac']:.3f} |")
         lines.append(f"| **{MODEL_LABEL[model]} mean±std** | all | "
-                     + " | ".join(f"{np.mean(v):.3f}±{np.std(v):.3f}" for v in vals.values())
+                     + " | ".join(f"{np.mean(v):.3f}±{np.std(v, ddof=1):.3f}"
+                                  for v in vals.values())
                      + " | | |")
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     with open(out_path, "w") as f:

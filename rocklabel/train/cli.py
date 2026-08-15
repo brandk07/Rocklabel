@@ -13,12 +13,48 @@ torch. Typical session:
 from __future__ import annotations
 
 import argparse
+import json
 import os
 
 from ..neighborhoods import FEATURES
+from . import TRAIN_DEFAULTS
 from .data import DEFAULT_DATASETS, run_dir_name, run_suffix
 
 DEFAULT_ROOT = "training"
+
+
+def _settings_match(run_dir: str, cfg: dict) -> bool:
+    """True when run_dir was produced by exactly the settings we are asking for.
+
+    ``compare`` skips folds that already carry a test_metrics.json, and that
+    check used to run *before* anything compared configs — so a fold left over
+    from an earlier dataset name or an earlier hyperparameter was kept silently
+    and reported as part of the new sweep. (It happened: a PointNet fold-1 run
+    held out ``ConforterTest1`` and survived the rename.) Checking here means a
+    stale directory is retrained rather than trusted.
+    """
+    path = os.path.join(run_dir, "config.json")
+    if not os.path.exists(path):
+        return False
+    with open(path) as f:
+        old = json.load(f)
+    old.setdefault("features", list(FEATURES))  # predates the channel setting
+    return old == cfg
+
+
+def _archive_stale(run_dir: str) -> str:
+    """Move a run directory aside so a retrain can use its name.
+
+    Renamed rather than deleted: the old checkpoints are the only record of
+    what the previous settings scored, and ``train_fold`` refuses to write into
+    a directory whose config disagrees with it — which is the guard working, not
+    something to override.
+    """
+    import time
+
+    dest = f"{run_dir}.superseded-{time.strftime('%Y%m%dT%H%M%S')}"
+    os.rename(run_dir, dest)
+    return dest
 
 
 def _add_common(p: argparse.ArgumentParser) -> None:
@@ -51,21 +87,42 @@ def _results_dir(args) -> str:
 
 
 def _add_train_args(p: argparse.ArgumentParser) -> None:
+    # Every value here defaults to None so TRAIN_DEFAULTS stays the only place
+    # a default is written down; default_config drops the Nones. Hardcoding
+    # them a second time here is how --patience silently stayed at 6.
+    def opt(flag, **kw):
+        d = TRAIN_DEFAULTS[flag.lstrip("-").replace("-", "_")]
+        kw["help"] = f"{kw.get('help', '').rstrip()} (default: {d})".lstrip()
+        p.add_argument(flag, default=None, **kw)
+
     _features_arg(p)
-    p.add_argument("--epochs", type=int, default=30)
-    p.add_argument("--batch", type=int, default=256)
-    p.add_argument("--lr", type=float, default=1e-3)
-    p.add_argument("--weight-decay", type=float, default=1e-4)
-    p.add_argument("--patience", type=int, default=6)
-    p.add_argument("--val-frac", type=float, default=0.15)
-    p.add_argument("--gap-frames", type=int, default=25,
-                   help="frames dropped between the train and val blocks")
+    opt("--epochs", type=int)
+    opt("--batch", type=int)
+    opt("--lr", type=float)
+    opt("--weight-decay", type=float)
+    opt("--patience", type=int,
+        help="stop after this many epochs with no val PR-AUC gain; keep it "
+             "long enough that the cosine LR schedule can finish annealing")
+    opt("--val-frac", type=float)
+    opt("--gap-frames", type=int,
+        help="minimum kept frames dropped between the train and val blocks")
+    opt("--gap-seconds", type=float,
+        help="wall-clock buffer between the train and val blocks; overrides "
+             "--gap-frames when it implies a wider gap")
+    opt("--aug-intensity-gain", type=float,
+        help="half-width of the per-sample reflectivity gain jitter (0 = off)")
+    opt("--aug-intensity-shift", type=float,
+        help="half-width of the per-sample reflectivity offset jitter (0 = off)")
+    opt("--aug-thin-min", type=float,
+        help="smallest fraction of a neighborhood's real points kept by the "
+             "density augmentation (1.0 = off)")
     p.add_argument("--dropout", type=float, default=None)
     p.add_argument("--tnet", action="store_true",
                    help="enable PointNet input+feature T-Nets (data is already "
                         "canonicalized, so default off)")
     p.add_argument("--no-augment", dest="augment", action="store_false")
-    p.add_argument("--seed", type=int, default=42)
+    p.add_argument("--seed", type=int, default=None,
+                   help=f"(default: {TRAIN_DEFAULTS['seed']})")
     p.add_argument("--device", default=None, help="cuda / cpu (default: auto)")
     p.add_argument("--fresh", action="store_true", help="ignore an existing last.pt")
 
@@ -76,8 +133,12 @@ def _train_cfg(args, model: str, train_runs: list[str], test_run: str) -> dict:
         model=model, features=args.features, tnet=args.tnet,
         dropout=args.dropout, cache_dir=args.cache_dir,
         train_runs=train_runs, test_run=test_run, val_frac=args.val_frac,
-        gap_frames=args.gap_frames, epochs=args.epochs, batch=args.batch, lr=args.lr,
+        gap_frames=args.gap_frames, gap_seconds=args.gap_seconds,
+        epochs=args.epochs, batch=args.batch, lr=args.lr,
         weight_decay=args.weight_decay, patience=args.patience, augment=args.augment,
+        aug_intensity_gain=args.aug_intensity_gain,
+        aug_intensity_shift=args.aug_intensity_shift,
+        aug_thin_min=args.aug_thin_min,
         seed=args.seed, device=args.device,
     )
 
@@ -182,10 +243,14 @@ def main(argv: list[str] | None = None) -> int:
             for fold in folds:
                 run_dir = os.path.join(
                     args.runs_root, run_dir_name(model, fold["name"], args.features))
-                if os.path.exists(os.path.join(run_dir, "test_metrics.json")) and not args.fresh:
+                cfg = _train_cfg(args, model, fold["train"], fold["test"])
+                if os.path.isdir(run_dir) and not _settings_match(run_dir, cfg):
+                    dest = _archive_stale(run_dir)
+                    print(f"{run_dir} holds a run with different settings -> "
+                          f"moved to {os.path.basename(dest)}, retraining")
+                elif os.path.exists(os.path.join(run_dir, "test_metrics.json")) and not args.fresh:
                     print(f"skip {run_dir} (already evaluated)")
                     continue
-                cfg = _train_cfg(args, model, fold["train"], fold["test"])
                 train_fold(cfg, run_dir, resume=not args.fresh)
         render_all(args.runs_root, _results_dir(args), args.models,
                    [f["name"] for f in folds], features=args.features)

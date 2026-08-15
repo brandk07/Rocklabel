@@ -20,6 +20,17 @@ explicitly - FPS picks farthest among real points only, and padded points are
 moved to a far sentinel so ball queries never gather them. Group-all pooling
 masks invalid columns. With counts=N (no padding info) both models degrade
 gracefully to the classic unmasked behavior.
+
+Position policy: the label is "is the *center* of this neighborhood standing
+on a rock", which is a localization question, not a shape-classification one.
+The reference PointNet++ feeds each set-abstraction MLP only centroid-relative
+offsets, which makes every level locally translation invariant - correct for
+ModelNet, wrong here. Measured on the trained SSG model, sliding a rock-centred
+neighborhood 2 m sideways moved its output from 0.391 to 0.382: it had learned
+"a rock is somewhere in this ball" and could not say where. SetAbstraction
+therefore passes the absolute neighborhood-frame coordinate alongside the
+relative offset, which costs 3 input channels per level. PointNet never had the
+problem - it reads raw per-point coordinates straight into its MLP.
 """
 
 from __future__ import annotations
@@ -178,12 +189,23 @@ def _gather(x: torch.Tensor, idx: torch.Tensor) -> torch.Tensor:
 
 
 class SetAbstraction(nn.Module):
+    """One SSG level: sample centroids, group a ball around each, pool.
+
+    Each grouped point is described to the MLP twice — once relative to its
+    centroid and once in neighborhood coordinates. The relative copy is the
+    classic formulation and is what makes the level a *local* shape detector;
+    the absolute copy is the addition this task needs. See the module
+    docstring for why: with offsets alone the whole stack is translation
+    invariant, and "is the query center standing on a rock" is not a
+    translation-invariant question.
+    """
+
     def __init__(self, npoint: int, radius: float, nsample: int,
                  in_channel: int, mlp: list[int]):
         super().__init__()
         self.npoint, self.radius, self.nsample = npoint, radius, nsample
         layers: list[nn.Module] = []
-        last = in_channel + 3  # +3: local offsets are appended to features
+        last = in_channel + 6  # +3 centroid-relative offset, +3 absolute position
         for out in mlp:
             layers += [nn.Conv2d(last, out, 1), nn.BatchNorm2d(out), nn.ReLU(inplace=True)]
             last = out
@@ -195,16 +217,22 @@ class SetAbstraction(nn.Module):
         ctr_idx = _fps(xyz, mask, self.npoint)
         new_xyz = _gather(xyz, ctr_idx)
         grp_idx = _ball_group(xyz, new_xyz, self.radius, self.nsample)
-        grouped = _gather(xyz, grp_idx) - new_xyz[:, :, None]        # [B,S,K,3]
-        grouped = torch.cat([grouped, _gather(feats, grp_idx)], -1)  # [B,S,K,3+C]
+        grouped_xyz = _gather(xyz, grp_idx)                          # [B,S,K,3] absolute
+        local = grouped_xyz - new_xyz[:, :, None]                    # [B,S,K,3] centroid-relative
+        grouped = torch.cat([local, grouped_xyz, _gather(feats, grp_idx)], -1)
         x = self.mlp(grouped.permute(0, 3, 1, 2))                    # [B,C',S,K]
         return new_xyz, x.max(dim=3).values.transpose(1, 2)
 
 
 class PointNetPP(nn.Module):
-    """PointNet++ SSG sized for these neighborhoods: typically only ~20-120
-    real points inside the 0.5 m radius, so the hierarchy is shallow and the
-    ball radii are coarse relative to the classic 1k-point configs."""
+    """PointNet++ SSG sized for these neighborhoods.
+
+    The measured point budget drives the sizing: the median neighborhood holds
+    ~57 real points inside the 0.5 m radius and the 10th percentile only 24, so
+    SA1 asks for 32 centroids rather than the 64 it used to. At 64 more than
+    half of all samples had fewer real points than centroids requested and FPS
+    spent its budget duplicating picks.
+    """
 
     def __init__(self, dropout: float = 0.4, features: list[str] | None = None):
         super().__init__()
@@ -216,8 +244,8 @@ class PointNetPP(nn.Module):
                              "model=pointnet for arbitrary subsets.")
         extra = self.features[3:]  # everything past the xyz block becomes features
         self.register_buffer("extra_idx", _feature_buffer(extra), persistent=False)
-        self.sa1 = SetAbstraction(64, 0.15, 16, in_channel=len(extra), mlp=[64, 64, 128])
-        self.sa2 = SetAbstraction(16, 0.30, 16, in_channel=128, mlp=[128, 128, 256])
+        self.sa1 = SetAbstraction(32, 0.15, 16, in_channel=len(extra), mlp=[64, 64, 128])
+        self.sa2 = SetAbstraction(8, 0.30, 16, in_channel=128, mlp=[128, 128, 256])
         self.global_mlp = _mlp1d([256 + 3, 256, 512, 1024])
         self.head = _head(1024, dropout)
 

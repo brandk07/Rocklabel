@@ -6,7 +6,7 @@ import numpy as np
 from scipy.spatial import cKDTree
 
 from .accumulate import voxel_downsample_centroids
-from .labeling import LABEL_CLEAR, LABEL_IGNORE, LABEL_ROCK, label_rocks
+from .labeling import LABEL_CLEAR, LABEL_IGNORE, LABEL_ROCK, inside_arena, label_rocks
 
 #: Channels of the per-point sample row, in the order both builders below
 #: write them. Models select a subset of these by name (see train/models.py);
@@ -47,15 +47,25 @@ def build_neighborhood_samples(
     rocks: list,
     gcfg: dict,
     rng: np.random.Generator,
+    arena: np.ndarray | None = None,
 ) -> dict | None:
     """Build format-A samples for one cropped, odom-frame frame cloud.
 
     Returns dict with neighborhoods [S, P, 4] f32, labels [S] i8,
     true_counts [S] i16, centers_odom [S, 3] f32 — or None if no sample
     survives filtering/subsampling.
+
+    ``arena`` (odom-frame xy polygon, see labels.LabelSet) restricts which
+    *centers* become samples. It deliberately does not restrict which points
+    build a neighborhood: a rock sitting on the arena boundary still needs its
+    full 0.5 m ball of context, half of which lies outside the line, and
+    dropping those points would corrupt exactly the samples nearest the edge.
     """
     n_points = int(gcfg["neighborhood_points"])
     cand = voxel_downsample_centroids(xyz, gcfg["centers_voxel_m"])
+    if len(cand) == 0:
+        return None
+    cand = cand[inside_arena(cand, arena)]
     if len(cand) == 0:
         return None
 
@@ -108,6 +118,7 @@ def build_inference_samples(
     gcfg: dict,
     rng: np.random.Generator,
     max_centers: int | None = None,
+    arena: np.ndarray | None = None,
 ) -> dict | None:
     """Label-free variant of :func:`build_neighborhood_samples` for running a
     trained model on unlabeled recordings: every candidate center is kept (no
@@ -122,6 +133,11 @@ def build_inference_samples(
     """
     n_points = int(gcfg["neighborhood_points"])
     cand = voxel_downsample_centroids(xyz, gcfg["centers_voxel_m"])
+    if len(cand) == 0:
+        return None
+    # Arena first, then the cap: subsampling before the boundary test would
+    # spend the budget on centers that are about to be discarded.
+    cand = cand[inside_arena(cand, arena)]
     if len(cand) == 0:
         return None
     if max_centers is not None and len(cand) > max_centers:

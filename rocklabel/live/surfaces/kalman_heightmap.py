@@ -30,7 +30,7 @@ import warnings
 
 import numpy as np
 
-from rocklabel.live.colormap import apply_colormap, normalize
+from rocklabel.live.colormap import apply_colormap, normalize, reflectivity_values
 from rocklabel.live.config import AppConfig
 from rocklabel.live.filters import filter_keep_mask
 from rocklabel.live.surfaces.base import HeightRaster, MeshData, SurfaceBuilder
@@ -58,10 +58,14 @@ class KalmanHeightmap(SurfaceBuilder):
         self._max_var = float(k.max_render_variance)
         self._max_edge_dz = float(k.max_edge_dz)
         self._outlier_cfg = config.outlier
-        #: Mesh color source: "height" or "reflectivity" (toggled live via V).
+        #: Mesh color source: "height", "reflectivity" (fixed full scale) or
+        #: "reflectivity_stretch" (per-frame contrast). Toggled live via V.
         self._color_mode = (
-            "reflectivity" if config.display.color_mode == "reflectivity" else "height"
+            config.display.color_mode
+            if config.display.color_mode in
+            ("reflectivity", "reflectivity_stretch") else "height"
         )
+        self._reflectivity_pct = tuple(config.display.reflectivity_percentiles)
 
         self._lock = threading.Lock()
         self._allocate()
@@ -190,8 +194,14 @@ class KalmanHeightmap(SurfaceBuilder):
         self._inten_w[uy, ux] = np.minimum(w_old + m, _INTEN_W_CAP)
 
     def set_color_mode(self, mode: str) -> None:
-        """Switch mesh vertex coloring: "height" or "reflectivity" (thread-safe)."""
-        mode = "reflectivity" if mode == "reflectivity" else "height"
+        """Switch mesh vertex coloring (thread-safe).
+
+        "reflectivity" / "reflectivity_stretch" color by fused per-cell RSSI;
+        anything else (including the viewer's "model" mode, which has no mesh
+        equivalent) falls back to height.
+        """
+        if mode not in ("reflectivity", "reflectivity_stretch"):
+            mode = "height"
         with self._lock:
             if mode != self._color_mode:
                 self._color_mode = mode
@@ -334,7 +344,7 @@ class KalmanHeightmap(SurfaceBuilder):
         vertices = verts_full[used]
         triangles = remap[tris].astype(np.int32)
 
-        if self._color_mode == "reflectivity":
+        if self._color_mode in ("reflectivity", "reflectivity_stretch"):
             colors = self._reflectivity_colors(inten.ravel()[used])
         else:
             colors = apply_colormap(
@@ -343,12 +353,8 @@ class KalmanHeightmap(SurfaceBuilder):
         return MeshData(vertices=vertices, triangles=triangles, vertex_colors=colors)
 
     def _reflectivity_colors(self, vals: np.ndarray) -> np.ndarray:
-        """Fixed full-scale reflectivity colors (matches the point clouds:
-        RSSI / 65535, so identical materials keep identical colors across
-        frames and retroreflectors stay distinct; cells with no RSSI data
-        render mid-gray)."""
-        finite = np.isfinite(vals)
-        v = np.full(vals.shape, 0.5)
-        if np.any(finite):
-            v[finite] = np.clip(vals[finite] / 65535.0, 0.0, 1.0)
+        """Mesh reflectivity colors, on the same scale as the point clouds."""
+        v = reflectivity_values(
+            vals, stretch=self._color_mode == "reflectivity_stretch",
+            pct=self._reflectivity_pct)
         return apply_colormap(v, self._cfg.display.reflectivity_colormap)

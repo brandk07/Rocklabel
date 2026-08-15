@@ -172,17 +172,32 @@ def loro_folds(run_ids: list[str]) -> list[dict]:
 
 
 def block_val_mask(frame: np.ndarray, val_frac: float = 0.15,
-                   gap_frames: int = 25) -> tuple[np.ndarray, np.ndarray]:
+                   gap_frames: int = 25, times: dict | None = None,
+                   gap_seconds: float | None = None) -> tuple[np.ndarray, np.ndarray]:
     """(train_mask, val_mask) over one run's samples, split by contiguous frames.
 
-    The last val_frac of the run's frames become validation; the gap_frames
-    frames just before them belong to neither side, so no neighborhood in
-    train shares points (or a near-identical robot pose) with one in val.
+    The last val_frac of the run's frames become validation; the frames just
+    before them belong to neither side, so no neighborhood in train shares
+    points (or a near-identical robot pose) with one in val.
+
+    Sizing that buffer in frames alone is a trap. ``gap_frames`` counts *kept*
+    frames, and on this sensor (a ~225 Hz multiScan, stride 5) 25 of them span
+    0.54 s — during which the robot barely moves, so the two sides stayed full
+    of near-duplicates and validation read optimistically. Pass ``times``
+    (run_id frame index -> wall clock, straight out of the cache meta) with
+    ``gap_seconds`` to size the buffer in seconds instead; the frame count
+    stays as a floor.
     """
     uniq = np.unique(frame)
     n_val = max(int(round(len(uniq) * val_frac)), 1)
     val_start = uniq[len(uniq) - n_val]
-    gap_start = uniq[max(len(uniq) - n_val - gap_frames, 0)]
+    n_gap = int(gap_frames)
+    if times and gap_seconds:
+        t = {int(k): float(v) for k, v in times.items()}
+        cutoff = t[int(val_start)] - float(gap_seconds)
+        before = uniq[:len(uniq) - n_val]
+        n_gap = max(n_gap, int(sum(t[int(f)] > cutoff for f in before)))
+    gap_start = uniq[max(len(uniq) - n_val - n_gap, 0)]
     val = frame >= val_start
     train = frame < gap_start
     return train, val
