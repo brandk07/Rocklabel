@@ -40,10 +40,10 @@
   },
   "config_hash": "f244fbe8df950849fd05514bfda117d541695c39dab02f76fc46960ba4dfe613",
   "runs": {
-    "ConforterTest8": {
-      "run_id": "ConforterTest8",
-      "mcap_path": "/home/brandon/Documents/perception-2026-testing/rocklabel/recordings/ConforterTest8.mcap",
-      "labels_path": "/home/brandon/Documents/perception-2026-testing/rocklabel/labels/ConforterTest8.labels.json",
+    "ComforterTest8": {
+      "run_id": "ComforterTest8",
+      "mcap_path": "/home/brandon/Documents/perception-2026-testing/rocklabel/recordings/ComforterTest8.mcap",
+      "labels_path": "/home/brandon/Documents/perception-2026-testing/rocklabel/labels/ComforterTest8.labels.json",
       "rock_count": 4,
       "intensity_available": true,
       "generated": "2026-08-08T20:33:41Z",

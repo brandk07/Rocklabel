@@ -40,34 +40,34 @@
   },
   "config_hash": "f244fbe8df950849fd05514bfda117d541695c39dab02f76fc46960ba4dfe613",
   "runs": {
-    "ConforterTest5": {
-      "run_id": "ConforterTest5",
-      "mcap_path": "/home/brandon/Documents/perception-2026-testing/rocklabel/recordings/ConforterTest5.mcap",
-      "labels_path": "/home/brandon/Documents/perception-2026-testing/rocklabel/labels/ConforterTest5.labels.json",
-      "rock_count": 3,
+    "ComforterTest2": {
+      "run_id": "ComforterTest2",
+      "mcap_path": "/home/brandon/Documents/perception-2026-testing/rocklabel/recordings/ComforterTest2.mcap",
+      "labels_path": "/home/brandon/Documents/perception-2026-testing/rocklabel/labels/ComforterTest2.labels.json",
+      "rock_count": 4,
       "intensity_available": true,
-      "generated": "2026-08-08T20:34:15Z",
-      "frames_kept": 1441,
+      "generated": "2026-08-08T20:34:42Z",
+      "frames_kept": 1532,
       "frames_skipped_pose": 0,
       "frames_skipped_empty": 0,
-      "point_samples": 9723,
-      "bev_frames": 1441,
+      "point_samples": 12529,
+      "bev_frames": 1532,
       "sample_labels": {
-        "rock": 2380,
-        "clear": 7343
+        "rock": 4565,
+        "clear": 7964
       },
       "point_labels": {
-        "rock": 4068,
-        "clear": 345884,
-        "ignore": 2838
+        "rock": 8625,
+        "clear": 362187,
+        "ignore": 5231
       },
       "bev_cells": {
-        "rock": 1354,
-        "clear": 144305,
-        "ignore": 9076741
+        "rock": 2468,
+        "clear": 153460,
+        "ignore": 9648872
       },
       "stamp_fallbacks": 0
     }
   },
-  "generated": "2026-08-08T20:34:15Z"
+  "generated": "2026-08-08T20:34:42Z"
 }

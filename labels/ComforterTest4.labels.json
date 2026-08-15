@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
-  "mcap_file": "ConforterTest4.mcap",
-  "run_id": "ConforterTest4",
+  "mcap_file": "ComforterTest4.mcap",
+  "run_id": "ComforterTest4",
   "odom_frame": "world",
   "created": "2026-08-08T20:28:09Z",
   "tool_version": "0.2.0",
