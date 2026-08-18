@@ -74,8 +74,9 @@ def test_catalog_matches_the_real_cli_parsers():
 def test_build_argv_orders_positionals_first_and_skips_blanks():
     cmd = spec.COMMANDS_BY_ID["generate"]
     argv = spec.build_argv(cmd, {"mcap": "recordings/a.mcap", "out": "datasets/d",
-                                 "labels": "", "config": None})
-    assert argv == ["rocklabel", "generate", "recordings/a.mcap", "--out", "datasets/d"]
+                                 "profile": "full-sweep", "labels": "", "config": None})
+    assert argv == ["rocklabel", "generate", "recordings/a.mcap",
+                    "--profile", "full-sweep", "--out", "datasets/d"]
 
 
 def test_build_argv_handles_both_repeat_styles():
@@ -253,16 +254,17 @@ def project(tmp_path):
         "created": "2026-01-01T00:00:00Z", "intensity_available": True,
         "rocks": [{"id": 1, "shape": "sphere"}, {"id": 2, "shape": "box"}],
     }))
-    ds = tmp_path / "datasets" / "d1"
+    ds = tmp_path / "datasets" / "full-sweep" / "d1"
     ds.mkdir(parents=True)
     (ds / "manifest.json").write_text(json.dumps({
         "config_hash": "abc123def456789", "generated": "2026-01-02T00:00:00Z",
+        "profile": "full-sweep",
         "config": {"generator": {"frame_stride": 5}},
         "runs": {"run1": {"run_id": "run1", "frames_kept": 100, "point_samples": 500,
                           "bev_frames": 100, "rock_count": 2,
                           "sample_labels": {"rock": 120, "clear": 380}}},
     }))
-    run = tmp_path / "training" / "runs" / "pointnet_loro_run1"
+    run = tmp_path / "training" / "experiments" / "compare" / "pointnet_loro_run1"
     run.mkdir(parents=True)
     (run / "config.json").write_text(json.dumps(
         {"model": "pointnet", "test_run": "run1", "train_runs": ["run2"], "epochs": 30}))
@@ -271,7 +273,7 @@ def project(tmp_path):
          "threshold": 0.74, "tp": 1, "fp": 2, "fn": 3, "tn": 4, "n": 10}))
     (run / "best.pt").write_bytes(b"weights")
     (run / "history.csv").write_text("epoch,train_loss,val_loss\n0,0.5,0.4\n1,0.3,0.3\n")
-    cache = tmp_path / "training" / "cache"
+    cache = tmp_path / "training" / "caches" / "full-sweep"
     cache.mkdir(parents=True)
     (cache / "meta.json").write_text(json.dumps({"runs": {"run1": {}, "run2": {}}}))
     return tmp_path
@@ -292,7 +294,16 @@ def test_snapshot_summarizes_datasets_runs_and_checkpoints(project):
     assert snap["datasets"][0]["config_hash"] == "abc123def456"  # truncated for display
     assert snap["totals"]["runs_complete"] == 1
     assert snap["totals"]["best_f1"] == pytest.approx(0.87)
-    assert [c["name"] for c in snap["checkpoints"]] == ["pointnet_loro_run1/best.pt"]
+    ck = snap["checkpoints"][0]
+    assert [c["path"] for c in snap["checkpoints"]] == [
+        os.path.join("training", "experiments", "compare",
+                     "pointnet_loro_run1", "best.pt")]
+    # Grouped and annotated rather than a bare path: the picker has to say
+    # which run produced a model and what it scored.
+    assert ck["group"] == "compare · pointnet"
+    assert ck["fold"] == "run1" and ck["pr_auc"] == pytest.approx(0.96)
+    assert "run1" in ck["name"] and "0.96" in ck["name"]
+    assert ck["best_of_experiment"] is True
     assert [r["name"] for r in snap["cache_runs"]] == ["run1", "run2"]
     assert snap["runs"][0]["epochs_run"] == 2  # from history.csv
 
@@ -300,22 +311,32 @@ def test_snapshot_summarizes_datasets_runs_and_checkpoints(project):
 def test_last_pt_is_listed_but_flagged_unusable(project):
     # last.pt has no config/generator/threshold, so every consumer of the
     # checkpoint pickers would KeyError on it — the UI greys it out.
-    (project / "training" / "runs" / "pointnet_loro_run1" / "last.pt").write_bytes(b"x")
-    cks = {c["name"]: c for c in inventory.snapshot(str(project))["checkpoints"]}
-    assert list(cks) == ["pointnet_loro_run1/best.pt", "pointnet_loro_run1/last.pt"]
-    assert cks["pointnet_loro_run1/best.pt"]["disabled"] is False
-    assert cks["pointnet_loro_run1/last.pt"]["disabled"] is True
-    assert cks["pointnet_loro_run1/last.pt"]["note"]
+    (project / "training" / "experiments" / "compare" / "pointnet_loro_run1"
+     / "last.pt").write_bytes(b"x")
+    cks = {os.path.basename(c["path"]): c
+           for c in inventory.snapshot(str(project))["checkpoints"]}
+    assert set(cks) == {"best.pt", "last.pt"}
+    assert cks["best.pt"]["disabled"] is False
+    assert cks["last.pt"]["disabled"] is True
+    assert cks["last.pt"]["note"]
+    # Only a loadable checkpoint can be the shortcut.
+    assert cks["last.pt"]["best_of_experiment"] is False
 
 
-def test_snapshot_survives_a_dataset_with_no_manifest(project, tmp_path):
+def test_a_folder_without_a_manifest_is_not_listed_as_a_dataset(project):
+    """What makes a folder a dataset is its manifest, not where it sits.
+
+    Datasets live under datasets/<profile>/ now, so the top level holds profile
+    folders. Treating every folder as a dataset would list "full-sweep" itself
+    as one and put it in every picker.
+    """
     (project / "datasets" / "junk").mkdir()
     snap = inventory.snapshot(str(project))
-    junk = next(d for d in snap["datasets"] if d["name"] == "junk")
-    assert junk["has_manifest"] is False and junk["runs"] == []
+    assert [d["name"] for d in snap["datasets"]] == ["full-sweep/d1"]
+    assert snap["datasets"][0]["profile"] == "full-sweep"
 
 
-DS1 = os.path.join("datasets", "d1")
+DS1 = os.path.join("datasets", "full-sweep", "d1")
 MCAP1 = os.path.join("recordings", "run1.mcap")
 LABELS1 = os.path.join("labels", "run1.labels.json")
 
@@ -323,11 +344,11 @@ LABELS1 = os.path.join("labels", "run1.labels.json")
 def test_rename_dataset_moves_the_folder_and_leaves_its_contents_alone(project):
     entry = inventory.rename(str(project), DS1, "gravel")
     assert entry["name"] == "gravel"
-    assert entry["path"] == os.path.join("datasets", "gravel")
-    assert (project / "datasets" / "gravel" / "manifest.json").exists()
-    assert not (project / "datasets" / "d1").exists()
+    assert entry["path"] == os.path.join("datasets", "full-sweep", "gravel")
+    assert (project / "datasets" / "full-sweep" / "gravel" / "manifest.json").exists()
+    assert not (project / "datasets" / "full-sweep" / "d1").exists()
     snap = inventory.snapshot(str(project))
-    assert [d["name"] for d in snap["datasets"]] == ["gravel"]
+    assert [d["name"] for d in snap["datasets"]] == ["full-sweep/gravel"]
     assert snap["totals"]["samples"] == 500  # the manifest is untouched
 
 
@@ -336,18 +357,18 @@ def test_rename_refuses_a_name_that_is_not_a_plain_filename(project, bad):
     for rel in (DS1, MCAP1, LABELS1):
         with pytest.raises(ValueError):
             inventory.rename(str(project), rel, bad)
-    assert (project / "datasets" / "d1").is_dir()
+    assert (project / "datasets" / "full-sweep" / "d1").is_dir()
     assert (project / "recordings" / "run1.mcap").is_file()
 
 
 def test_rename_refuses_to_clobber_an_existing_name(project):
-    (project / "datasets" / "d2").mkdir()
+    (project / "datasets" / "full-sweep" / "d2").mkdir()
     (project / "recordings" / "run2.mcap").write_bytes(b"x")
     with pytest.raises(ValueError, match="already exists"):
         inventory.rename(str(project), DS1, "d2")
     with pytest.raises(ValueError, match="already exists"):
         inventory.rename(str(project), MCAP1, "run2")
-    assert (project / "datasets" / "d1" / "manifest.json").exists()
+    assert (project / "datasets" / "full-sweep" / "d1" / "manifest.json").exists()
     assert (project / "recordings" / "run1.mcap").is_file()
 
 
@@ -428,7 +449,7 @@ def test_delete_refuses_anything_outside_the_three_project_folders(project):
         with pytest.raises((ValueError, FileNotFoundError)):
             inventory.delete(str(project), rel)
     assert (project / "config.yaml").is_file()
-    assert (project / "training" / "cache" / "meta.json").is_file()
+    assert (project / "training" / "caches" / "full-sweep" / "meta.json").is_file()
 
 
 def test_delete_unlinks_a_symlinked_dataset_without_following_it(project, tmp_path):
@@ -436,9 +457,12 @@ def test_delete_unlinks_a_symlinked_dataset_without_following_it(project, tmp_pa
     outside = tmp_path / "outside"
     outside.mkdir()
     (outside / "keepme").write_text("precious")
-    (project / "datasets" / "linked").symlink_to(outside, target_is_directory=True)
-    inventory.delete(str(project), os.path.join("datasets", "linked"))
-    assert not (project / "datasets" / "linked").exists()
+    (outside / "manifest.json").write_text("{}")   # what makes it a dataset
+    (project / "datasets" / "full-sweep" / "linked").symlink_to(
+        outside, target_is_directory=True)
+    inventory.delete(str(project),
+                     os.path.join("datasets", "full-sweep", "linked"))
+    assert not (project / "datasets" / "full-sweep" / "linked").exists()
     assert (outside / "keepme").read_text() == "precious"
 
 
@@ -551,9 +575,11 @@ def test_state_endpoint_carries_inventory_machine_and_jobs(client):
 def test_preview_returns_the_command_line_without_running_anything(client):
     body = client.post("/api/preview", json={
         "command_id": "generate",
-        "values": {"mcap": "recordings/run1.mcap", "out": "datasets/new"},
+        "values": {"mcap": "recordings/run1.mcap", "out": "datasets/new",
+                   "profile": "full-sweep"},
     }).get_json()
-    assert body["command_line"] == "rocklabel generate recordings/run1.mcap --out datasets/new"
+    assert body["command_line"] == ("rocklabel generate recordings/run1.mcap "
+                                    "--profile full-sweep --out datasets/new")
     assert body["error"] == ""
     assert client.get("/api/jobs").get_json()["jobs"] == []
 
@@ -613,10 +639,10 @@ def test_run_rejects_an_unknown_command(client):
 
 def test_rename_endpoint_renames_and_the_next_state_shows_the_new_name(client):
     body = client.post("/api/rename",
-                       json={"path": "datasets/d1", "name": "gravel"}).get_json()
-    assert body["path"] == os.path.join("datasets", "gravel")
+                       json={"path": "datasets/full-sweep/d1", "name": "gravel"}).get_json()
+    assert body["path"] == os.path.join("datasets", "full-sweep", "gravel")
     state = client.get("/api/state").get_json()
-    assert [d["name"] for d in state["inventory"]["datasets"]] == ["gravel"]
+    assert [d["name"] for d in state["inventory"]["datasets"]] == ["full-sweep/gravel"]
 
 
 def test_rename_endpoint_moves_a_recording_and_its_labels_together(client):
@@ -630,7 +656,7 @@ def test_rename_endpoint_moves_a_recording_and_its_labels_together(client):
 
 
 def test_rename_endpoint_reports_a_bad_name_as_400_not_500(client):
-    res = client.post("/api/rename", json={"path": "datasets/d1", "name": "a/b"})
+    res = client.post("/api/rename", json={"path": "datasets/full-sweep/d1", "name": "a/b"})
     assert res.status_code == 400 and "name must" in res.get_json()["error"]
 
 
@@ -643,14 +669,14 @@ def test_rename_endpoint_refuses_while_a_job_holds_the_dataset(client):
     """A rename under a running `generate` would fail that job halfway."""
     jm = client.application.config["JOBS"]
     job = jm.launch([sys.executable, "-c", "import time; time.sleep(30)",
-                     "--out", "datasets/d1"], command_id="generate", title="Generate")
+                     "--out", "datasets/full-sweep/d1"], command_id="generate", title="Generate")
     try:
-        res = client.post("/api/rename", json={"path": "datasets/d1", "name": "gravel"})
+        res = client.post("/api/rename", json={"path": "datasets/full-sweep/d1", "name": "gravel"})
         assert res.status_code == 409
         assert "in use by a running job" in res.get_json()["error"]
     finally:
         job.stop()
-    assert client.get("/api/state").get_json()["inventory"]["datasets"][0]["name"] == "d1"
+    assert client.get("/api/state").get_json()["inventory"]["datasets"][0]["name"] == "full-sweep/d1"
 
 
 def test_rename_endpoint_refuses_when_a_job_holds_the_labels_of_the_recording(client):
@@ -680,9 +706,10 @@ def test_delete_endpoint_removes_the_file_and_reports_the_space(client, project)
 
 
 def test_delete_endpoint_refuses_a_path_it_does_not_own(client, project):
-    res = client.post("/api/delete", json={"path": "training/cache/meta.json"})
+    res = client.post("/api/delete",
+                      json={"path": "training/caches/full-sweep/meta.json"})
     assert res.status_code == 400
-    assert (project / "training" / "cache" / "meta.json").is_file()
+    assert (project / "training" / "caches" / "full-sweep" / "meta.json").is_file()
 
 
 def test_delete_endpoint_refuses_while_a_job_holds_the_path(client, project):
@@ -709,7 +736,7 @@ def test_figure_endpoint_refuses_non_png(client, project):
 # ablation sweeps
 # --------------------------------------------------------------------------- #
 def _ablate_fold(root, suite, arm, fold, pr_auc=None):
-    d = root / "training" / "ablate" / suite / arm / f"loro_{fold}"
+    d = root / "training" / "experiments" / suite / arm / f"loro_{fold}"
     d.mkdir(parents=True, exist_ok=True)
     (d / "arm.json").write_text(json.dumps({"arm": arm, "label": arm, "model": "pointnet",
                                             "features": ["dx", "dy", "dz"]}))
@@ -750,10 +777,12 @@ def test_ablation_arms_report_their_average_score(project):
 
 def test_ablation_checkpoints_join_the_picker_under_their_arm(project):
     _ablate_fold(project, "reflectivity", "pointnet-geom", "run1", 0.8)
-    names = [c["name"] for c in inventory.checkpoints(str(project))]
-    assert "reflectivity/pointnet-geom/loro_run1/best.pt" in names
-    # the plain training/runs checkpoint is still there
-    assert "pointnet_loro_run1/best.pt" in names
+    cks = inventory.checkpoints(str(project))
+    arm = next(c for c in cks if c["experiment"] == "reflectivity")
+    assert arm["group"] == "reflectivity · pointnet-geom" and arm["fold"] == "run1"
+    assert arm["path"].endswith(os.path.join("loro_run1", "best.pt"))
+    # the plain compare checkpoint is still there, under its own group
+    assert any(c["group"] == "compare · pointnet" for c in cks)
 
 
 def test_snapshot_exposes_ablation_totals(project):
@@ -764,16 +793,16 @@ def test_snapshot_exposes_ablation_totals(project):
 
 
 def test_figures_are_tagged_with_the_report_that_wrote_them(project):
-    for rel, name in [("training/results", "comparison.png"),
-                      ("training/results_reflect", "brightness_drift.png"),
-                      ("training/results_ablate/reflectivity", "paired_deltas.png")]:
+    for rel, name in [("training/reports/compare", "comparison.png"),
+                      ("training/reports/reflect", "brightness_drift.png"),
+                      ("training/reports/reflectivity", "paired_deltas.png")]:
         d = project / rel
         d.mkdir(parents=True, exist_ok=True)
         (d / name).write_bytes(b"\x89PNG")
     groups = {f["name"]: f["group"] for f in inventory.result_figures(str(project))}
     assert groups["comparison.png"] == "Model comparison"
     assert groups["brightness_drift.png"] == "Reflectivity check"
-    assert groups["paired_deltas.png"] == "Ablation · reflectivity"
+    assert groups["paired_deltas.png"] == "Experiment · reflectivity"
     assert all(f["blurb"] for f in inventory.result_figures(str(project)))
 
 
@@ -914,3 +943,150 @@ def test_the_hidden_attribute_actually_hides():
 
     css = (Path(dash.__file__).parent / "static" / "app.css").read_text()
     assert "[hidden] { display: none !important; }" in css
+
+
+# --------------------------------------------------------------------------- #
+# what is training right now
+# --------------------------------------------------------------------------- #
+def _live_fold(root, experiment, arm, fold, epochs, finished=False, age_s=0.0):
+    """A fold directory in whatever state training would have left it in."""
+    import time
+
+    d = root / "training" / "experiments" / experiment / arm / f"loro_{fold}"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "config.json").write_text(json.dumps(
+        {"model": "pointnet", "test_run": fold, "epochs": 30}))
+    (d / "best.pt").write_bytes(b"weights")
+    hist = d / "history.csv"
+    hist.write_text("epoch,train_loss,val_loss,val_pr_auc\n"
+                    + "".join(f"{e},0.5,0.4,{0.50 + e / 100}\n" for e in range(epochs)))
+    if finished:
+        (d / "test_metrics.json").write_text(json.dumps(
+            {"test_run": fold, "pr_auc": 0.82, "f1": 0.7}))
+    if age_s:
+        old = time.time() - age_s
+        os.utime(hist, (old, old))
+    return d
+
+
+def test_training_view_reports_the_fold_in_flight_with_its_curve(project):
+    """Everything the panel needs is already on disk — nothing was added to
+    the training loop for it, which is what makes it work for a sweep started
+    from a terminal."""
+    _live_fold(project, "reflectivity", "pointnet-geom", "run1", 12, finished=True)
+    _live_fold(project, "reflectivity", "pointnet-geom", "run2", 4)
+
+    now = inventory.training_activity(str(project))
+    assert [t["experiment"] for t in now] == ["reflectivity"]
+    t = now[0]
+    assert t["counts"]["done"] == 1 and t["counts"]["running"] == 1
+    live = t["in_flight"][0]
+    assert live["fold"] == "run2"
+    assert live["epochs_done"] == 4 and live["epochs_planned"] == 30
+    assert live["best_val_pr_auc"] == pytest.approx(0.53)
+    assert [p["epoch"] for p in live["curve"]] == [0, 1, 2, 3]
+
+
+def test_training_view_counts_folds_the_sweep_has_not_started_yet(project):
+    """Half an hour into an overnight sweep, the folds with no folder yet are
+    the bulk of the work — reading disk alone would call the sweep finished."""
+    from rocklabel.train.ablate import SUITES
+
+    _live_fold(project, "reflectivity", "pointnet-geom", "run1", 3)
+    t = inventory.training_activity(str(project))[0]
+    # The cache holds run1 and run2, so the matrix is arms x 2.
+    assert t["folds_total"] == len(SUITES["reflectivity"]["arms"]) * 2
+    assert t["counts"]["pending"] == t["folds_total"] - 1
+
+
+def test_a_fold_that_stopped_writing_reads_as_stalled_not_running(project):
+    _live_fold(project, "reflectivity", "pointnet-geom", "run1", 5,
+               age_s=inventory.LIVE_WINDOW_S + 60)
+    t = inventory.training_activity(str(project))[0]
+    assert t["counts"]["stalled"] == 1 and t["counts"]["running"] == 0
+    assert t["in_flight"] == []
+
+
+def test_a_finished_experiment_drops_off_the_training_view(project):
+    """The panel is about the present; a finished sweep belongs in the reports."""
+    for fold in ("run1", "run2"):
+        _live_fold(project, "seedstudy", "geom", fold, 9, finished=True)
+    assert [t["experiment"] for t in inventory.training_activity(str(project))] == []
+
+
+def test_snapshot_carries_the_training_view(project):
+    _live_fold(project, "reflectivity", "pointnet-geom", "run2", 2)
+    snap = inventory.snapshot(str(project))
+    assert snap["training_now"][0]["experiment"] == "reflectivity"
+
+
+# --------------------------------------------------------------------------- #
+# the model picker
+# --------------------------------------------------------------------------- #
+def test_superseded_runs_are_marked_archived_rather_than_hidden(project):
+    stale = (project / "training" / "experiments" / "compare"
+             / "pointnet_loro_run1.superseded-20260815T104225")
+    stale.mkdir(parents=True)
+    (stale / "best.pt").write_bytes(b"old weights")
+
+    cks = inventory.checkpoints(str(project))
+    archived = [c for c in cks if c["archived"]]
+    assert len(archived) == 1, "an archived run is still on disk and still listed"
+    assert archived[0]["group"].endswith("· archived")
+    # ...but it can never be the shortcut the browser pre-selects.
+    assert archived[0]["best_of_experiment"] is False
+    # Archives sort below everything live.
+    assert cks[-1]["archived"] is True
+
+
+def test_checkpoints_sort_best_first_inside_their_group(project):
+    for fold, pr in (("run1", 0.40), ("run2", 0.90), ("run3", 0.65)):
+        _ablate_fold(project, "reflectivity", "pointnet-geom", fold, pr)
+    arm = [c for c in inventory.checkpoints(str(project))
+           if c["arm"] == "pointnet-geom"]
+    assert [c["fold"] for c in arm] == ["run2", "run3", "run1"]
+    assert arm[0]["best_of_experiment"] is True
+
+
+def test_a_checkpoint_names_the_recording_it_never_saw(project):
+    _ablate_fold(project, "reflectivity", "pointnet2-refl", "run2", 0.77)
+    ck = next(c for c in inventory.checkpoints(str(project)) if c["fold"] == "run2")
+    assert "run2" in ck["name"] and "0.77" in ck["name"]
+    assert ck["experiment"] == "reflectivity" and ck["arm"] == "pointnet2-refl"
+
+
+# --------------------------------------------------------------------------- #
+# generation profiles in the catalog
+# --------------------------------------------------------------------------- #
+def test_generate_offers_every_profile_with_its_explanation():
+    from rocklabel.profiles import DEFAULT_PROFILE, PROFILES
+
+    p = next(x for x in spec.COMMANDS_BY_ID["generate"].params if x.name == "profile")
+    assert p.choices == list(PROFILES) and p.default == DEFAULT_PROFILE
+    for name in PROFILES:
+        assert PROFILES[name].title in p.help, f"{name} is offered with no explanation"
+
+
+def test_the_gpu_cap_is_offered_on_every_command_that_trains():
+    for cid in ("train-train", "train-compare", "train-ablate"):
+        cmd = spec.COMMANDS_BY_ID[cid]
+        assert any(p.arg == "--gpu-fraction" for p in cmd.params), \
+            f"{cid} can be run beside another sweep and needs the cap"
+
+
+def test_the_catalog_quotes_the_real_default_paths():
+    """Path defaults come from the modules that own them, never retyped."""
+    from rocklabel.train.ablate import DEFAULT_ROOT
+    from rocklabel.train.cli import DEFAULT_CACHE
+
+    cache = next(p for p in spec.COMMANDS_BY_ID["train-matched"].params
+                 if p.name == "cache_dir")
+    assert cache.default == DEFAULT_CACHE
+    root = next(p for p in spec.COMMANDS_BY_ID["train-ablate"].params
+                if p.name == "ablate_root")
+    assert root.default == DEFAULT_ROOT
+
+
+def test_the_profile_list_reaches_the_browser(project):
+    names = [p["name"] for p in inventory.snapshot(str(project))["profiles"]]
+    assert "full-sweep" in names and "raw-burst" in names

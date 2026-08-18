@@ -1,4 +1,4 @@
-"""Shared 3D camera controls (rocklabel.camera).
+"""Shared 3D camera controls (rocklabel.gui.camera).
 
 The labeler, the frame browsers and the live viewer all mix in
 :class:`PivotCamera`, so the double-click pivot and the fly-mode key gating are
@@ -12,7 +12,7 @@ import numpy as np
 import open3d.visualization.gui as gui
 import pytest
 
-from rocklabel.camera import DOUBLE_CLICK_PX, DOUBLE_CLICK_SEC, PivotCamera
+from rocklabel.gui.camera import DOUBLE_CLICK_PX, DOUBLE_CLICK_SEC, PivotCamera
 
 
 class _FakeScene:
@@ -93,7 +93,7 @@ def test_double_click_rejects_a_moved_second_click(host):
 
 def test_double_click_rejects_a_slow_second_click(host, monkeypatch):
     now = [1000.0]
-    monkeypatch.setattr("rocklabel.camera.time.monotonic", lambda: now[0])
+    monkeypatch.setattr("rocklabel.gui.camera.time.monotonic", lambda: now[0])
     host._double_click(100, 100)
     now[0] += DOUBLE_CLICK_SEC + 0.01
     assert host._double_click(100, 100) is False

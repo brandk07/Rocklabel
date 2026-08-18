@@ -39,7 +39,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from ..neighborhoods import FEATURES, GEOMETRY, resolve_features  # noqa: F401  (re-exported)
+from ..dataset.neighborhoods import FEATURES, GEOMETRY, resolve_features  # noqa: F401  (re-exported)
 from .models_meta import MODELS, model_task  # noqa: F401  (re-exported)
 
 SENTINEL = 1.0e3  # farther than any real neighborhood coordinate (meters)

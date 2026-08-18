@@ -3,11 +3,11 @@
 Kept separate from the base `rocklabel` CLI so the core tool never imports
 torch. Typical session:
 
-    rocklabel-train cache                 # pool the four myroom runs, verify
-    rocklabel-train compare               # both models x 4 LORO folds + figures
-    rocklabel-train view datasets/myroomdataset2 \\
-        --checkpoint training/runs/pointnet2_loro_myroom2/best.pt
-    rocklabel-train export training/runs/pointnet2_loro_myroom2/best.pt
+    rocklabel-train cache                 # pool every full-sweep dataset, verify
+    rocklabel-train compare               # both models x every LORO fold + figures
+    rocklabel-train view datasets/full-sweep/volleyball \\
+        --checkpoint training/experiments/compare/pointnet2_loro_VolleyBallTest4.reslam/best.pt
+    rocklabel-train export training/experiments/compare/pointnet2_loro_VolleyBallTest4.reslam/best.pt
 """
 
 from __future__ import annotations
@@ -16,14 +16,25 @@ import argparse
 import json
 import os
 
-from ..neighborhoods import FEATURES
+from ..dataset.neighborhoods import FEATURES
+from ..profiles import DEFAULT_PROFILE
 from .models_meta import MODELS
 from . import TRAIN_DEFAULTS
-from .ablate import DEFAULT_ROOT as ABLATE_ROOT, SUITES
+from .ablate import (DEFAULT_REPORT_ROOT as REPORT_ROOT, DEFAULT_ROOT as ABLATE_ROOT,
+                     SUITES)
 from .matched import AGGREGATIONS, DEFAULT_RADIUS_M
-from .data import DEFAULT_DATASETS, run_dir_name, run_suffix
+from .data import default_datasets, run_dir_name, run_suffix
 
 DEFAULT_ROOT = "training"
+
+#: Where `cache` writes and every training command reads. One cache per
+#: generation profile, because a cache built from full-sweep frames and one
+#: built from raw bursts hold populations that must never be pooled.
+DEFAULT_CACHE = os.path.join(DEFAULT_ROOT, "caches", DEFAULT_PROFILE)
+
+#: `compare`/`train` keep flat ``<model>_loro_<run>`` directories, so they get
+#: an experiment folder of their own rather than being scattered.
+DEFAULT_RUNS_ROOT = os.path.join(ABLATE_ROOT, "compare")
 
 #: Training settings the ablation sweep passes through to every arm. An arm's
 #: own overrides win over these - the arm's overrides are the thing under test.
@@ -68,12 +79,29 @@ def _archive_stale(run_dir: str) -> str:
 
 
 def _add_common(p: argparse.ArgumentParser) -> None:
-    p.add_argument("--cache-dir", default=os.path.join(DEFAULT_ROOT, "cache"))
-    p.add_argument("--runs-root", default=os.path.join(DEFAULT_ROOT, "runs"))
+    p.add_argument("--cache-dir", default=DEFAULT_CACHE,
+                   help=f"pooled cache to train from (default: {DEFAULT_CACHE}). "
+                        "There is one per generation profile; pointing this at "
+                        "the wrong one trains on differently-cut frames.")
+    p.add_argument("--runs-root", default=DEFAULT_RUNS_ROOT,
+                   help=f"where 'train' and 'compare' write their fold "
+                        f"directories (default: {DEFAULT_RUNS_ROOT})")
     p.add_argument("--results-dir", default=None,
-                   help=f"default: {DEFAULT_ROOT}/results, tagged with the input "
+                   help=f"default: {REPORT_ROOT}/compare, tagged with the input "
                         "channels when they are not the full set, so one "
                         "channel selection's figures never overwrite another's")
+
+
+def _add_gpu_arg(p: argparse.ArgumentParser) -> None:
+    """Cap this process's VRAM share, for two sweeps sharing one card."""
+    p.add_argument("--gpu-fraction", type=float, default=None, metavar="FRAC",
+                   help="most of the graphics card's memory this run may ever "
+                        "take, as a fraction (0.45 = 45%%). With two sweeps on "
+                        "one card the one that asks for memory second is the "
+                        "one that crashes, which is usually not the one at "
+                        "fault; capping means an overreaching run fails on its "
+                        "own account and never knocks over a sweep already "
+                        "going. Leave empty for no cap.")
 
 
 def _features_arg(p: argparse.ArgumentParser) -> None:
@@ -93,7 +121,7 @@ def _results_dir(args) -> str:
     """Explicit --results-dir wins; otherwise tag the default by channel set."""
     if args.results_dir:
         return args.results_dir
-    return os.path.join(DEFAULT_ROOT, "results") + run_suffix(args.features)
+    return os.path.join(REPORT_ROOT, "compare") + run_suffix(args.features)
 
 
 def _add_train_args(p: argparse.ArgumentParser) -> None:
@@ -163,7 +191,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("cache", help="pool dataset runs into a flat .npy cache "
                                      "(validates config hashes and manifest counts)")
-    p.add_argument("--datasets", nargs="+", default=DEFAULT_DATASETS)
+    p.add_argument("--datasets", nargs="+", default=None,
+                   help="dataset directories to pool (default: every dataset "
+                        f"under datasets/{DEFAULT_PROFILE}/)")
     _add_common(p)
 
     p = sub.add_parser("train", help="train one model on one leave-one-run-out fold")
@@ -172,6 +202,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--test-run", required=True, help="run held out for testing")
     _add_common(p)
     _add_train_args(p)
+    _add_gpu_arg(p)
 
     p = sub.add_parser("compare", help="train both models on every LORO fold, "
                                        "then render all comparison figures")
@@ -181,6 +212,7 @@ def build_parser() -> argparse.ArgumentParser:
                         "; ".join(f"{k} = {v[1]}" for k, v in MODELS.items()))
     _add_common(p)
     _add_train_args(p)
+    _add_gpu_arg(p)
 
     p = sub.add_parser("ablate", help="controlled A/B sweep: train every arm of a "
                                       "suite on every fold, then report paired "
@@ -202,6 +234,7 @@ def build_parser() -> argparse.ArgumentParser:
                         "whatever folds have already finished")
     _add_common(p)
     _add_train_args(p)
+    _add_gpu_arg(p)
 
     p = sub.add_parser("matched", help="score a segmenter and a sliding-window "
                                        "classifier on one shared set of candidate "
@@ -212,9 +245,9 @@ def build_parser() -> argparse.ArgumentParser:
                         "compare")
     p.add_argument("--ablate-root", default=ABLATE_ROOT,
                    help=f"where the sweep's runs live (default: {ABLATE_ROOT})")
-    p.add_argument("--cache-dir", default=os.path.join(DEFAULT_ROOT, "cache"))
+    p.add_argument("--cache-dir", default=DEFAULT_CACHE)
     p.add_argument("--out", default=None,
-                   help=f"output dir (default: {DEFAULT_ROOT}/results_matched/<suite>)")
+                   help=f"output dir (default: {REPORT_ROOT}/<suite>/matched)")
     p.add_argument("--radius", type=float, default=DEFAULT_RADIUS_M,
                    help="how far from a candidate center a segmented point may sit "
                         f"and still describe it (default: {DEFAULT_RADIUS_M} m)")
@@ -225,10 +258,10 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("reflect", help="measure what the reflectivity channel "
                                        "actually carries, straight off the cache "
                                        "(no training)")
-    p.add_argument("--cache-dir", default=os.path.join(DEFAULT_ROOT, "cache"))
-    p.add_argument("--out", default=os.path.join(DEFAULT_ROOT, "results_reflect"),
+    p.add_argument("--cache-dir", default=DEFAULT_CACHE)
+    p.add_argument("--out", default=os.path.join(REPORT_ROOT, "reflect"),
                    help="directory for the figures and tables "
-                        f"(default: {DEFAULT_ROOT}/results_reflect)")
+                        f"(default: {REPORT_ROOT}/reflect)")
 
     p = sub.add_parser("report", help="regenerate figures/tables from existing runs")
     p.add_argument("--models", nargs="+", default=["pointnet", "pointnet2"],
@@ -279,9 +312,15 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
+    # Before anything imports torch and allocates: set_per_process_memory_fraction
+    # only binds allocations made after it.
+    if getattr(args, "gpu_fraction", None):
+        from .gpu import cap_gpu
+        cap_gpu(args.gpu_fraction)
+
     if args.command == "cache":
         from .data import build_cache
-        build_cache(args.datasets, args.cache_dir)
+        build_cache(args.datasets or default_datasets(), args.cache_dir)
         return 0
 
     if args.command == "train":
@@ -328,14 +367,13 @@ def main(argv: list[str] | None = None) -> int:
             extra = {k: getattr(args, k) for k in ABLATE_PASSTHROUGH}
             run_suite(args.suite, args.cache_dir, args.ablate_root, args.arms,
                       extra, fresh=args.fresh)
-        out = args.results_dir or os.path.join(DEFAULT_ROOT, "results_ablate",
-                                               args.suite)
+        out = args.results_dir or os.path.join(REPORT_ROOT, args.suite)
         render_ablation(args.ablate_root, args.suite, out)
         return 0
 
     if args.command == "matched":
         from .matched import render_matched
-        out = args.out or os.path.join(DEFAULT_ROOT, "results_matched", args.suite)
+        out = args.out or os.path.join(REPORT_ROOT, args.suite, "matched")
         render_matched(args.cache_dir, args.ablate_root, args.suite, out,
                        radius=args.radius, aggregation=args.aggregation)
         return 0

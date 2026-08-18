@@ -16,7 +16,7 @@ import re
 import numpy as np
 import torch
 
-from ..preview import (COLOR_CELL_IGNORE, COLOR_CENTER_CLEAR, COLOR_CENTER_ROCK,
+from ..gui.preview import (COLOR_CELL_IGNORE, COLOR_CENTER_CLEAR, COLOR_CENTER_ROCK,
                        DEFAULT_WINDOW, WINDOW_OPTIONS, _FrameCache, open_dataset)
 from .models import build_model
 
@@ -30,7 +30,7 @@ MODES = ["Predicted confidence", "Ground truth", "Errors @ threshold"]
 
 
 def _turbo_legend():
-    from ..viewer import _turbo
+    from ..gui.viewer import _turbo
     stops = []
     for p in (0.0, 0.25, 0.5, 0.75, 1.0):
         stops.append((f"p(rock) = {p:.2f}", tuple(_turbo(np.array([p]))[0])))
@@ -201,6 +201,6 @@ def _frame_labels(ds, frame_idx: int) -> np.ndarray | None:
 
 def _dataset_hash(out_dir: str) -> str:
     import json
-    from ..generate import MANIFEST_NAME
+    from ..dataset.generate import MANIFEST_NAME
     with open(os.path.join(out_dir, MANIFEST_NAME)) as f:
         return json.load(f)["config_hash"]

@@ -19,8 +19,8 @@ from dataclasses import dataclass
 import numpy as np
 import torch
 
-from ..neighborhoods import build_inference_samples
-from ..pipeline import ScanStream, WindowedScanStream
+from ..dataset.neighborhoods import build_inference_samples
+from ..recording.pipeline import ScanStream, WindowedScanStream
 from .models import build_model
 
 MAX_CLOUD_POINTS = 30_000   # per-frame context cloud cap (display only)
@@ -146,7 +146,7 @@ def run_mcap_replay(mcap_path: str, checkpoint: str, cfg: dict,
     det_clear = (0.30, 0.35, 0.42)
 
     # trailing accumulation windows, same choices as the dataset preview
-    from ..preview import DEFAULT_WINDOW, WINDOW_OPTIONS
+    from ..gui.preview import DEFAULT_WINDOW, WINDOW_OPTIONS
 
     def members_for(pos: int, window_s_: float | None) -> list[FrameRec]:
         if window_s_ == 0.0:

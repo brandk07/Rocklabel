@@ -640,3 +640,28 @@ select.input { cursor: pointer; }
   font: inherit; font-size: 12.5px; cursor: pointer; padding: 0;
 }
 @keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+
+/* ---------------------------------------------------------------- training now
+   The panel that says what is training and how far along. A progress bar, then
+   one chip per fold so the whole matrix is legible at a glance: which folds are
+   finished (and what they scored), which one is running, which are still to go. */
+.meter {
+  height: 6px; border-radius: 3px; background: var(--surface-3);
+  overflow: hidden; margin: 10px 0 14px;
+}
+.meter-fill {
+  height: 100%; width: 0; border-radius: 3px;
+  background: var(--series-1); transition: width .4s ease;
+}
+.chip-row { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 14px; }
+.chip-row .chip { cursor: default; font-variant-numeric: tabular-nums; }
+.chip-done    { background: var(--accent-wash); color: var(--text-primary); }
+.chip-running { border-color: var(--series-1); color: var(--series-1); font-weight: 600; }
+.chip-pending { color: var(--text-muted); }
+.chip-stalled { border-color: var(--warning); color: var(--warning); }
+
+/* "show archived runs" next to a picker that has archived entries to show. */
+.checkline {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 11.5px; margin-top: 4px; cursor: pointer;
+}

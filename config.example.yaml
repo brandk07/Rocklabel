@@ -1,3 +1,23 @@
+# rocklabel configuration — EXAMPLE / REFERENCE
+#
+# You very likely do not need this file. How a recording is cut into frames is
+# the setting that matters most, and it now has names:
+#
+#     rocklabel generate RUN.mcap --profile full-sweep
+#
+# See `rocklabel generate --help` for the list, or the Generate card in the
+# dashboard, which shows what each profile does and when to reach for it. The
+# four hand-managed config files that used to sit here were replaced by that
+# registry (rocklabel/profiles.py) because nobody could tell them apart.
+#
+# Reach for a config file only for a genuine one-off: a ROS 2 bag with unusual
+# topic names, a different crop box, a different neighborhood geometry. A
+# profile is applied AFTER a --config file, so it has the last word on the
+# settings it owns.
+#
+# Every value below is the built-in default; delete anything you are not
+# changing.
+
 # rocklabel configuration - shared by `label`, `driftcheck`, and `generate`.
 #
 # Every value below is the built-in default; delete anything you don't need to

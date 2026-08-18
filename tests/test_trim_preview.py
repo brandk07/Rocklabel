@@ -5,11 +5,11 @@ import pytest
 
 import make_synthetic_mcap as synth
 from rocklabel.config import load_config
-from rocklabel.generate import run_generate
-from rocklabel.labeler import accumulate_cloud
-from rocklabel.mcap_io import McapFormatError, read_info
-from rocklabel.preview import load_frame
-from rocklabel.trim import run_trim
+from rocklabel.dataset.generate import run_generate
+from rocklabel.gui.labeler import accumulate_cloud
+from rocklabel.recording.mcap_io import McapFormatError, read_info
+from rocklabel.gui.preview import load_frame
+from rocklabel.recording.trim import run_trim
 
 
 def test_trim_time_window_keeps_tf_in_full(synthetic_recording, tmp_path):

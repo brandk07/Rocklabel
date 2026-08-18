@@ -9,11 +9,11 @@ import pytest
 
 import make_synthetic_mcap as synth
 from rocklabel.config import load_config
-from rocklabel.generate import run_generate
-from rocklabel.labeler import accumulate_cloud
-from rocklabel.lidarrig_io import decode_frame, encode_frame, iter_frames
-from rocklabel.mcap_io import read_info
-from rocklabel.pipeline import LidarrigScanStream, ScanStream
+from rocklabel.dataset.generate import run_generate
+from rocklabel.gui.labeler import accumulate_cloud
+from rocklabel.recording.lidarrig_io import decode_frame, encode_frame, iter_frames
+from rocklabel.recording.mcap_io import read_info
+from rocklabel.recording.pipeline import LidarrigScanStream, ScanStream
 
 
 @pytest.fixture(scope="module")

@@ -15,6 +15,7 @@ import sys
 
 from . import __version__
 from .config import ConfigError, apply_overrides, load_config
+from .profiles import DEFAULT_PROFILE, PROFILES, ProfileError, apply_profile
 
 
 def _add_config_arg(p: argparse.ArgumentParser) -> None:
@@ -65,6 +66,21 @@ def _resolve_mcap(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
     return path
 
 
+def default_dataset_dir(profile: str, mcap_path: str) -> str:
+    """Where a dataset lands when --out is left off: datasets/<profile>/<run>.
+
+    Putting the profile in the path is the point. A directory called
+    ``datasets/VolleyBallTest4.reslam`` says nothing about how its frames were
+    cut, and two agents already drew wrong conclusions from exactly that.
+    """
+    import os.path
+
+    stem = os.path.basename(mcap_path)
+    if stem.endswith(".mcap"):
+        stem = stem[: -len(".mcap")]
+    return os.path.join("datasets", profile, stem)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="rocklabel",
@@ -102,8 +118,14 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("generate", help="write both training-dataset formats from a labeled recording")
     _add_mcap_arg(p)
     p.add_argument("--labels", help="label JSON (default: <mcap>.labels.json)")
+    p.add_argument("--profile", default=DEFAULT_PROFILE, choices=sorted(PROFILES),
+                   help="named way of cutting frames, which is the single "
+                        "biggest lever on the resulting dataset; "
+                        + "; ".join(f"{k} = {v.title}" for k, v in PROFILES.items())
+                        + f" (default: {DEFAULT_PROFILE})")
     _add_config_arg(p)
-    p.add_argument("--out", required=True, help="dataset output directory")
+    p.add_argument("--out", help="dataset output directory (default: "
+                                 "datasets/<profile>/<recording name>)")
     _add_level_args(p)
 
     p = sub.add_parser(
@@ -191,14 +213,14 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {e}", file=sys.stderr)
         return 2
 
-    from .generate import ManifestConflict
-    from .leveling import LevelError
-    from .mcap_io import McapFormatError
-    from .pose import PoseUnavailable
+    from .dataset.generate import ManifestConflict
+    from .geometry.leveling import LevelError
+    from .recording.mcap_io import McapFormatError
+    from .recording.pose import PoseUnavailable
 
     try:
         if args.command == "inspect":
-            from .inspect_cmd import run_inspect
+            from .recording.inspect_cmd import run_inspect
             run_inspect(args.mcap, cfg)
         elif args.command == "label":
             mcap = _resolve_mcap(args, parser)
@@ -208,25 +230,29 @@ def main(argv: list[str] | None = None) -> int:
                 "labeler.z_max": args.z_max,
             })
             cfg = _apply_level_args(cfg, args)
-            from .labeler import run_label
+            from .gui.labeler import run_label
             run_label(mcap, cfg, args.labels, args.stride, args.z_min, args.z_max,
                       dump_accumulated=args.dump_accumulated,
                       fallback_viewer=args.fallback_viewer)
         elif args.command == "driftcheck":
             cfg = _apply_level_args(cfg, args)
-            from .driftcheck import run_driftcheck
+            from .gui.driftcheck import run_driftcheck
             run_driftcheck(_resolve_mcap(args, parser), args.labels, args.rock_id, cfg)
         elif args.command == "generate":
             mcap = _resolve_mcap(args, parser)
             labels = args.labels
             if not labels:
-                from .labeler import default_labels_path
+                from .gui.labeler import default_labels_path
                 labels = default_labels_path(mcap)
+            # Profile last, so it is the final word on the settings it owns
+            # even when a --config file also named them.
+            cfg = apply_profile(cfg, args.profile)
             cfg = _apply_level_args(cfg, args)
-            from .generate import run_generate
-            run_generate(mcap, labels, args.out, cfg)
+            out = args.out or default_dataset_dir(args.profile, mcap)
+            from .dataset.generate import run_generate
+            run_generate(mcap, labels, out, cfg, profile=args.profile)
         elif args.command == "trim":
-            from .trim import run_trim
+            from .recording.trim import run_trim
             run_trim(_resolve_mcap(args, parser), args.out, cfg, extra_topics=args.topic,
                      start_s=args.start_s, end_s=args.end_s, all_topics=args.all_topics)
         elif args.command in ("record", "live"):
@@ -236,9 +262,9 @@ def main(argv: list[str] | None = None) -> int:
             out_dir = args.out_pos or args.out_flag
             if not out_dir:
                 parser.error("missing dataset directory (rocklabel preview DATASET_DIR)")
-            from .preview import run_preview
+            from .gui.preview import run_preview
             run_preview(out_dir, args.run, args.frame, args.list)
-    except ConfigError as e:
+    except (ConfigError, ProfileError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
     except (McapFormatError, PoseUnavailable, ManifestConflict, LevelError,

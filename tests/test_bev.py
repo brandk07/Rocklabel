@@ -2,8 +2,8 @@
 
 import numpy as np
 
-from rocklabel.bev import bev_grid_shape, rasterize_bev
-from rocklabel.labeling import MASK_IGNORE
+from rocklabel.dataset.bev import bev_grid_shape, rasterize_bev
+from rocklabel.dataset.labeling import MASK_IGNORE
 
 GCFG = {
     "crop_forward_m": 0.2, "crop_backward_m": 0.2,

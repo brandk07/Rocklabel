@@ -19,16 +19,27 @@ import os
 
 import numpy as np
 
-from ..generate import MANIFEST_NAME
-from ..neighborhoods import FEATURES, resolve_features
+from ..dataset.generate import MANIFEST_NAME
+from ..dataset.neighborhoods import FEATURES, resolve_features
+from ..profiles import DEFAULT_PROFILE, identify as identify_profile
 
-# The four comparable "my room" runs (all generated with the same config).
-DEFAULT_DATASETS = [
-    "datasets/myroomdataset1",
-    "datasets/myroomdataset2",
-    "datasets/myroomdataset3",
-    "datasets/myroomdataset4",
-]
+#: Where datasets live, one folder per generation profile.
+DATASETS_ROOT = "datasets"
+
+
+def default_datasets(profile: str = DEFAULT_PROFILE,
+                     root: str = DATASETS_ROOT) -> list[str]:
+    """Every dataset built with ``profile``, which is what `cache` pools by default.
+
+    Read off disk rather than hardcoded. The old hardcoded list still named
+    four "my room" datasets long after the project had moved to the volleyball
+    court, so `cache` with no arguments quietly pooled the wrong recordings.
+    """
+    base = os.path.join(root, profile)
+    if not os.path.isdir(base):
+        return []
+    return [os.path.join(base, n) for n in sorted(os.listdir(base))
+            if os.path.exists(os.path.join(base, n, MANIFEST_NAME))]
 
 CACHE_ARRAYS = ("points", "labels", "counts", "centers", "frame")
 #: Format C (whole-frame segmentation). Cached beside format A from the same
@@ -39,6 +50,12 @@ SEG_ARRAYS = ("seg_points", "seg_labels", "seg_counts", "seg_frame", "seg_base")
 
 class DataError(SystemExit):
     pass
+
+
+def _profile_of(manifest: dict) -> str:
+    """The profile a dataset names, or the one its config hash matches."""
+    name = manifest.get("profile") or identify_profile(manifest.get("config_hash", ""))
+    return name or f"an unnamed config ({manifest.get('config_hash', '?')[:12]})"
 
 
 def _run_entries(dataset_dirs: list[str]) -> list[tuple[str, str, dict, dict]]:
@@ -63,12 +80,27 @@ def build_cache(dataset_dirs: list[str], cache_dir: str) -> dict:
     verifies the concatenated label counts against each manifest's
     sample_labels totals. Returns the cache meta dict.
     """
+    if not dataset_dirs:
+        raise DataError(
+            f"no datasets to pool. Generate some first "
+            f"(rocklabel generate --profile {DEFAULT_PROFILE} ...), or name them "
+            "explicitly with --datasets.")
     entries = _run_entries(dataset_dirs)
     hashes = {m["config_hash"] for _, _, _, m in entries}
     if len(hashes) != 1:
-        detail = ", ".join(f"{d}={m['config_hash'][:12]}" for d, _, _, m in entries)
-        raise DataError(f"refusing to pool datasets with mixed config hashes: {detail}")
+        # Name the profiles, not just the hashes: "raw-burst and full-sweep"
+        # says what went wrong, where two hex strings only say that something
+        # did. One line per dataset, not per run inside it.
+        by_dir = {d: _profile_of(m) for d, _, _, m in entries}
+        named = sorted(set(by_dir.values()))
+        raise DataError(
+            "refusing to pool datasets built different ways - their frames hold "
+            "different numbers of points, so their samples are not comparable "
+            f"and a score across them would mean nothing. Found {' and '.join(named)}. "
+            "Build one cache per profile.\n  "
+            + "\n  ".join(f"{d} = {p}" for d, p in sorted(by_dir.items())))
     config_hash = hashes.pop()
+    profile = _profile_of(entries[0][3])
     gcfg = entries[0][3]["config"]["generator"]
 
     runs_meta = {}
@@ -142,12 +174,17 @@ def build_cache(dataset_dirs: list[str], cache_dir: str) -> dict:
               f"({got_rock} rock / {got_clear} clear) from {len(files)} frames "
               f"- matches manifest")
 
-    meta = {"config_hash": config_hash, "generator": gcfg, "runs": runs_meta}
+    # The cache says which profile and which datasets it came from, so a run
+    # trained off it can be traced back to how its frames were cut.
+    meta = {"config_hash": config_hash, "profile": profile,
+            "datasets": [os.path.abspath(d) for d in dataset_dirs],
+            "generator": gcfg, "runs": runs_meta}
     with open(os.path.join(cache_dir, "meta.json"), "w") as f:
         json.dump(meta, f, indent=2)
     total = sum(r["n"] for r in runs_meta.values())
     rock = sum(r["rock"] for r in runs_meta.values())
-    print(f"pooled {len(runs_meta)} runs: {total} samples, {rock} rock ({rock / total:.1%})")
+    print(f"pooled {len(runs_meta)} runs from profile {profile!r}: "
+          f"{total} samples, {rock} rock ({rock / total:.1%})")
     return meta
 
 

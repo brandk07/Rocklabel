@@ -1,6 +1,6 @@
 # Agent 2 — SLAM, and keeping Brandon's labels
 
-**Read [README.md](README.md) first, then `altslam/HANDOFF.md`** — the previous SLAM agent's
+**Read [README.md](README.md) first, then `rocklabel/slam/HANDOFF.md`** — the previous SLAM agent's
 notes are good and mostly stand. This brief says what changed since, and what to do
 differently.
 
@@ -8,7 +8,7 @@ Work inside the layout agent 1 left behind (see `handoff/01-cleanup-RESULT.md`).
 
 ## 1. Before building anything: check the premise
 
-`altslam/HANDOFF.md` §9 argues that better poses will lift model accuracy, citing a −0.56
+`rocklabel/slam/HANDOFF.md` §9 argues that better poses will lift model accuracy, citing a −0.56
 correlation between per-fold PR-AUC and pose difficulty. **That correlation is not safe to
 build on**, for two reasons:
 
@@ -118,7 +118,7 @@ time gap (5.5 mm under 2 s, 7.5 mm at 20–35 s), so there is no accumulating dr
 
 ## 5. Say this out loud to Brandon
 
-From `altslam/HANDOFF.md` §8, and worth repeating because it outranks everything above:
+From `rocklabel/slam/HANDOFF.md` §8, and worth repeating because it outranks everything above:
 the single largest error source is that the sensor is **swung by hand**, which corrupts the
 IMU's sense of "down". A tripod, monopod or slow cart removes it at the source. Recording
 raw gyro/accelerometer instead of only the fused quaternion would enable proper tight
@@ -131,6 +131,6 @@ coupling. Both are recording-side fixes that beat anything achievable in softwar
 - Labels usable on the re-solved recordings without manual relabelling, validated with
   `driftcheck`.
 - All 13 recordings re-solved into the layout agent 1 built.
-- Tests pass (`PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest`), including `altslam/tests` (32).
+- Tests pass (`PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest`), including `tests/test_slam.py` (32).
 - `handoff/02-slam-RESULT.md`: what changed, the new surface-thickness numbers per
   recording, and whether agent 3 should regenerate datasets from the new recordings.

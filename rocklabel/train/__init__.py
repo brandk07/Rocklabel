@@ -5,7 +5,7 @@ Everything torch-dependent is imported lazily so `import rocklabel` and the
 base CLI keep working without the [train] extra installed.
 """
 
-from ..neighborhoods import FEATURES
+from ..dataset.neighborhoods import FEATURES
 
 #: Single source of truth for every training setting, kept here (torch-free)
 #: rather than in engine.py so the argparse layer can quote the real defaults

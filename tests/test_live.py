@@ -8,13 +8,13 @@ import numpy as np
 import pytest
 
 from rocklabel.config import load_config
-from rocklabel.lidarrig_io import iter_frames, read_embedded_config
+from rocklabel.recording.lidarrig_io import iter_frames, read_embedded_config
 from rocklabel.live.config import AppConfig
 from rocklabel.live.pipeline import IngestEngine
 from rocklabel.live.run import _build_config, add_live_args
 from rocklabel.live.sources import make_source
 from rocklabel.live.surfaces import make_surface_builder
-from rocklabel.pipeline import ScanStream
+from rocklabel.recording.pipeline import ScanStream
 
 
 def _fast_sim_config() -> AppConfig:
@@ -190,7 +190,7 @@ def test_scorer_crop_mask_region():
 def test_inference_samples_max_centers_cap():
     """max_centers bounds the number of scored candidates (live memory cap)."""
     pytest.importorskip("scipy")
-    from rocklabel.neighborhoods import build_inference_samples
+    from rocklabel.dataset.neighborhoods import build_inference_samples
 
     rng = np.random.default_rng(0)
     xyz = rng.uniform(0, 2.0, (4000, 3)).astype(np.float32)

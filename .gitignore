@@ -23,26 +23,44 @@ recordings/
 # ---------------------------------------------------------------------------
 # Datasets: track only the manifests that describe each dataset, never the
 # extracted point clouds. The manifest is enough to rebuild a dataset from
-# its source recording.
+# its source recording, and it is the thing that says which generation
+# profile built it.
+#
+# Datasets are nested one folder per profile now (datasets/full-sweep/<run>/),
+# so these have to match at any depth — the old fixed-depth rules stopped
+# matching the moment the layout gained a level.
 # ---------------------------------------------------------------------------
-/datasets/*
-!/datasets/*/
-/datasets/*/*
-!/datasets/*/manifest.json
+/datasets/**
+!/datasets/**/
+!/datasets/**/manifest.json
 
 # ---------------------------------------------------------------------------
-# Training artifacts
-#   cache/    regenerable point-cloud cache (600 MB+ of .npy)
-#   runs/     per-run checkpoints (best.pt / last.pt, ~190 MB)
-# training/exported/ IS tracked — those are the deployable models.
+# Training artifacts — the big regenerable stuff. This is ~6 GB and it grew
+# the repo's history to 3.2 GB before it was caught.
+#
+#   caches/       pooled point-cloud cache, one folder per profile (~1.9 GB)
+#   experiments/  every trained fold: best.pt, last.pt, predictions (~3.9 GB)
+#
+# Two things ARE kept, on purpose:
+#   exported/     the deployable models — the point of the repo
+#   reports/      the conclusions (summary.md/json plus figures, ~7 MB). Small,
+#                 and it is how you know what a sweep concluded without
+#                 retraining it. Add "training/reports/" below to drop these too.
 # ---------------------------------------------------------------------------
-training/cache/
-training/runs/
+# Ignore the *contents* with /**, not the folder itself — ignoring the folder
+# stops git descending into it, and then a negation below can never match.
+training/caches/**
+training/experiments/**
 *.npy
 *.npz
 
-# ...but the exported models are the point of the repo, so keep them.
+# ...but the exported models, the written-up results, and the README in each
+# folder explaining what that folder holds are all worth keeping. Those READMEs
+# are the map, and a map that only exists on one machine is no map.
 !training/exported/**
+!training/reports/**
+!training/caches/README.md
+!training/experiments/README.md
 
 # ---------------------------------------------------------------------------
 # Local runtime output

@@ -28,9 +28,16 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from ..neighborhoods import FEATURES, GEOMETRY
+from ..dataset.neighborhoods import FEATURES, GEOMETRY
 
-DEFAULT_ROOT = os.path.join("training", "ablate")
+#: Where a sweep's per-fold run directories live: one folder per experiment,
+#: then per arm, then per fold. Renamed from the old ``training/ablate`` (and
+#: its ad-hoc twin ``training/ablate_vb``) so that every trained thing in the
+#: project sits under one root that says which experiment produced it.
+DEFAULT_ROOT = os.path.join("training", "experiments")
+
+#: Where the rendered tables and figures for an experiment go.
+DEFAULT_REPORT_ROOT = os.path.join("training", "reports")
 
 #: Metrics carried into every table, primary first. PR-AUC leads because the
 #: data is 5-31% rock depending on the run: accuracy is nearly free and ROC-AUC

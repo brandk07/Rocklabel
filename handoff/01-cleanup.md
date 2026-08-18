@@ -31,7 +31,7 @@ confusion is not possible.
 3. **Ask before destructive consolidation.** If you believe something should actually be
    deleted (e.g. `.superseded-*` archives, `results_v1_baseline`), list it and ask. Do not
    assume.
-4. **`altslam/` is self-contained and was deliberately kept isolated.** Coordinate with
+4. **`rocklabel/slam/` is self-contained and was deliberately kept isolated.** Coordinate with
    [02-slam.md](02-slam.md): it now needs a dashboard home, but do not restructure its
    internals.
 

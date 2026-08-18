@@ -83,9 +83,9 @@ def fixtures(tmp_path):
     recorded["/api/jobs"] = {"jobs": [job, done]}
     recorded["/api/state"]["jobs"] = [job, done]
     recorded["/api/jobs/JOB/rerun"] = {"job": done | {"id": "j0003"}}
-    recorded["/api/rename"] = {"name": "renamed", "path": "datasets/renamed",
-                               "renamed": ["datasets/renamed"]}
-    recorded["/api/delete"] = {"path": "datasets/d1", "kind": "dataset",
+    recorded["/api/rename"] = {"name": "renamed", "path": "datasets/full-sweep/renamed",
+                               "renamed": ["datasets/full-sweep/renamed"]}
+    recorded["/api/delete"] = {"path": "datasets/full-sweep/d1", "kind": "dataset",
                                "freed": 1024, "files": 3}
     recorded["/api/jobs/JOB"] = job | {
         "lines": ["[dashboard] $ rocklabel live --source udp", "warming up"],
@@ -107,11 +107,11 @@ def _build_project(root: Path) -> None:
         "created": "2026-01-01T00:00:00Z", "intensity_available": True,
         "rocks": [{"id": 1, "shape": "sphere"}, {"id": 2, "shape": "box"}],
     }))
-    ds = root / "datasets" / "d1"
+    ds = root / "datasets" / "full-sweep" / "d1"
     ds.mkdir(parents=True)
     (ds / "manifest.json").write_text(json.dumps({
         "config_hash": "abc123def456789", "generated": "2026-01-02T00:00:00Z",
-        "config": {"generator": {"frame_stride": 5}},
+        "profile": "full-sweep", "config": {"generator": {"frame_stride": 5}},
         "runs": {"run1": {"run_id": "run1", "frames_kept": 100, "point_samples": 500,
                           "bev_frames": 100, "rock_count": 2,
                           "sample_labels": {"rock": 120, "clear": 380}}},
@@ -120,7 +120,8 @@ def _build_project(root: Path) -> None:
     # comparison chart has to cope with a NaN column.
     for model in ("pointnet", "pointnet2"):
         for fold, evaluated in (("run1", True), ("run2", model == "pointnet")):
-            run = root / "training" / "runs" / f"{model}_loro_{fold}"
+            run = (root / "training" / "experiments" / "compare"
+                   / f"{model}_loro_{fold}")
             run.mkdir(parents=True)
             (run / "config.json").write_text(json.dumps(
                 {"model": model, "test_run": fold, "train_runs": ["other"],
@@ -137,10 +138,31 @@ def _build_project(root: Path) -> None:
                     "rock_frac": 0.24, "baseline_accuracy": 0.75,
                     "model": model, "test_run": fold,
                 }))
-    cache = root / "training" / "cache"
+    # A sweep mid-flight, so the "training now" panel has something to draw:
+    # one fold finished, one part-way through with a validation curve, and the
+    # rest of the declared matrix not started.
+    for fold, epochs, finished in (("run1", 8, True), ("run2", 3, False)):
+        d = (root / "training" / "experiments" / "reflectivity"
+             / "pointnet-geom" / f"loro_{fold}")
+        d.mkdir(parents=True)
+        (d / "arm.json").write_text(json.dumps(
+            {"arm": "pointnet-geom", "label": "PointNet · shape only",
+             "model": "pointnet", "features": ["dx", "dy", "dz"]}))
+        (d / "config.json").write_text(json.dumps(
+            {"model": "pointnet", "test_run": fold, "epochs": 30}))
+        (d / "best.pt").write_bytes(b"weights")
+        (d / "history.csv").write_text(
+            "epoch,train_loss,val_loss,val_pr_auc\n"
+            + "".join(f"{e},{0.5 / (e + 1)},{0.4 / (e + 1)},{0.5 + e / 40}\n"
+                      for e in range(epochs)))
+        if finished:
+            (d / "test_metrics.json").write_text(json.dumps(
+                {"test_run": fold, "pr_auc": 0.81, "f1": 0.7}))
+
+    cache = root / "training" / "caches" / "full-sweep"
     cache.mkdir(parents=True)
     (cache / "meta.json").write_text(json.dumps({"runs": {"run1": {}, "run2": {}}}))
-    results = root / "training" / "results"
+    results = root / "training" / "reports" / "compare"
     results.mkdir(parents=True)
     (results / "comparison.png").write_bytes(b"\x89PNG\r\n\x1a\n")
 

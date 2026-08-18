@@ -5,10 +5,10 @@ import json
 import numpy as np
 import pytest
 
-from rocklabel.labeling import (LABEL_CLEAR, LABEL_IGNORE, LABEL_ROCK,
+from rocklabel.dataset.labeling import (LABEL_CLEAR, LABEL_IGNORE, LABEL_ROCK,
                                 inside_arena, label_points, label_rocks,
                                 points_in_rock)
-from rocklabel.neighborhoods import build_neighborhood_samples
+from rocklabel.dataset.neighborhoods import build_neighborhood_samples
 from rocklabel.labels import LabelSet, load_labels
 from rocklabel.config import load_config
 
@@ -223,7 +223,7 @@ def test_resuming_labels_pins_the_frame_before_accumulating(tmp_path, monkeypatc
     same frame the existing rocks were picked in."""
     import json
 
-    import rocklabel.labeler as labeler
+    import rocklabel.gui.labeler as labeler
 
     labels_path = tmp_path / "run.labels.json"
     labels_path.write_text(json.dumps({

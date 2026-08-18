@@ -8,7 +8,7 @@ import pytest
 
 from rocklabel.config import apply_overrides, config_hash, load_config
 from rocklabel.labels import SCHEMA_VERSION, LabelSet, load_labels
-from rocklabel.leveling import (
+from rocklabel.geometry.leveling import (
     ALREADY_LEVEL_DEG,
     LevelError,
     MODES,
@@ -20,7 +20,7 @@ from rocklabel.leveling import (
     solve_level,
 )
 from rocklabel.live.leveling import mount_rotation, roll_pitch_deg, tilt_deg
-from rocklabel.pipeline import LevelledScanStream, OdomScan, ScanStream
+from rocklabel.recording.pipeline import LevelledScanStream, OdomScan, ScanStream
 
 ROLL_DEG, PITCH_DEG = -3.0, 25.0
 
@@ -396,7 +396,7 @@ def _walk(tilt_deg_: float, n: int = 400, wobble: float = 0.0, seed: int = 0,
 
 
 def test_path_tilt_measures_an_unlevelled_frame():
-    from rocklabel.pipeline import path_tilt_deg
+    from rocklabel.recording.pipeline import path_tilt_deg
 
     measured = path_tilt_deg(_walk(31.0))
     assert measured is not None
@@ -406,7 +406,7 @@ def test_path_tilt_measures_an_unlevelled_frame():
 
 
 def test_path_tilt_stays_quiet_on_a_level_recording():
-    from rocklabel.pipeline import path_tilt_deg
+    from rocklabel.recording.pipeline import path_tilt_deg
 
     assert path_tilt_deg(_walk(0.0, wobble=0.02)) is None
     assert path_tilt_deg(_walk(2.0, wobble=0.01)) is None  # under the gate
@@ -414,7 +414,7 @@ def test_path_tilt_stays_quiet_on_a_level_recording():
 
 def test_path_tilt_will_not_call_it_on_a_rig_that_stayed_put():
     """Bobbing up and down on the spot is not evidence of anything."""
-    from rocklabel.pipeline import path_tilt_deg
+    from rocklabel.recording.pipeline import path_tilt_deg
 
     assert path_tilt_deg(_walk(31.0, span=0.2)) is None          # no travel
     assert path_tilt_deg(_walk(31.0, wobble=2.0, seed=3)) is None  # all noise
@@ -473,7 +473,7 @@ def test_auto_ignores_a_ceiling():
 
 
 def test_path_level_rotation_reads_the_tilt_off_the_poses():
-    from rocklabel.leveling import path_level_rotation
+    from rocklabel.geometry.leveling import path_level_rotation
 
     walk = np.column_stack([
         np.linspace(0.0, 4.0, 60),
@@ -492,7 +492,7 @@ def test_path_level_rotation_reads_the_tilt_off_the_poses():
 
 def test_auto_is_pinned_to_the_label_file_like_ground_is():
     """label and generate must not each measure their own angle."""
-    from rocklabel.leveling import pin_level_to_labels
+    from rocklabel.geometry.leveling import pin_level_to_labels
 
     record = {"mode": "auto", "roll_deg": 1.25, "pitch_deg": 28.5}
     pinned = pin_level_to_labels(_cfg(mode="auto"), record)
@@ -507,7 +507,7 @@ def test_labels_made_before_levelling_existed_keep_their_frame():
     world coordinates in the recording's own tilted frame. Re-measuring an
     angle now would slide every one of them off the rock it marks.
     """
-    from rocklabel.leveling import pin_level_to_labels
+    from rocklabel.geometry.leveling import pin_level_to_labels
 
     assert pin_level_to_labels(_cfg(mode="auto"), None)["level"]["mode"] == "off"
     assert pin_level_to_labels(_cfg(mode="ground"), None)["level"]["mode"] == "off"

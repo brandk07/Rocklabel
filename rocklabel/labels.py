@@ -3,7 +3,7 @@
 Schema v2 adds shaped labels. Every rock carries a bounding sphere
 (center + radius) regardless of shape, so consumers that only care about
 "roughly where / roughly how big" (driftcheck, preview, sample placement)
-work for all shapes. Exact membership tests live in rocklabel.labeling.
+work for all shapes. Exact membership tests live in rocklabel.dataset.labeling.
 
 Shapes:
   sphere   center [3], radius
@@ -20,7 +20,7 @@ the room. Measured on the comforter runs, 29% of clear samples contained
 structure over half a metre tall.
 
 Schema v4 adds an optional ``level``: the mount rotation that was applied to
-the cloud these centers were picked on (see :mod:`rocklabel.leveling`). It is
+the cloud these centers were picked on (see :mod:`rocklabel.geometry.leveling`). It is
 not geometry, it is a frame stamp - centers are world coordinates, so the
 generator has to be able to tell that it is replaying the recording the same
 way up. Absent (every v1-v3 file) means unlevelled.
@@ -95,7 +95,7 @@ class LabelSet:
     #: which is the pre-v3 behavior (every candidate center is eligible).
     arena: np.ndarray | None = None
     #: Frame stamp: the levelling applied to the cloud these centers were
-    #: picked on, as :func:`rocklabel.leveling.level_record` returns it.
+    #: picked on, as :func:`rocklabel.geometry.leveling.level_record` returns it.
     #: None = unlevelled, which is the pre-v4 behavior.
     level: dict | None = None
     #: Optional height slab, odom-frame (min, max) meters. The vertical

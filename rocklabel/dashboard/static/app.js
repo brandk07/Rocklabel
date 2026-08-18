@@ -1009,6 +1009,10 @@ function renderModels() {
   const box = $('#modelsBody');
   box.innerHTML = '';
   const runs = S.inv.runs;
+
+  // What is training right now goes first, above everything finished.
+  (S.inv.training_now || []).forEach((t) => box.appendChild(trainingCard(t)));
+
   if (!runs.length && !(S.inv.ablations || []).length) {
     box.appendChild(emptyState('No training runs yet',
       'Build the cache, then run Train one fold or Compare models.'));
@@ -1185,6 +1189,77 @@ function renderModels() {
   }
 }
 
+/* What is training at this moment.
+ *
+ * Reads only what training already writes to disk — history.csv per epoch,
+ * test_metrics.json when a fold ends — so it works for a sweep started from a
+ * terminal just as well as one launched from here. Both of the long sweeps
+ * this project has run were started from a terminal.
+ *
+ * Shows: which experiment, fold n of N, the validation curve of the fold in
+ * flight, how long is left, and which folds are done, waiting or stuck. */
+function trainingCard(t) {
+  const card = h('div', 'card');
+  const head = h('div', 'card-head');
+  const c = t.counts;
+  const done = c.done;
+  const live = t.in_flight.length;
+
+  head.appendChild(h('h2', null,
+    live ? `Training now · ${t.experiment}` : `Unfinished · ${t.experiment}`));
+  const eta = t.seconds_remaining
+    ? ` · about ${fmtDur(t.seconds_remaining)} left at ${fmtDur(t.seconds_per_fold)} a fold`
+    : '';
+  head.appendChild(h('p', 'card-sub',
+    `Fold ${done + live} of ${t.folds_total}${eta}. `
+    + `${done} finished, ${live} running, ${c.pending} not started`
+    + (c.stalled ? `, ${c.stalled} stopped partway` : '') + '.'));
+  card.appendChild(head);
+
+  const pct = t.folds_total ? Math.round((100 * done) / t.folds_total) : 0;
+  const meter = h('div', 'meter');
+  const fill = h('div', 'meter-fill');
+  fill.style.width = `${pct}%`;
+  meter.appendChild(fill);
+  card.appendChild(meter);
+
+  // The fold actually in flight, with its per-epoch validation curve.
+  t.in_flight.forEach((f) => {
+    const sub = h('div', 'card-sub');
+    const best = f.best_val_pr_auc == null ? '—' : f.best_val_pr_auc.toFixed(3);
+    sub.textContent = `Holding out ${f.fold} · epoch ${f.epochs_done}`
+      + (f.epochs_planned ? ` of ${f.epochs_planned}` : '')
+      + ` · best validation PR-AUC so far ${best}`
+      + (f.seconds_since_epoch != null
+        ? ` · last epoch ${fmtDur(f.seconds_since_epoch)} ago` : '');
+    card.appendChild(sub);
+    const pts = (f.curve || []).filter((r) => typeof r.val_pr_auc === 'number');
+    if (pts.length > 1) {
+      card.appendChild(window.Charts.lineChart({
+        x: pts.map((r) => r.epoch),
+        xLabel: 'epoch',
+        series: [
+          { name: 'val PR-AUC', values: pts.map((r) => r.val_pr_auc) },
+          { name: 'val loss', values: pts.map((r) => r.val_loss) },
+        ],
+        caption: 'How well this fold scores on data held back from its own training, '
+               + 'after each pass over the data. A curve that has gone flat means the '
+               + 'fold is about to stop early.',
+      }));
+    }
+  });
+
+  // Which folds are done, waiting, or stuck — one chip each.
+  const strip = h('div', 'chip-row');
+  t.folds.forEach((f) => {
+    const label = f.test_pr_auc != null
+      ? `${f.fold} ${f.test_pr_auc.toFixed(3)}` : f.fold;
+    strip.appendChild(h('span', `chip chip-${f.status}`, label));
+  });
+  card.appendChild(strip);
+  return card;
+}
+
 /* One ablation suite: how much of the matrix is filled in, and how the
  * settings currently rank. Deliberately shows progress rather than hiding an
  * unfinished sweep — a 121-run matrix is an overnight job, and "34 of 121" is
@@ -1198,7 +1273,7 @@ function ablationCard(suite) {
     `${suite.runs_done} of ${suite.runs_total} trainings finished (${pct}%) across `
     + `${suite.arms.length} settings and ${suite.folds} folds. `
     + (suite.reported
-      ? 'Figures and tables are below and in training/results_ablate/.'
+      ? 'Figures and tables are below and in training/reports/.'
       : 'Run Ablation sweep with "Report only" ticked to build the tables from '
         + 'what has finished so far.')));
   card.appendChild(head);
@@ -1382,14 +1457,69 @@ function sourceOptions(source) {
   const map = {
     recordings: S.inv.recordings, labels: S.inv.labels, datasets: S.inv.datasets,
     checkpoints: S.inv.checkpoints, configs: S.inv.configs, cache_runs: S.inv.cache_runs,
-    caches: S.inv.caches,
+    caches: S.inv.caches, profiles: S.inv.profiles,
   };
   const list = map[source];
   if (!list) return null;
-  // disabled/note are optional — only the checkpoint list sets them so far.
+  // group/archived/best_of_experiment are optional — the checkpoint list sets
+  // all three, the recording and dataset lists set only group.
   return list.map((x) => ({
-    label: x.name, value: x.path, disabled: !!x.disabled, note: x.note || '',
+    label: x.name,
+    value: x.path,
+    group: x.group || '',
+    disabled: !!x.disabled,
+    note: x.note || '',
+    archived: !!x.archived,
+    best: !!x.best_of_experiment,
   }));
+}
+
+/* Fill a <select> from sourceOptions, keeping the groups.
+ *
+ * The checkpoint picker was a flat alphabetical list of 354 paths, which is
+ * not something anyone can choose from. Options carry the run that produced
+ * them now, so they go into <optgroup>s — and the best checkpoint of each
+ * experiment is lifted into a group at the top, because that is the one
+ * wanted nine times out of ten. Archived runs are hidden behind a toggle:
+ * they are old settings kept for the record, not candidates. */
+function fillSelect(sel, opts, showArchived) {
+  sel.innerHTML = '';
+  const blank = h('option', null, opts.length ? 'Choose…' : 'none available');
+  blank.value = '';
+  sel.appendChild(blank);
+
+  const visible = opts.filter((o) => showArchived || !o.archived);
+  const mkOption = (o) => {
+    const opt = h('option', null, o.note ? `${o.label} — ${o.note}` : o.label);
+    opt.value = o.value;
+    opt.disabled = o.disabled;
+    return opt;
+  };
+
+  const best = visible.filter((o) => o.best);
+  if (best.length > 1) {
+    const grp = h('optgroup');
+    grp.label = '★ Best of each experiment';
+    best.forEach((o) => {
+      const opt = mkOption(o);
+      opt.textContent = `${o.group} · ${o.label}`;
+      grp.appendChild(opt);
+    });
+    sel.appendChild(grp);
+  }
+
+  const groups = new Map();
+  visible.forEach((o) => {
+    if (!groups.has(o.group)) groups.set(o.group, []);
+    groups.get(o.group).push(o);
+  });
+  groups.forEach((items, name) => {
+    if (!name) { items.forEach((o) => sel.appendChild(mkOption(o))); return; }
+    const grp = h('optgroup');
+    grp.label = name;
+    items.forEach((o) => grp.appendChild(mkOption(o)));
+    sel.appendChild(grp);
+  });
 }
 
 function buildForm(cmd, prefill) {
@@ -1523,18 +1653,20 @@ function field(p, prefill) {
     const opts = sourceOptions(p.source);
     if (opts && opts.length) {
       const sel = h('select', 'input');
-      const blank = h('option', null, opts.length ? 'Choose…' : 'none available');
-      blank.value = '';
-      sel.appendChild(blank);
-      opts.forEach((o) => {
-        const opt = h('option', null, o.note ? `${o.label} — ${o.note}` : o.label);
-        opt.value = o.value;
-        opt.disabled = o.disabled;
-        sel.appendChild(opt);
-      });
+      fillSelect(sel, opts, false);
       row.appendChild(sel);
       const input = textInput(p, initial);
       row.appendChild(input);
+      // Only offer the toggle where there is something archived to show.
+      if (opts.some((o) => o.archived)) {
+        const tog = h('label', 'checkline');
+        const cb = h('input');
+        cb.type = 'checkbox';
+        cb.onchange = () => fillSelect(sel, opts, cb.checked);
+        tog.appendChild(cb);
+        tog.appendChild(h('span', 'muted', 'show archived runs'));
+        row.appendChild(tog);
+      }
       sel.onchange = () => {
         if (!sel.value) return;
         // Repeatable fields append; single-value fields replace.

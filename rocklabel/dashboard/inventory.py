@@ -26,20 +26,28 @@ import shutil
 import threading
 from datetime import datetime, timezone
 
-#: Conventional layout (README: "this repo keeps three top-level folders").
+#: The project layout, one entry per folder anything here reads.
+#:
+#: Every derived thing sits under a root that says what produced it:
+#: ``datasets/<profile>/`` says how frames were cut, ``training/caches/<profile>/``
+#: says which datasets were pooled, ``training/experiments/<experiment>/<arm>/<fold>/``
+#: says which run trained a checkpoint, and ``training/reports/<experiment>/``
+#: holds what that experiment concluded.
 DIRS = {
     "recordings": "recordings",
     "labels": "labels",
     "datasets": "datasets",
     "training": "training",
-    "runs": os.path.join("training", "runs"),
-    "cache": os.path.join("training", "cache"),
-    "results": os.path.join("training", "results"),
+    "experiments": os.path.join("training", "experiments"),
+    "caches": os.path.join("training", "caches"),
+    "reports": os.path.join("training", "reports"),
     "exported": os.path.join("training", "exported"),
-    "ablate": os.path.join("training", "ablate"),
-    "results_ablate": os.path.join("training", "results_ablate"),
-    "results_reflect": os.path.join("training", "results_reflect"),
 }
+
+#: Experiment folders holding flat ``<model>_loro_<run>`` directories rather
+#: than the ``<arm>/<fold>`` matrix a sweep writes. They are `compare` output,
+#: not ablation suites, and the suite progress view must not count them.
+FLAT_EXPERIMENTS = ("compare", "compare-fused")
 
 _info_cache: dict[tuple, dict] = {}
 _info_lock = threading.Lock()
@@ -100,6 +108,10 @@ def recordings(root: str) -> list[dict]:
                 "name": name,
                 "path": rel,
                 "stem": name[:-5],
+                # Folder under recordings/ — "volleyball/reslam", "archive/misc".
+                # This is what separates the live project from four years of
+                # unrelated captures in every picker and list.
+                "group": _group_of(full, os.path.join(root, DIRS["recordings"])),
                 "size": st["size"],
                 "mtime": st["mtime"],
                 "modified": _iso(st["mtime"]),
@@ -109,12 +121,25 @@ def recordings(root: str) -> list[dict]:
     return out
 
 
+def _group_of(full: str, base: str) -> str:
+    """The folder a file sits in, relative to its root ("volleyball/reslam")."""
+    rel = os.path.relpath(os.path.dirname(full), base)
+    return "" if rel == "." else rel.replace(os.sep, "/")
+
+
 def _labels_path_for(root: str, stem: str) -> str | None:
-    """Where `label` would have written this recording's labels, if it exists."""
-    for cand in (os.path.join(DIRS["labels"], f"{stem}.labels.json"),
-                 os.path.join(DIRS["recordings"], f"{stem}.labels.json")):
-        if os.path.exists(os.path.join(root, cand)):
-            return cand
+    """This recording's label file, wherever under ``labels/`` it sits.
+
+    Searched rather than joined: labels are foldered by project now, so the
+    file for a volleyball recording is at ``labels/volleyball/<stem>.labels.json``
+    and a flat join would report every recording in the project as unlabelled.
+    """
+    want = f"{stem}.labels.json"
+    for folder in (DIRS["labels"], DIRS["recordings"]):
+        base = os.path.join(root, folder)
+        for dirpath, _dirs, names in os.walk(base):
+            if want in names:
+                return os.path.relpath(os.path.join(dirpath, want), root)
     return None
 
 
@@ -125,11 +150,15 @@ def labels(root: str) -> list[dict]:
         base = os.path.join(root, folder)
         if not os.path.isdir(base):
             continue
-        for name in sorted(os.listdir(base)):
-            if not name.endswith(".labels.json") or name in seen:
+        found = []
+        for dirpath, _dirs, names in os.walk(base):
+            found += [os.path.join(dirpath, n) for n in names
+                      if n.endswith(".labels.json")]
+        for full in sorted(found):
+            name = os.path.basename(full)
+            if name in seen:
                 continue
             seen.add(name)
-            full = os.path.join(base, name)
             data = _read_json(full) or {}
             rocks = data.get("rocks") or []
             shapes: dict[str, int] = {}
@@ -142,6 +171,7 @@ def labels(root: str) -> list[dict]:
                 # The filename's stem, which is what a rename edits — normally
                 # equal to run_id, but the file on disk is the thing that moves.
                 "stem": name[: -len(".labels.json")],
+                "group": _group_of(full, base),
                 "run_id": data.get("run_id", name.replace(".labels.json", "")),
                 "mcap_file": data.get("mcap_file", ""),
                 "rock_count": len(rocks),
@@ -164,20 +194,45 @@ def labels(root: str) -> list[dict]:
     return out
 
 
+def _dataset_dirs(base: str) -> list[str]:
+    """Every generated dataset under ``datasets/``, at any depth.
+
+    Datasets live one folder per generation profile now
+    (``datasets/full-sweep/volleyball``), so a listdir of the top level would
+    return the profile names and nothing else. A manifest.json is what makes a
+    folder a dataset, so that is what this looks for.
+    """
+    out = []
+    for dirpath, dirs, names in os.walk(base):
+        if "manifest.json" in names:
+            out.append(dirpath)
+            dirs[:] = []           # never descend into points/ bev/ seg/
+        else:
+            dirs[:] = [d for d in sorted(dirs) if d not in ("points", "bev", "seg")]
+    return sorted(out)
+
+
 def datasets(root: str) -> list[dict]:
+    from ..profiles import identify as identify_profile
+
     base = os.path.join(root, DIRS["datasets"])
     out = []
     if not os.path.isdir(base):
         return out
-    for name in sorted(os.listdir(base)):
-        full = os.path.join(base, name)
-        if not os.path.isdir(full):
-            continue
+    for full in _dataset_dirs(base):
+        rel = os.path.relpath(full, base)
+        name = rel.replace(os.sep, "/")
         manifest = _read_json(os.path.join(full, "manifest.json"))
         size, files = _dir_size(full)
         entry = {
             "name": name,
             "path": os.path.relpath(full, root),
+            # How this dataset's frames were cut. Named in the manifest for
+            # anything generated since profiles existed; recovered from the
+            # config fingerprint for everything older, so an old dataset still
+            # says on its face what it is rather than showing up blank.
+            "profile": "",
+            "group": rel.split(os.sep)[0] if os.sep in rel else "",
             "size": size,
             "files": files,
             "mtime": _stat(full)["mtime"],
@@ -192,6 +247,9 @@ def datasets(root: str) -> list[dict]:
             "generator": {},
         }
         if manifest:
+            entry["profile"] = (manifest.get("profile")
+                                or identify_profile(manifest.get("config_hash", ""))
+                                or "")
             entry["config_hash"] = (manifest.get("config_hash") or "")[:12]
             entry["generated"] = manifest.get("generated", "")
             entry["generator"] = (manifest.get("config") or {}).get("generator", {})
@@ -253,7 +311,7 @@ def _target(root: str, rel_path: str) -> tuple[str, str, list[str]]:
     """Classify a rename/delete target: ``(kind, stem, paths that move together)``.
 
     ``kind`` is ``"dataset"`` or ``"run"``. A recording and the label file named
-    after it are one run: :func:`rocklabel.labeler.default_labels_path` derives
+    after it are one run: :func:`rocklabel.gui.labeler.default_labels_path` derives
     the label filename from the mcap stem, ``label`` rewrites the ``run_id`` and
     ``mcap_file`` inside it from that same stem on every session, and the
     dashboard links the two by it. Rename one alone and the pair is orphaned —
@@ -270,9 +328,16 @@ def _target(root: str, rel_path: str) -> tuple[str, str, list[str]]:
     rec_base = os.path.join(root_n, DIRS["recordings"])
     lab_base = os.path.join(root_n, DIRS["labels"])
 
-    if os.path.dirname(full) == ds_base:
+    # A dataset is any folder under datasets/ carrying a manifest.json. It used
+    # to have to be a direct child, which stopped being true when datasets moved
+    # under datasets/<profile>/ — the browser could then name a folder the
+    # gate refused to touch.
+    if _inside(full, ds_base) and full != ds_base:
         if not os.path.isdir(full):
             raise FileNotFoundError(rel_path)
+        if not os.path.exists(os.path.join(full, "manifest.json")):
+            raise ValueError("only a generated dataset folder (one holding a "
+                             "manifest.json) can be renamed or deleted")
         return "dataset", os.path.basename(full), [full]
 
     name = os.path.basename(full)
@@ -457,75 +522,157 @@ def _history(path: str) -> list[dict]:
 
 
 def runs(root: str) -> list[dict]:
-    base = os.path.join(root, DIRS["runs"])
+    """The flat ``<model>_loro_<run>`` folds that `train` and `compare` write."""
     out = []
-    if not os.path.isdir(base):
-        return out
-    for name in sorted(os.listdir(base)):
-        full = os.path.join(base, name)
-        if not os.path.isdir(full):
+    bases = [os.path.join(root, DIRS["experiments"], e) for e in FLAT_EXPERIMENTS]
+    for base in bases:
+        if not os.path.isdir(base):
             continue
-        cfg = _read_json(os.path.join(full, "config.json")) or {}
-        metrics = _read_json(os.path.join(full, "test_metrics.json")) or {}
-        best = os.path.join(full, "best.pt")
-        history = _history(os.path.join(full, "history.csv"))
-        out.append({
-            "name": name,
-            "path": os.path.relpath(full, root),
-            "model": cfg.get("model") or metrics.get("model") or "",
-            "test_run": cfg.get("test_run") or metrics.get("test_run") or "",
-            "train_runs": cfg.get("train_runs") or [],
-            "epochs_configured": cfg.get("epochs"),
-            "epochs_run": len(history),
-            "batch": cfg.get("batch"),
-            "lr": cfg.get("lr"),
-            "config": cfg,
-            "metrics": metrics,
-            "complete": bool(metrics),
-            "checkpoint": os.path.relpath(best, root) if os.path.exists(best) else None,
-            "checkpoint_size": _stat(best)["size"] if os.path.exists(best) else 0,
-            "mtime": _stat(best if os.path.exists(best) else full)["mtime"],
-            "history": history,
-            "exported": os.path.isdir(os.path.join(root, DIRS["exported"], name)),
-        })
-    out.sort(key=lambda r: (r["model"], r["test_run"]))
+        for name in sorted(os.listdir(base)):
+            entry = _run_entry(root, base, name)
+            if entry:
+                out.append(entry)
+    out.sort(key=lambda r: (r["experiment"], r["model"], r["test_run"]))
     return out
 
 
-def checkpoints(root: str) -> list[dict]:
-    """Every .pt the run pickers can offer, best.pt first.
+def _run_entry(root: str, base: str, name: str) -> dict | None:
+    """One flat ``<model>_loro_<run>`` fold directory, or None if it is not one."""
+    full = os.path.join(base, name)
+    if not os.path.isdir(full):
+        return None
+    cfg = _read_json(os.path.join(full, "config.json")) or {}
+    metrics = _read_json(os.path.join(full, "test_metrics.json")) or {}
+    best = os.path.join(full, "best.pt")
+    history = _history(os.path.join(full, "history.csv"))
+    return {
+        "name": name,
+        "path": os.path.relpath(full, root),
+        "experiment": os.path.basename(base),
+        "model": cfg.get("model") or metrics.get("model") or "",
+        "test_run": cfg.get("test_run") or metrics.get("test_run") or "",
+        "train_runs": cfg.get("train_runs") or [],
+        "epochs_configured": cfg.get("epochs"),
+        "epochs_run": len(history),
+        "batch": cfg.get("batch"),
+        "lr": cfg.get("lr"),
+        "config": cfg,
+        "metrics": metrics,
+        "complete": bool(metrics),
+        "checkpoint": os.path.relpath(best, root) if os.path.exists(best) else None,
+        "checkpoint_size": _stat(best)["size"] if os.path.exists(best) else 0,
+        "mtime": _stat(best if os.path.exists(best) else full)["mtime"],
+        "history": history,
+        "exported": os.path.isdir(os.path.join(root, DIRS["exported"], name)),
+    }
 
-    last.pt is listed but flagged unusable: it is the resume point, carrying
+
+#: How a fold directory names the recording it held out.
+_FOLD_PREFIX = "loro_"
+
+
+def _fold_of(run_dir_name: str) -> str:
+    """The held-out recording a fold directory is named after.
+
+    Handles both spellings in the project: a sweep writes ``loro_<run>`` inside
+    an arm folder, while `compare` writes ``<model>_loro_<run>`` flat.
+    """
+    if _FOLD_PREFIX in run_dir_name:
+        return run_dir_name.split(_FOLD_PREFIX, 1)[1]
+    return run_dir_name
+
+
+def _checkpoint_dirs(base: str) -> list[str]:
+    """Every directory under ``base`` holding a checkpoint, at any depth."""
+    out = []
+    for dirpath, dirs, names in os.walk(base):
+        if "best.pt" in names or "last.pt" in names:
+            out.append(dirpath)
+            dirs[:] = []
+        else:
+            dirs[:] = sorted(dirs)
+    return sorted(out)
+
+
+def checkpoints(root: str) -> list[dict]:
+    """Every .pt the run pickers can offer, grouped by the run that made it.
+
+    This used to be a flat alphabetical list of every checkpoint in the project
+    — 354 entries with nothing but a path to tell them apart, which is not a
+    picker anyone can choose from. So each entry now carries the three things
+    you actually pick on: which experiment and arm produced it, which recording
+    it was tested against, and what it scored. Entries are sorted best-first
+    inside their group, and the top scorer of each experiment is flagged so the
+    browser can offer "just give me the good one" without scanning the list.
+
+    ``last.pt`` is listed but flagged unusable: it is the resume point, carrying
     optimizer/scheduler state but none of the config, generator settings or
     threshold every consumer of this list needs, so loading one raises
     KeyError. Showing it greyed out beats hiding it — the file is on disk and
     people go looking for it.
+
+    ``.superseded-*`` directories are marked ``archived`` rather than dropped:
+    they are old settings kept for the record, and the browser hides them
+    behind a toggle instead of the list pretending they do not exist.
     """
-    out = []
-    # training/runs/<run>/ plus training/ablate/<suite>/<arm>/<fold>/. An
-    # ablation arm's checkpoints are ordinary checkpoints - a shape-only model
-    # is exactly the thing you want to replay against the reflectivity one - so
-    # they belong in the same picker, just named by the arm that produced them.
-    bases = [(os.path.join(root, DIRS["runs"]), 1),
-             (os.path.join(root, DIRS["ablate"]), 3)]
-    for base, depth in bases:
-        if not os.path.isdir(base):
-            continue
-        for run_dir in sorted(_dirs_at_depth(base, depth)):
-            name = os.path.relpath(run_dir, base).replace(os.sep, "/")
-            for ck in ("best.pt", "last.pt"):
-                full = os.path.join(run_dir, ck)
-                if os.path.exists(full):
-                    st = _stat(full)
-                    out.append({
-                        "name": f"{name}/{ck}",
-                        "path": os.path.relpath(full, root),
-                        "size": st["size"],
-                        "mtime": st["mtime"],
-                        "disabled": ck == "last.pt",
-                        "note": "resume point, not loadable" if ck == "last.pt" else "",
-                    })
-    out.sort(key=lambda c: (not c["name"].endswith("best.pt"), c["name"]))
+    base = os.path.join(root, DIRS["experiments"])
+    out: list[dict] = []
+    if not os.path.isdir(base):
+        return out
+
+    for run_dir in _checkpoint_dirs(base):
+        parts = os.path.relpath(run_dir, base).split(os.sep)
+        experiment = parts[0]
+        # <experiment>/<arm>/<fold> for a sweep; <experiment>/<model>_loro_<run>
+        # for a compare run, whose arm is the model named in its own config.
+        if len(parts) >= 3:
+            arm, fold_dir = parts[1], parts[-1]
+        else:
+            fold_dir = parts[-1]
+            arm = fold_dir.split(_FOLD_PREFIX, 1)[0].rstrip("_") or "run"
+        archived = any(".superseded-" in p for p in parts)
+        metrics = _read_json(os.path.join(run_dir, "test_metrics.json")) or {}
+        pr_auc = metrics.get("pr_auc")
+        fold = metrics.get("test_run") or _fold_of(fold_dir)
+
+        for ck in ("best.pt", "last.pt"):
+            full = os.path.join(run_dir, ck)
+            if not os.path.exists(full):
+                continue
+            st = _stat(full)
+            score = f" · PR-AUC {pr_auc:.3f}" if pr_auc is not None else " · not yet scored"
+            out.append({
+                # What the dropdown shows inside its group: the recording this
+                # model has never seen, and how well it did on it.
+                "name": f"held out {fold}{score}",
+                "path": os.path.relpath(full, root),
+                "group": f"{experiment} · {arm}" + (" · archived" if archived else ""),
+                "experiment": experiment,
+                "arm": arm,
+                "fold": fold,
+                "pr_auc": pr_auc,
+                "archived": archived,
+                "size": st["size"],
+                "mtime": st["mtime"],
+                "modified": _iso(st["mtime"]),
+                "best_of_experiment": False,
+                "disabled": ck == "last.pt",
+                "note": "resume point, not loadable" if ck == "last.pt" else "",
+            })
+
+    # Best-first inside a group; groups in name order, live ones before archives.
+    out.sort(key=lambda c: (
+        c["archived"], c["group"], c["disabled"],
+        -(c["pr_auc"] if c["pr_auc"] is not None else -1.0), c["fold"],
+    ))
+    # The shortcut: for each experiment, the single loadable checkpoint that
+    # scored highest. Usually the only one anybody wants.
+    for experiment in {c["experiment"] for c in out}:
+        pool = [c for c in out if c["experiment"] == experiment
+                and not c["disabled"] and not c["archived"]
+                and c["pr_auc"] is not None]
+        if pool:
+            max(pool, key=lambda c: c["pr_auc"])["best_of_experiment"] = True
     return out
 
 
@@ -574,14 +721,16 @@ def ablations(root: str) -> list[dict]:
     """
     from ..train.ablate import SUITES  # torch-free
 
-    base = os.path.join(root, DIRS["ablate"])
+    base = os.path.join(root, DIRS["experiments"])
     if not os.path.isdir(base):
         return []
     n_folds = len(cache_runs(root))
     out = []
     for suite in sorted(os.listdir(base)):
         sdir = os.path.join(base, suite)
-        if not os.path.isdir(sdir):
+        # compare/ holds flat fold directories, not an arm x fold matrix; the
+        # runs table already describes those.
+        if not os.path.isdir(sdir) or suite in FLAT_EXPERIMENTS:
             continue
         declared = SUITES.get(suite)
         # Names from the definition where there is one, so arms that have not
@@ -607,7 +756,7 @@ def ablations(root: str) -> list[dict]:
                 "pr_auc": round(sum(scores) / len(scores), 4) if scores else None,
             })
         summary = _read_json(
-            os.path.join(root, DIRS["results_ablate"], suite, "summary.json")) or {}
+            os.path.join(root, DIRS["reports"], suite, "summary.json")) or {}
         folds = n_folds or len(folds_seen)
         out.append({
             "name": suite,
@@ -631,9 +780,28 @@ def configs(root: str) -> list[dict]:
     return out
 
 
+def profiles(root: str) -> list[dict]:
+    """The generation profiles, with how many datasets each has produced."""
+    from ..profiles import to_json
+
+    built = {}
+    for d in datasets(root):
+        if d["profile"]:
+            built[d["profile"]] = built.get(d["profile"], 0) + len(d["runs"])
+    return [p | {"name": p["name"], "path": p["name"],
+                 "runs_built": built.get(p["name"], 0)} for p in to_json()]
+
+
+def default_cache_dir(root: str) -> str:
+    """The cache the training commands read when nothing says otherwise."""
+    from ..profiles import DEFAULT_PROFILE
+
+    return os.path.join(root, DIRS["caches"], DEFAULT_PROFILE)
+
+
 def cache_runs(root: str) -> list[dict]:
-    """Run ids present in training/cache — the valid --test-run values."""
-    meta = _read_json(os.path.join(root, DIRS["cache"], "meta.json")) or {}
+    """Run ids in the default cache — the valid --test-run values."""
+    meta = _read_json(os.path.join(default_cache_dir(root), "meta.json")) or {}
     return [{"name": r, "path": r} for r in sorted((meta.get("runs") or {}).keys())]
 
 
@@ -645,7 +813,9 @@ def caches(root: str) -> list[dict]:
     the batch-sized one rather than a rebuild of it. A picker that only ever
     offered training/cache would silently point a run at the wrong data.
     """
-    base = os.path.join(root, "training")
+    from ..profiles import identify as identify_profile
+
+    base = os.path.join(root, DIRS["caches"])
     if not os.path.isdir(base):
         return []
     out = []
@@ -658,6 +828,12 @@ def caches(root: str) -> list[dict]:
         rel = os.path.relpath(d, root)
         out.append({
             "name": rel, "path": rel,
+            # Which way the frames in this cache were cut, and which datasets
+            # were pooled to make it. Training refuses to mix profiles, so this
+            # is the field that says whether a cache is the right one.
+            "profile": (meta.get("profile")
+                        or identify_profile(meta.get("config_hash", "")) or ""),
+            "datasets": [os.path.basename(x) for x in (meta.get("datasets") or [])],
             "runs": sorted(runs_meta.keys()),
             "run_count": len(runs_meta),
             "samples": sum(r.get("n", 0) for r in runs_meta.values()),
@@ -671,7 +847,8 @@ def caches(root: str) -> list[dict]:
 
 
 def results_summary(root: str) -> dict:
-    return _read_json(os.path.join(root, DIRS["results"], "summary.json")) or {}
+    return _read_json(os.path.join(root, DIRS["reports"], "compare",
+                                   "summary.json")) or {}
 
 
 def _pngs_in(base: str, root: str, group: str, blurb: str) -> list[dict]:
@@ -683,25 +860,193 @@ def _pngs_in(base: str, root: str, group: str, blurb: str) -> list[dict]:
             for n in sorted(os.listdir(base)) if n.endswith(".png")]
 
 
+#: Prose for the report folders that are not an ablation suite.
+_REPORT_BLURBS = {
+    "compare": ("Model comparison", "Written by Compare models / Regenerate report."),
+    "reflect": ("Reflectivity check",
+                "Written by Reflectivity check — measured off the cache, no training."),
+}
+
+
 def result_figures(root: str) -> list[dict]:
     """Every report figure on disk, tagged with which report wrote it.
 
-    Three reports write figures now, not one, so a flat list would mix a
-    reflectivity histogram in among the confusion matrices with nothing saying
-    which command produced which. The ``group`` field is what the Overview page
-    sections on.
+    Several reports write figures, so a flat list would mix a reflectivity
+    histogram in among the confusion matrices with nothing saying which command
+    produced which. The ``group`` field is what the Overview page sections on.
     """
-    out = _pngs_in(os.path.join(root, DIRS["results"]), root, "Model comparison",
-                   "Written by Compare models / Regenerate report.")
-    out += _pngs_in(os.path.join(root, DIRS["results_reflect"]), root,
-                    "Reflectivity check",
-                    "Written by Reflectivity check — measured off the cache, no training.")
-    ab = os.path.join(root, DIRS["results_ablate"])
-    if os.path.isdir(ab):
-        for suite in sorted(os.listdir(ab)):
-            out += _pngs_in(os.path.join(ab, suite), root, f"Ablation · {suite}",
-                            f"Written by Ablation sweep --suite {suite}.")
+    base = os.path.join(root, DIRS["reports"])
+    out: list[dict] = []
+    if not os.path.isdir(base):
+        return out
+    for dirpath, dirs, _names in os.walk(base):
+        dirs[:] = sorted(dirs)
+        rel = os.path.relpath(dirpath, base)
+        if rel == ".":
+            continue
+        top = rel.split(os.sep)[0]
+        known = _REPORT_BLURBS.get(top)
+        if known:
+            title, blurb = known
+            if rel != top:  # e.g. compare/<channel selection>
+                title = f"{title} · {rel.split(os.sep, 1)[1]}"
+        else:
+            title = "Experiment · " + rel.replace(os.sep, " · ")
+            blurb = f"Written by Ablation sweep --suite {top}."
+        out += _pngs_in(dirpath, root, title, blurb)
     return out
+
+
+# --------------------------------------------------------------------------- #
+# what is training right now
+# --------------------------------------------------------------------------- #
+#: A fold whose history.csv has been touched inside this many seconds is
+#: treated as in flight. Generous on purpose: an epoch on the segmenter takes
+#: a couple of minutes, and a fold that has gone quiet for longer than this is
+#: better reported as stalled than as running.
+LIVE_WINDOW_S = 900.0
+
+
+def _fold_state(run_dir: str, now: float) -> dict:
+    """How far one fold got, read off the files training already writes.
+
+    Nothing was added to the training loop for this. ``history.csv`` gains a
+    row per epoch, ``test_metrics.json`` appears when the fold finishes, and
+    the modification time of the first is what says whether anything is still
+    happening.
+    """
+    hist = _history(os.path.join(run_dir, "history.csv"))
+    metrics = _read_json(os.path.join(run_dir, "test_metrics.json"))
+    cfg = _read_json(os.path.join(run_dir, "config.json")) or {}
+    h_stat = _stat(os.path.join(run_dir, "history.csv"))
+    age = now - h_stat["mtime"] if h_stat["mtime"] else None
+
+    if metrics:
+        status = "done"
+    elif not hist:
+        status = "pending"
+    elif age is not None and age <= LIVE_WINDOW_S:
+        status = "running"
+    else:
+        status = "stalled"
+
+    # Best validation score so far, and how long the fold has been going.
+    val = [r.get("val_pr_auc") for r in hist if isinstance(r.get("val_pr_auc"), float)]
+    started = _stat(os.path.join(run_dir, "config.json"))["mtime"]
+    return {
+        "fold": metrics.get("test_run") if metrics else (cfg.get("test_run")
+                or _fold_of(os.path.basename(run_dir))),
+        "path": run_dir,
+        "status": status,
+        "epochs_done": len(hist),
+        "epochs_planned": cfg.get("epochs"),
+        "best_val_pr_auc": max(val) if val else None,
+        "test_pr_auc": (metrics or {}).get("pr_auc"),
+        # The per-epoch validation curve for whatever is in flight. Trimmed to
+        # the last 200 points so a long fold cannot bloat every poll.
+        "curve": [{"epoch": r.get("epoch"), "train_loss": r.get("train_loss"),
+                   "val_loss": r.get("val_loss"), "val_pr_auc": r.get("val_pr_auc")}
+                  for r in hist[-200:]],
+        "seconds_since_epoch": round(age, 1) if age is not None else None,
+        "elapsed_s": round(h_stat["mtime"] - started, 1) if started and h_stat["mtime"] else None,
+        "mtime": h_stat["mtime"],
+    }
+
+
+def training_activity(root: str) -> list[dict]:
+    """Which experiments are training, how far along, and what is left.
+
+    Works for a sweep launched from a terminal as well as one launched from the
+    dashboard, because it reads the run directories rather than a job record —
+    and both long sweeps this project has run were started from a terminal.
+
+    An experiment appears here when anything under it is running or stalled, or
+    when it is unfinished; a finished one drops off, which is what keeps the
+    panel about the present.
+    """
+    import time
+
+    base = os.path.join(root, DIRS["experiments"])
+    now = time.time()
+    out = []
+    if not os.path.isdir(base):
+        return out
+
+    for experiment in sorted(os.listdir(base)):
+        edir = os.path.join(base, experiment)
+        if not os.path.isdir(edir):
+            continue
+        arms: dict[str, list[dict]] = {}
+        for run_dir in _checkpoint_dirs(edir) + _unstarted_dirs(edir):
+            if ".superseded-" in run_dir:
+                continue
+            parts = os.path.relpath(run_dir, edir).split(os.sep)
+            arm = parts[0] if len(parts) >= 2 else (
+                parts[-1].split(_FOLD_PREFIX, 1)[0].rstrip("_") or "run")
+            arms.setdefault(arm, []).append(_fold_state(run_dir, now))
+
+        folds = [f for group in arms.values() for f in group]
+        if not folds:
+            continue
+        counts = {k: sum(1 for f in folds if f["status"] == k)
+                  for k in ("running", "stalled", "done", "pending")}
+        # Folds the suite declares but that have not been started at all have
+        # no directory to be read, so disk alone would report the first hour of
+        # an overnight sweep as finished. The denominator comes from the suite
+        # definition and the cache, the same way the ablation progress table
+        # gets it.
+        counts["pending"] += max(_declared_total(root, experiment) - len(folds), 0)
+        # A finished experiment is not news; it belongs in the reports list.
+        if counts["running"] == 0 and counts["stalled"] == 0 and counts["pending"] == 0:
+            continue
+        live = [f for f in folds if f["status"] == "running"]
+        # Rough finish estimate from how long the finished folds actually took.
+        done_times = [f["elapsed_s"] for f in folds
+                      if f["status"] == "done" and f["elapsed_s"]]
+        per_fold = sum(done_times) / len(done_times) if done_times else None
+        remaining = counts["pending"] + counts["running"] + counts["stalled"]
+        out.append({
+            "experiment": experiment,
+            "path": os.path.relpath(edir, root),
+            "arms": sorted(arms),
+            "folds_total": max(len(folds), _declared_total(root, experiment)),
+            "counts": counts,
+            "in_flight": sorted(live, key=lambda f: -f["mtime"]),
+            "seconds_per_fold": round(per_fold, 1) if per_fold else None,
+            "seconds_remaining": round(per_fold * remaining, 1) if per_fold else None,
+            "folds": sorted(({k: v for k, v in f.items() if k != "curve"}
+                             for f in folds), key=lambda f: f["fold"]),
+            "updated": _iso(max((f["mtime"] for f in folds), default=0.0)),
+        })
+    return out
+
+
+def _declared_total(root: str, experiment: str) -> int:
+    """How many (arm, fold) runs this experiment is supposed to produce, or 0."""
+    from ..train.ablate import SUITES  # torch-free
+
+    declared = SUITES.get(experiment)
+    if not declared:
+        return 0
+    return len(declared["arms"]) * len(cache_runs(root))
+
+
+def _unstarted_dirs(base: str) -> list[str]:
+    """Fold directories created but not yet holding a checkpoint.
+
+    A fold writes config.json the moment it starts and best.pt only once an
+    epoch improves, so without this a sweep's very first minutes would show up
+    as nothing happening at all.
+    """
+    out = []
+    for dirpath, dirs, names in os.walk(base):
+        if "config.json" in names or "arm.json" in names:
+            if "best.pt" not in names and "last.pt" not in names:
+                out.append(dirpath)
+            dirs[:] = []
+        else:
+            dirs[:] = sorted(dirs)
+    return sorted(out)
 
 
 # --------------------------------------------------------------------------- #
@@ -735,7 +1080,7 @@ def recording_info(root: str, rel_path: str) -> dict:
 
 
 def _probe_recording(full: str) -> dict:
-    from rocklabel.mcap_io import read_info
+    from rocklabel.recording.mcap_io import read_info
 
     out: dict = {"path": full, "ok": False, "error": "", "topics": [],
                  "format": "unknown", "duration_s": 0.0, "messages": 0}
@@ -817,8 +1162,10 @@ def snapshot(root: str) -> dict:
         "runs": rns,
         "checkpoints": checkpoints(root),
         "configs": configs(root),
+        "profiles": profiles(root),
         "cache_runs": cache_runs(root),
         "caches": caches(root),
+        "training_now": training_activity(root),
         "figures": result_figures(root),
         "summary": results_summary(root),
         "ablations": abl,

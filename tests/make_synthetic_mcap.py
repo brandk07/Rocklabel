@@ -253,7 +253,7 @@ def write_synthetic_lidarrig_mcap(path: str, seed: int = 0, n_frames: int = N_SC
     embedded world pose per frame (no TF), RSSI-style u16-range intensity."""
     from mcap.writer import Writer as McapWriter
 
-    from rocklabel.lidarrig_io import SCHEMA_NAME, TOPIC, encode_frame
+    from rocklabel.recording.lidarrig_io import SCHEMA_NAME, TOPIC, encode_frame
 
     rng = np.random.default_rng(seed)
     with open(path, "wb") as f:

@@ -38,7 +38,7 @@ Color modes (``V`` key or the panel combobox):
   decision threshold; points the model has no prediction for (outside the
   scoring region, or not yet scored) keep dimmed height colors.
 
-Camera controls are the labeler's (:mod:`rocklabel.camera`): left-drag orbits
+Camera controls are the labeler's (:mod:`rocklabel.gui.camera`): left-drag orbits
 around a pivot, and a double-click moves that pivot onto the clicked point.
 
 Keyboard shortcuts: P points · M mesh · C accumulated cloud · B sensor box ·
@@ -60,7 +60,7 @@ import open3d as o3d
 import open3d.visualization.gui as gui
 import open3d.visualization.rendering as rendering
 
-from rocklabel.camera import CAMERA_HELP, CAMERA_HINT, PivotCamera
+from rocklabel.gui.camera import CAMERA_HELP, CAMERA_HINT, PivotCamera
 from rocklabel.live.colormap import (
     RSSI_FULL_SCALE,
     apply_colormap,

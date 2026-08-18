@@ -1,4 +1,4 @@
-"""Labeler tool dispatch (rocklabel.viewer._LabelerApp).
+"""Labeler tool dispatch (rocklabel.gui.viewer._LabelerApp).
 
 The real app needs a GL context, so the mouse/key handlers are exercised as
 unbound functions against a fake host that stands in for the widgets.
@@ -12,7 +12,7 @@ import numpy as np
 import open3d.visualization.gui as gui
 import pytest
 
-from rocklabel.viewer import _LabelerApp
+from rocklabel.gui.viewer import _LabelerApp
 
 
 class _FakeApp:

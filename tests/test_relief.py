@@ -1,4 +1,4 @@
-"""Height above the local ground (rocklabel.relief) and the labeler's use of it.
+"""Height above the local ground (rocklabel.geometry.relief) and the labeler's use of it.
 
 The scene these tests use is the one that broke labelling in the field: ground
 that is neither flat nor level — a slope with a broad dip in it — plus rocks
@@ -10,8 +10,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from rocklabel.relief import ground_surface, relief_above_ground, sample_grid
-from rocklabel.viewer import _LabelerApp, relief_colors
+from rocklabel.geometry.relief import ground_surface, relief_above_ground, sample_grid
+from rocklabel.gui.viewer import _LabelerApp, relief_colors
 
 
 def _terrain(rocks=((1.0, 1.0, 0.25), (-2.0, 2.5, 0.30)), tilt=0.35, seed=0,

@@ -18,8 +18,12 @@ from dataclasses import dataclass, field
 # Both are torch-free by construction (see rocklabel/train/__init__.py), which
 # is what lets the dashboard quote the real training defaults and the real list
 # of ablation suites instead of copies that go stale.
+from ..profiles import DEFAULT_PROFILE, PROFILES
 from ..train import TRAIN_DEFAULTS
-from ..train.ablate import SUITES as ABLATION_SUITES
+from ..train.ablate import (DEFAULT_REPORT_ROOT as REPORT_ROOT,
+                            DEFAULT_ROOT as EXPERIMENTS_ROOT,
+                            SUITES as ABLATION_SUITES)
+from ..train.cli import DEFAULT_CACHE, DEFAULT_RUNS_ROOT
 
 #: Early-stop patience, read from the training defaults rather than repeated.
 #: It was repeated once, and the form went on offering 6 for months after the
@@ -31,6 +35,8 @@ TRAIN_PATIENCE = TRAIN_DEFAULTS["patience"]
 STAGES = [
     {"id": "capture", "title": "Capture", "blurb": "Get LiDAR data onto disk."},
     {"id": "triage", "title": "Triage", "blurb": "Understand and clean a recording."},
+    {"id": "slam", "title": "Solve poses", "blurb": "Work out where the sensor was, "
+                                                    "scan by scan."},
     {"id": "label", "title": "Label", "blurb": "Mark where the rocks are."},
     {"id": "dataset", "title": "Dataset", "blurb": "Turn labels into training data."},
     {"id": "train", "title": "Train", "blurb": "Fit and evaluate the classifiers."},
@@ -173,6 +179,47 @@ def _level_params() -> list[Param]:
     ]
 
 
+def _profile() -> Param:
+    """Which named way of cutting frames a dataset is built with.
+
+    The single biggest lever on a dataset, and until now it lived in four
+    look-alike YAML files at the repo root that nobody could tell apart. The
+    descriptions ride along so the form says what each one does and when it is
+    the wrong choice.
+    """
+    return Param(
+        "profile", "enum", "How to cut frames", arg="--profile",
+        choices=list(PROFILES), default=DEFAULT_PROFILE, required=True,
+        help="  ".join(
+            f"• {p.title}: {p.what} {p.when}" for p in PROFILES.values()),
+    )
+
+
+def _gpu_fraction() -> Param:
+    return Param(
+        "gpu_fraction", "float", "Cap GPU memory share", arg="--gpu-fraction",
+        min=0.05, max=1.0, step=0.05, advanced=True,
+        help="Most of the graphics card's memory this job may ever take, as a "
+             "fraction — 0.45 means 45%. Only worth setting when something else "
+             "is already training on the same card: whichever job asks for "
+             "memory second is the one that crashes, and that is usually not "
+             "the one at fault. Capping the new job means it fails on its own "
+             "account instead of knocking over a sweep that has been going for "
+             "hours. Leave empty for no cap.",
+    )
+
+
+def _cache_dir(advanced: bool = True) -> Param:
+    return Param(
+        "cache_dir", "dir", "Cache folder", arg="--cache-dir",
+        default=DEFAULT_CACHE, source="caches", advanced=advanced,
+        help="The pooled cache to train from. There is one per way of cutting "
+             f"frames (default: {DEFAULT_CACHE}). Pointing this at the wrong "
+             "one trains on frames built a different way, and the score will "
+             "not compare to anything.",
+    )
+
+
 def _device() -> Param:
     return Param(
         "device", "enum", "Torch device", arg="--device", choices=["", "cuda", "cpu"],
@@ -202,10 +249,10 @@ def _features() -> Param:
     """Which channels of the stored sample tensor reach the model.
 
     Shared by both training commands. The vocabulary comes from
-    :data:`rocklabel.neighborhoods.FEATURES` so the form can never drift from
+    :data:`rocklabel.dataset.neighborhoods.FEATURES` so the form can never drift from
     what the generator actually writes.
     """
-    from ..neighborhoods import FEATURES
+    from ..dataset.neighborhoods import FEATURES
 
     return Param(
         "features", "multi", "Input channels", arg="--features", repeat=True,
@@ -553,12 +600,14 @@ COMMANDS: list[Command] = [
             "train on'. Several recordings accumulate into one dataset directory "
             "as long as they share an identical config.",
         notes=[
-            "Native lidarrig recordings need generator.frame_window_s set (try "
-            "0.25) in the config: the rig records raw ~4 ms batches of ~400 "
-            "points, far too sparse to be one training frame.",
-            "A different config against an existing dataset directory is refused — "
-            "mixed-config datasets are impossible by construction. Change the "
-            "config, use a fresh --out.",
+            "'How to cut frames' is the setting that matters most here, and "
+            "'Full sweep' is the right answer unless you are reproducing an old "
+            "result. It merges each whole sensor rotation into one frame — "
+            "about 1,250 points instead of 110 — and measurably beat the old "
+            "way on every model and nearly every recording.",
+            "A dataset built one way cannot be added to with another — that is "
+            "refused outright, because pooling them would mix populations whose "
+            "scores mean different things. Pick a different output folder.",
             "A loud warning at the end about zero rock samples means label/frame "
             "misalignment — go run Drift check.",
             "'Undo mount tilt' must match what Label used. With 'ground' the fit "
@@ -575,10 +624,14 @@ COMMANDS: list[Command] = [
         ],
         params=[
             _recording(),
-            Param("out", "outdir", "Dataset directory", arg="--out", required=True,
-                  source="datasets", placeholder="datasets/mydataset",
-                  help="Where to write. An existing directory is appended to, as "
-                       "long as the config matches exactly."),
+            _profile(),
+            Param("out", "outdir", "Dataset directory", arg="--out",
+                  source="datasets", placeholder="datasets/<profile>/<recording>",
+                  help="Where to write. Leave empty and it goes to "
+                       "datasets/<profile>/<recording name>, which is what puts "
+                       "the way the frames were cut into the path itself. An "
+                       "existing directory is appended to, as long as it was "
+                       "built the same way."),
             _labels(),
             *_level_params(),
             _config(advanced=False),
@@ -624,20 +677,26 @@ COMMANDS: list[Command] = [
         title="Build cache",
         tagline="Pool dataset runs into a flat .npy cache for training.",
         what="Reads the named dataset directories, validates that their config "
-             "hashes and manifest counts agree, and writes one flat .npy cache "
-             "under training/cache/.",
+             "fingerprints and manifest counts agree, and writes one flat .npy "
+             f"cache under {DEFAULT_CACHE}/.",
         why="Training reads the cache, not the datasets. This step is also the "
             "guard rail: it refuses to pool datasets generated with different "
             "configs, which is exactly the mistake that would silently poison a "
             "training run.",
         notes=[
             "Re-run it whenever you generate a new dataset you want to train on.",
+            "One cache per way of cutting frames. Pooling datasets built two "
+            "different ways is refused, and the error names both.",
         ],
         params=[
             Param("datasets", "text", "Datasets", arg="--datasets", repeat=True,
                   nargs=True, source="datasets",
-                  help="Comma-separated dataset directories. Leave empty for the "
-                       "built-in default set."),
+                  help="Comma-separated dataset directories. Leave empty to pool "
+                       f"every dataset under datasets/{DEFAULT_PROFILE}/."),
+            Param("cache_dir", "outdir", "Cache folder", arg="--cache-dir",
+                  default=DEFAULT_CACHE, advanced=True,
+                  help="Where to write the pooled cache. Keep one folder per "
+                       "way of cutting frames."),
         ],
         long_running=True,
     ),
@@ -650,7 +709,7 @@ COMMANDS: list[Command] = [
              "holding out one whole run for testing and using contiguous tail "
              "frame blocks for early stopping. Writes config.json, history.csv, "
              "last.pt/best.pt, test_metrics.json and predictions.npz into "
-             "training/runs/<model>_loro_<run>/.",
+             f"{DEFAULT_RUNS_ROOT}/<model>_loro_<run>/.",
         why="The quick loop: one fold to see whether a change helps, before "
             "spending the time on the full comparison.",
         notes=[
@@ -702,7 +761,9 @@ COMMANDS: list[Command] = [
             Param("no_augment", "bool", "Disable augmentation", arg="--no-augment",
                   advanced=True),
             Param("seed", "int", "Seed", arg="--seed", default=42, advanced=True),
+            _cache_dir(),
             _device(),
+            _gpu_fraction(),
             Param("fresh", "bool", "Fresh start", arg="--fresh", advanced=True,
                   help="Ignore an existing last.pt and train from scratch."),
         ],
@@ -715,7 +776,7 @@ COMMANDS: list[Command] = [
         tagline="Train both architectures on every fold, then render all figures.",
         what="Loops both models over every leave-one-run-out fold, skipping folds "
              "that already have test_metrics.json, then renders the full figure "
-             "set into training/results/ — comparison bars, per-fold ROC/PR, "
+             f"set into {REPORT_ROOT}/compare/ — comparison bars, per-fold ROC/PR, "
              "confusion matrices, threshold sweeps and summary.json.",
         why="The real evaluation. One command produces every number and figure "
             "you would put in front of the team.",
@@ -733,7 +794,9 @@ COMMANDS: list[Command] = [
             Param("lr", "float", "Learning rate", arg="--lr", default=0.001, step=0.0001),
             Param("patience", "int", "Early-stop patience", arg="--patience",
                   default=TRAIN_PATIENCE, min=1),
+            _cache_dir(),
             _device(),
+            _gpu_fraction(),
             Param("fresh", "bool", "Retrain everything", arg="--fresh", advanced=True,
                   help="Ignore existing results and redo every fold from scratch."),
         ],
@@ -760,7 +823,7 @@ COMMANDS: list[Command] = [
         notes=[
             "This is the longest job in the tool — a full sweep is 100+ trainings. "
             "Finished folds are skipped, so it picks up where it left off.",
-            "Every setting gets its own folder under training/ablate/, so two "
+            f"Every setting gets its own folder under {EXPERIMENTS_ROOT}/<question>/, so two "
             "settings that differ only in an augmentation value cannot overwrite "
             "each other the way Compare would.",
             "Tick 'Report only' to rebuild the tables and figures from whatever "
@@ -791,9 +854,12 @@ COMMANDS: list[Command] = [
                        "gain. Keep it long enough for the learning-rate schedule "
                        "to finish, or no fold ever sees its fine-tuning phase."),
             Param("ablate_root", "outdir", "Runs folder", arg="--ablate-root",
-                  default="training/ablate", advanced=True,
-                  help="Where each setting's trained folds are written."),
+                  default=EXPERIMENTS_ROOT, advanced=True,
+                  help="Where each setting's trained folds are written, as "
+                       "<this folder>/<question>/<setting>/<held-out run>/."),
+            _cache_dir(),
             _device(),
+            _gpu_fraction(),
             Param("fresh", "bool", "Retrain everything", arg="--fresh", advanced=True,
                   help="Ignore finished folds and redo the whole matrix."),
         ],
@@ -831,14 +897,14 @@ COMMANDS: list[Command] = [
                   help="Only a set holding both a per-point model and a "
                        "sliding-window model has anything to compare."),
             Param("cache_dir", "dir", "Cache folder", arg="--cache-dir",
-                  default="training/cache", source="caches",
+                  default=DEFAULT_CACHE, source="caches",
                   help="The cache the sweep was trained on."),
             Param("ablate_root", "dir", "Runs folder", arg="--ablate-root",
-                  default="training/ablate",
+                  default=EXPERIMENTS_ROOT,
                   help="Where that sweep's trained folds live."),
             Param("out", "outdir", "Output directory", arg="--out",
                   help="Where the table and figures land. Defaults to "
-                       "training/results_matched/<sweep>."),
+                       f"{REPORT_ROOT}/<sweep>/matched."),
             Param("radius", "float", "Match radius", arg="--radius", default=0.15,
                   min=0.01, max=1.0, step=0.01, unit="m", advanced=True,
                   help="How far from a candidate spot a scored point may sit and "
@@ -871,12 +937,13 @@ COMMANDS: list[Command] = [
             "you have the answer in under a minute instead of overnight.",
         notes=[
             "Needs a built cache (Build cache), nothing else. No GPU, no model.",
-            "Writes training/results_reflect/ — four figures plus summary.md.",
+            f"Writes {REPORT_ROOT}/reflect/ — four figures plus summary.md.",
         ],
         params=[
             Param("out", "outdir", "Output directory", arg="--out",
-                  default="training/results_reflect",
+                  default=f"{REPORT_ROOT}/reflect",
                   help="Where the figures and tables land."),
+            _cache_dir(),
         ],
     ),
     Command(
@@ -884,8 +951,8 @@ COMMANDS: list[Command] = [
         icon="▥",
         title="Regenerate report",
         tagline="Rebuild every figure and table from existing runs — no retraining.",
-        what="Re-renders training/results/ from whatever is already in "
-             "training/runs/: comparison figure, ROC/PR curves, confusion "
+        what=f"Re-renders {REPORT_ROOT}/compare/ from whatever is already in "
+             f"{DEFAULT_RUNS_ROOT}/: comparison figure, ROC/PR curves, confusion "
              "matrices, threshold sweeps, summary.json and summary.md.",
         why="Cheap and safe. Reach for it after deleting a bad fold, or whenever "
             "the figures look stale.",

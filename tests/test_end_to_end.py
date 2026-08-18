@@ -9,8 +9,8 @@ import pytest
 
 import make_synthetic_mcap as synth
 from rocklabel.config import load_config
-from rocklabel.generate import ManifestConflict, run_generate
-from rocklabel.labeler import accumulate_cloud
+from rocklabel.dataset.generate import ManifestConflict, run_generate
+from rocklabel.gui.labeler import accumulate_cloud
 
 
 @pytest.fixture(scope="module")
@@ -147,7 +147,7 @@ def test_regenerate_same_run_id_overwrites(generated):
 
 
 def test_missing_lidar_mount_errors_without_fallback(synthetic_recording):
-    from rocklabel.pose import PoseUnavailable, build_pose_buffer
+    from rocklabel.recording.pose import PoseUnavailable, build_pose_buffer
     mcap_path, _ = synthetic_recording
     cfg = load_config(None)
     topics = dict(cfg["topics"], lidar_frame="some_other_lidar")
@@ -162,7 +162,7 @@ def test_missing_lidar_mount_errors_without_fallback(synthetic_recording):
 
 def test_unreachable_odom_frame_fails_loudly(synthetic_recording):
     """A frame misconfiguration must raise a clear error, not skip every scan."""
-    from rocklabel.pipeline import ScanStream
+    from rocklabel.recording.pipeline import ScanStream
     mcap_path, _ = synthetic_recording
     cfg = load_config(None)
     cfg["topics"]["odom_frame"] = "map"  # not present in the synthetic TF tree
@@ -175,7 +175,7 @@ def test_unreachable_odom_frame_fails_loudly(synthetic_recording):
 def test_scan_frame_taken_from_message_header(synthetic_recording):
     """Clouds are transformed from their own header.frame_id, so a wrong
     lidar_frame in the config doesn't matter when messages declare theirs."""
-    from rocklabel.pipeline import ScanStream
+    from rocklabel.recording.pipeline import ScanStream
     mcap_path, _ = synthetic_recording
     cfg = load_config(None)
     cfg["topics"]["lidar_frame"] = "wrong_frame_name"
@@ -186,7 +186,7 @@ def test_scan_frame_taken_from_message_header(synthetic_recording):
 
 
 def test_min_range_filter_drops_self_hits(synthetic_recording):
-    from rocklabel.pipeline import ScanStream
+    from rocklabel.recording.pipeline import ScanStream
     mcap_path, _ = synthetic_recording
     cfg = load_config(None)
     cfg["topics"]["min_range_m"] = 1.0
@@ -206,7 +206,7 @@ def test_pipeline_normalizes_raw_counts_in_a_float_intensity_field(tmp_path):
     """
     from tests import make_synthetic_mcap as synth
 
-    from rocklabel.pipeline import ScanStream
+    from rocklabel.recording.pipeline import ScanStream
 
     raw = str(tmp_path / "raw_counts.mcap")
     synth.write_synthetic_mcap(raw, n_scans=6, intensity_scale=65535.0)
@@ -230,7 +230,7 @@ def test_accumulate_and_ply_dump(synthetic_recording, tmp_path):
     assert len(xyz) > 1000
     # Cloud spans the floor patch and sits near z=0.
     assert xyz[:, 2].min() > -0.5 and xyz[:, 2].max() < 0.5
-    from rocklabel.accumulate import write_ply
+    from rocklabel.geometry.accumulate import write_ply
     ply = tmp_path / "cloud.ply"
     write_ply(str(ply), xyz, inten)
     assert ply.stat().st_size > 16 * len(xyz)

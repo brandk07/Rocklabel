@@ -359,8 +359,8 @@ def evaluate(model: torch.nn.Module, cfg: dict, run_dir: str, threshold: float,
         # Headline metrics are per scorable point, which is the segmenter's own
         # unit of prediction. The point-level numbers are NOT comparable to a
         # classifier's sample-level ones (different populations, different
-        # prevalence) - report.py re-scores both at shared candidate centers
-        # for that.
+        # prevalence) - `rocklabel-train matched` (rocklabel/train/matched.py)
+        # re-scores both at shared candidate centers for that.
         flat_labels, flat_probs = seg_flatten(labels, probs, counts)
         summary = M.summarize(flat_labels, flat_probs, threshold)
         summary["scored_points"] = int(len(flat_labels))

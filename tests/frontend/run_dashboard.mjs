@@ -169,7 +169,11 @@ const checks = [
   ['every command got a card', cards.length === fixtures['/api/catalog'].commands.length],
   ['hero figure filled', el('heroF1').textContent !== '—'],
   ['4 stat tiles', el('tiles').children.length === 4],
-  ['6 pipeline stages', el('flow').children.length === 6],
+  // Read the count off the catalog rather than hardcoding it: adding a stage
+  // is a normal thing to do, and a hardcoded 6 turns that into a test failure
+  // that says nothing about what broke.
+  ['every pipeline stage drawn',
+    el('flow').children.length === fixtures['/api/catalog'].stages.length],
   ['activity list populated', el('activity').children.length > 0],
   ['rows expanded', expanders > 0],
   ['running viewer got its control panel embedded', panelShown],

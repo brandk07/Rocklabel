@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "mcap_file": "myroom1.mcap",
+  "run_id": "myroom1",
+  "odom_frame": "world",
+  "created": "2026-07-19T19:46:21Z",
+  "tool_version": "0.2.0",
+  "intensity_available": true,
+  "accumulator_voxel_m": 0.03,
+  "rocks": [
+    {
+      "id": 1,
+      "center": [
+        0.9254,
+        0.0361,
+        -0.7033
+      ],
+      "radius": 0.19
+    },
+    {
+      "id": 2,
+      "center": [
+        0.9944,
+        0.1142,
+        -0.7067
+      ],
+      "radius": 0.17
+    },
+    {
+      "id": 3,
+      "center": [
+        1.185,
+        0.587,
+        -0.7408
+      ],
+      "radius": 0.15
+    },
+    {
+      "id": 5,
+      "center": [
+        1.2864,
+        0.6865,
+        -0.7659
+      ],
+      "radius": 0.15
+    }
+  ]
+}

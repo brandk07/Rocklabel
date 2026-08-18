@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from rocklabel.mcap_io import decode_pointcloud2
+from rocklabel.recording.mcap_io import decode_pointcloud2
 
 
 def _field(name, offset, datatype, count=1):
@@ -56,7 +56,7 @@ def test_float32_intensity_is_passed_through_for_the_stream_to_scale():
     (4000.0, 1 / 65535.0), (65535.0, 1 / 65535.0),  # raw u16 counts
 ])
 def test_intensity_scale_ladder(peak, expect):
-    from rocklabel.mcap_io import intensity_scale_for_peak
+    from rocklabel.recording.mcap_io import intensity_scale_for_peak
 
     assert intensity_scale_for_peak(peak) == pytest.approx(expect)
 

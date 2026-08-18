@@ -78,7 +78,7 @@ therefore *adds* a second run under the new id instead of replacing the old one,
 and pooling it into the cache would count the same recording twice. Delete the
 stale run (or the whole dataset) before regenerating. A cache that is already
 built keeps working either way — only the `dataset_dir` provenance in
-`training/cache/meta.json` goes stale.
+`training/caches/full-sweep/meta.json` goes stale.
 
 **Delete** is narrower on purpose: it removes only what you clicked, never the
 rest of the run, since labels cost an afternoon and an `.mcap` costs gigabytes.
@@ -139,9 +139,66 @@ rocklabel inspect  ->  [rocklabel trim]  ->  rocklabel label  ->  rocklabel drif
 
 ### Cheat sheet: one new recording, start to finish
 
-By convention this repo keeps three top-level folders: `recordings/` (raw
-`.mcap` files), `labels/` (label JSON), and `datasets/` (generated training
-data) — commands below assume a recording already dropped into `recordings/`.
+The project keeps four top-level data folders, and every one of them puts the
+thing that produced a file into the path:
+
+| folder | holds | the path says |
+|---|---|---|
+| `recordings/<project>/…` | raw `.mcap` files | which project a capture belongs to. `recordings/volleyball/raw/` is what the SLAM solver reads; `recordings/volleyball/reslam/` is what it writes and what everything downstream uses. `recordings/archive/` is older work kept for reference. |
+| `labels/<project>/` | label JSON | the same projects, so a recording and its labels sit in matching folders. |
+| `datasets/<profile>/<run>/` | generated training frames | **how the frames were cut** — see [generation profiles](#generation-profiles). A dataset directory that does not say this is how two people ended up comparing incomparable numbers. |
+| `training/` | everything training produces | `caches/<profile>/` pooled samples, `experiments/<experiment>/<setting>/<fold>/` every trained fold, `reports/<experiment>/` the figures and tables, `exported/` the deployable models. |
+
+Commands below assume a recording already sits under `recordings/`.
+
+### Where the code lives
+
+Folders are named after the job the code does, not the command that calls it.
+`rocklabel/cli.py` is the only file that maps a command name to a function.
+
+| folder | holds |
+|---|---|
+| `rocklabel/recording/` | reading recordings: `mcap_io`, `lidarrig_io`, `pose`, `pipeline`, plus `inspect` and `trim` |
+| `rocklabel/geometry/` | headless maths on a cloud: `leveling`, `accumulate`, `relief` |
+| `rocklabel/dataset/` | labeled recording → training data: `generate`, `labeling`, `neighborhoods`, `bev` |
+| `rocklabel/gui/` | every Open3D window: `viewer`, `camera`, `labeler`, `preview`, `driftcheck` |
+| `rocklabel/slam/` | the offline trajectory solver (`python -m rocklabel.slam`) |
+| `rocklabel/live/` | the live sensor rig |
+| `rocklabel/train/` | the training stack — the only place torch is imported |
+| `rocklabel/dashboard/` | the web UI |
+
+Each folder's `__init__.py` explains it further, and
+[`rocklabel/README.md`](rocklabel/README.md) is the full map with the rules
+worth knowing before editing (chiefly: only `gui/` and `live/viz/` may import
+Open3D, and `train/`/`dashboard/` must stay importable without torch).
+
+### Generation profiles
+
+How a recording is chopped into frames is the single biggest lever on the
+resulting dataset, so it is a **named** choice rather than a config file you
+have to diff:
+
+```bash
+rocklabel generate recordings/volleyball/reslam/RUN.reslam.mcap --profile full-sweep
+```
+
+| profile | what it does |
+|---|---|
+| `full-sweep` | **The default.** One whole 20 Hz sensor rotation per frame (~1,250 points in the crop box). Measured worth +0.040–0.055 PR-AUC over raw bursts, and the only profile dense enough to train the per-point segmenter at all. |
+| `double-sweep` | Two rotations per frame (~2,500 points), frame stride halved to keep the frame count. Untested. |
+| `raw-burst` | One raw ~4 ms sensor batch per frame (~110 points). What the first eleven volleyball datasets used. Kept only to reproduce an old result. |
+| `fused` | Full sweep with levelling off — the Comforter recordings only. |
+
+Leave `--out` off and the dataset lands in `datasets/<profile>/<recording>/`,
+so the folder name says how it was built. The profile is written into the
+manifest too, and `rocklabel-train cache` refuses to pool two profiles into one
+cache — their frames hold different numbers of points, so a score across them
+would mean nothing.
+
+Profiles live in `rocklabel/profiles.py`, in the same shape as the ablation
+suites: a name, prose describing what it does and when to use it, and the
+config overrides. Add one there and it appears in the CLI and the dashboard
+form together.
 
 Native recording (handheld rig — no config needed):
 
@@ -309,12 +366,12 @@ the viewer gains a third color mode, cycled with `V` alongside height and
 reflectivity:
 
 ```bash
-rocklabel live --source udp --model training/runs/pointnet2_loro_myroom2/best.pt \
+rocklabel live --source udp --model training/experiments/compare/pointnet2_loro_myroom2/best.pt \
     --floor-band -0.10 0.60 --max-range 8        # band measured from the floor
-rocklabel live --source udp --model training/runs/.../best.pt \
+rocklabel live --source udp --model training/experiments/compare/.../best.pt \
     --z-min -1.5 --z-max -0.5 --max-range 8      # or fixed, sensor ~1 m up
-rocklabel record --source udp --model training/runs/.../best.pt   # record + predict at once
-rocklabel live --play recordings/RUN.mcap --model training/runs/.../best.pt  # over a replay
+rocklabel record --source udp --model training/experiments/compare/.../best.pt   # record + predict at once
+rocklabel live --play recordings/RUN.mcap --model training/experiments/compare/.../best.pt  # over a replay
 ```
 
 Each scoring pass takes the **freshest raw scan** (not the accumulated map —
@@ -347,7 +404,7 @@ The same crop flags also work on the offline replay — a big speedup on
 wall/ceiling-heavy recordings:
 
 ```bash
-rocklabel-train replay recordings/RUN.mcap --checkpoint training/runs/.../best.pt \
+rocklabel-train replay recordings/RUN.mcap --checkpoint training/experiments/compare/.../best.pt \
     --z-min -1.5 --z-max -0.5 --max-range 8
 ```
 
@@ -895,7 +952,7 @@ python tests/make_synthetic_mcap.py demo.mcap   # + demo.labels.json
 rocklabel generate --mcap demo.mcap --labels demo.labels.json --out demo_dataset
 ```
 
-All Open3D code is isolated in `rocklabel/viewer.py`; everything else runs
+All Open3D code is isolated in `rocklabel/gui/`; everything else runs
 headless (that's also what `--dump-accumulated` is for).
 
 ## Training (optional): PointNet / PointNet++ rock classifiers
@@ -907,15 +964,15 @@ needs torch:
 ```bash
 pip install -e .[train]
 
-rocklabel-train cache      # pool the four myroom runs into training/cache/
+rocklabel-train cache      # pool the four myroom runs into training/caches/full-sweep/
                            # (verifies config hashes + manifest counts)
 rocklabel-train compare    # both models x 4 leave-one-run-out folds,
-                           # then every figure into training/results/
+                           # then every figure into training/reports/compare/
 rocklabel-train view datasets/myroomdataset2 \
-    --checkpoint training/runs/pointnet2_loro_myroom2/best.pt   # 3D confidence replay
+    --checkpoint training/experiments/compare/pointnet2_loro_myroom2/best.pt   # 3D confidence replay
 rocklabel-train replay recordings/anything.mcap \
-    --checkpoint training/runs/pointnet_loro_myroom4/best.pt    # any mcap, no labels needed
-rocklabel-train export training/runs/pointnet2_loro_myroom2/best.pt
+    --checkpoint training/experiments/compare/pointnet_loro_myroom4/best.pt    # any mcap, no labels needed
+rocklabel-train export training/experiments/compare/pointnet2_loro_myroom2/best.pt
 ```
 
 `view` replays a *generated dataset* and can show ground truth and error
@@ -950,7 +1007,7 @@ Key design points (see the module docstrings for the details):
   unreachable (`tests/test_train.py`), and `metadata.json` records
   `features_used` / `features_ignored` for deployment.
   A non-default selection is tagged into both the run directory and the default
-  results directory (`pointnet_loro_run3_dx-dy-dz`, `training/results_dx-dy-dz`)
+  results directory (`pointnet_loro_run3_dx-dy-dz`, `training/reports/compare_dx-dy-dz`)
   so the two experiments you want to compare sit side by side instead of
   colliding; the full set keeps the historical names, and runs trained before
   the setting existed still resume. Pass the same `--features` to
@@ -958,7 +1015,7 @@ Key design points (see the module docstrings for the details):
 - **Class imbalance** (~29% rock) is handled with class-weighted BCE, and the
   headline metrics are PR-AUC / ROC-AUC / F1 with the majority-class baseline
   printed next to them - never bare accuracy.
-- **Runs resume**: each fold lives in `training/runs/<model>_loro_<run>/` with
+- **Runs resume**: each fold lives in `training/experiments/compare/<model>_loro_<run>/` with
   `config.json`, `history.csv`, `last.pt` / `best.pt`, `test_metrics.json`,
   and `predictions.npz`; `rocklabel-train report` regenerates all plots
   without retraining.
@@ -990,7 +1047,7 @@ and height — then rates each on how well it alone separates rock from clear,
 run by run, with the same measurements on height as the reference. It also
 reports how far the absolute intensity level drifts between recordings, which
 is what decides whether any fixed intensity threshold could transfer. Writes
-`training/results_reflect/`. Run it before an ablation sweep: if the channel is
+`training/reports/reflect/`. Run it before an ablation sweep: if the channel is
 empty at this level, no model will find something in it.
 
 **`ablate`** trains a named set of *arms* on every leave-one-run-out fold and
@@ -999,7 +1056,7 @@ compares them **paired by fold**. Two rules make it different from `compare`:
 - **One arm, one run root.** `compare` names a run directory after model + fold
   + channels, so two settings differing only in an augmentation value would
   collide and the second would archive the first as stale. Each arm here gets
-  `training/ablate/<suite>/<arm>/` to itself, so *any* two settings can be
+  `training/experiments/<suite>/<arm>/` to itself, so *any* two settings can be
   compared.
 - **Paired, never pooled.** Which run is held out swings PR-AUC across roughly
   0.5–0.95 on the volleyball data, an order of magnitude more than any channel
@@ -1027,8 +1084,8 @@ Note: `pointnet2_seg` (per-point segmentation) needs format C, which requires
 frames holding at least `segmentation_min_points` (512) points. Recordings
 captured as small scan segments with `frame_window_s: 0.0` produce ~100 points
 per frame and therefore no format-C data at all (`seg_frames: 0` in the
-manifest). Regenerate with a frame window — see `config.fused.yaml` — if you
-want to train the segmenter on such a recording.
+manifest). Regenerate with `--profile full-sweep` if you want to train the
+segmenter on such a recording.
 
 ## Non-goals
 
@@ -1043,9 +1100,9 @@ actual running
 run model with live predictions (robot rig — sensor on the tilted mast, ~0.44 m
 up; levelling measures the mount angle and the floor height, --floor-band then
 anchors the crop to the ground so the rig height does not matter):
-rocklabel live --source udp --model training/runs/pointnet_loro_myroom4/best.pt \
+rocklabel live --source udp --model training/experiments/compare/pointnet_loro_myroom4/best.pt \
     --floor-band -0.10 0.60 --max-range 8
 
 run model with previously recorded mcap:
-rocklabel-train replay recordings/myroom5.mcap --checkpoint training/runs/pointnet_loro_myroom4/best.pt     --z-min -1.5 --z-max -0.5 --max-range 8
+rocklabel-train replay recordings/myroom5.mcap --checkpoint training/experiments/compare/pointnet_loro_myroom4/best.pt     --z-min -1.5 --z-max -0.5 --max-range 8
 

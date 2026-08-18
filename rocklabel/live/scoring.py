@@ -180,7 +180,7 @@ class LiveScorer:
         training and serving disagreeing about this would be invisible in every
         metric and fatal in the field.
         """
-        from rocklabel.mcap_io import intensity_scale_for_peak
+        from rocklabel.recording.mcap_io import intensity_scale_for_peak
 
         finite = inten[np.isfinite(inten)]
         return intensity_scale_for_peak(float(finite.max()) if finite.size else 0.0)
@@ -239,7 +239,7 @@ class LiveScorer:
         return _Result(all_centers, all_probs, match_radius)
 
     def _score_once(self) -> None:
-        from rocklabel.neighborhoods import build_inference_samples
+        from rocklabel.dataset.neighborhoods import build_inference_samples
 
         t0 = time.perf_counter()
         s, g = self.settings, self._gcfg

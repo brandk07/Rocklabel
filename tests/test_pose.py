@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 from scipy.spatial.transform import Rotation
 
-from rocklabel.pose import PoseBuffer, PoseUnavailable, make_matrix
+from rocklabel.recording.pose import PoseBuffer, PoseUnavailable, make_matrix
 
 
 def _yaw(deg):
