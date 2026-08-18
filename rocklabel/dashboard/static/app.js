@@ -1382,6 +1382,7 @@ function sourceOptions(source) {
   const map = {
     recordings: S.inv.recordings, labels: S.inv.labels, datasets: S.inv.datasets,
     checkpoints: S.inv.checkpoints, configs: S.inv.configs, cache_runs: S.inv.cache_runs,
+    caches: S.inv.caches,
   };
   const list = map[source];
   if (!list) return null;

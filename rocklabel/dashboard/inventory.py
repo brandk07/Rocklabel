@@ -637,6 +637,39 @@ def cache_runs(root: str) -> list[dict]:
     return [{"name": r, "path": r} for r in sorted((meta.get("runs") or {}).keys())]
 
 
+def caches(root: str) -> list[dict]:
+    """Every built cache under training/, not just the default one.
+
+    There is more than one now: a cache is tied to the dataset config it was
+    pooled from, so training on whole sensor sweeps means a second cache beside
+    the batch-sized one rather than a rebuild of it. A picker that only ever
+    offered training/cache would silently point a run at the wrong data.
+    """
+    base = os.path.join(root, "training")
+    if not os.path.isdir(base):
+        return []
+    out = []
+    for name in sorted(os.listdir(base)):
+        d = os.path.join(base, name)
+        meta = _read_json(os.path.join(d, "meta.json"))
+        if not meta or "runs" not in meta:
+            continue
+        runs_meta = meta.get("runs") or {}
+        rel = os.path.relpath(d, root)
+        out.append({
+            "name": rel, "path": rel,
+            "runs": sorted(runs_meta.keys()),
+            "run_count": len(runs_meta),
+            "samples": sum(r.get("n", 0) for r in runs_meta.values()),
+            "rock_samples": sum(r.get("rock", 0) for r in runs_meta.values()),
+            # 0 for a cache whose dataset predates the segmentation format, which
+            # is exactly what says "this cache cannot train a segmenter".
+            "seg_frames": sum(r.get("seg_frames", 0) or 0 for r in runs_meta.values()),
+            **_stat(os.path.join(d, "meta.json")),
+        })
+    return out
+
+
 def results_summary(root: str) -> dict:
     return _read_json(os.path.join(root, DIRS["results"], "summary.json")) or {}
 
@@ -785,6 +818,7 @@ def snapshot(root: str) -> dict:
         "checkpoints": checkpoints(root),
         "configs": configs(root),
         "cache_runs": cache_runs(root),
+        "caches": caches(root),
         "figures": result_figures(root),
         "summary": results_summary(root),
         "ablations": abl,

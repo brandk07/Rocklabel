@@ -1,0 +1,567 @@
+{
+  "tool_version": "0.2.0",
+  "config": {
+    "topics": {
+      "pointcloud_topic": "/multiscan/lidar_scan",
+      "odom_frame": "odom",
+      "base_frame": "base_link",
+      "lidar_frame": "lidar_link",
+      "tf_topic": "/tf",
+      "tf_static_topic": "/tf_static",
+      "pose_tolerance_s": 0.15,
+      "static_lidar_to_base": null,
+      "min_range_m": 0.0
+    },
+    "level": {
+      "mode": "auto",
+      "mount_roll_deg": 0.0,
+      "mount_pitch_deg": 0.0,
+      "fit_scans": 0,
+      "range_min_m": 0.6,
+      "range_max_m": 6.0,
+      "fit_voxel_m": 0.05,
+      "plane_thresh_m": 0.05,
+      "ransac_iters": 512,
+      "max_tilt_deg": 50.0,
+      "min_inlier_frac": 0.15,
+      "ceiling_margin_m": 0.2
+    },
+    "labeler": {
+      "accumulator_voxel_m": 0.03,
+      "default_rock_radius_m": 0.15,
+      "stride": 1,
+      "z_min": null,
+      "z_max": null
+    },
+    "generator": {
+      "frame_stride": 4,
+      "frame_window_s": 0.05,
+      "crop_forward_m": 6.0,
+      "crop_backward_m": 2.0,
+      "crop_left_m": 4.0,
+      "crop_right_m": 4.0,
+      "crop_up_m": 1.5,
+      "crop_down_m": 1.0,
+      "boundary_shell_m": 0.05,
+      "centers_voxel_m": 0.05,
+      "neighborhood_radius_m": 0.5,
+      "min_neighbors": 20,
+      "neighborhood_points": 256,
+      "negative_keep_prob": 0.05,
+      "segmentation_points": 2048,
+      "segmentation_min_points": 512,
+      "bev_cell_m": 0.1,
+      "seed": 42
+    }
+  },
+  "config_hash": "3ccba26a29cb160027339d4861da325732c5429c567cc7d5c671705bcbf77800",
+  "runs": {
+    "VolleyBallTest10.reslam": {
+      "run_id": "VolleyBallTest10.reslam",
+      "mcap_path": "/home/brandon/Documents/perception-2026-testing/rocklabel/recordings/VolleyBallTest10.reslam.mcap",
+      "labels_path": "/home/brandon/Documents/perception-2026-testing/rocklabel/labels/VolleyBallTest10.reslam.labels.json",
+      "rock_count": 4,
+      "arena_vertices": 4,
+      "z_band": [
+        -2.32,
+        -0.139
+      ],
+      "level": {
+        "mode": "manual",
+        "roll_deg": 1.7325,
+        "pitch_deg": 31.5054,
+        "floor_z": -0.8412
+      },
+      "intensity_available": true,
+      "generated": "2026-08-18T00:28:37Z",
+      "frames_kept": 212,
+      "frames_skipped_pose": 0,
+      "frames_skipped_empty": 0,
+      "point_samples": 7344,
+      "bev_frames": 212,
+      "seg_frames": 208,
+      "seg_points": 241112,
+      "seg_point_labels": {
+        "rock": 1746,
+        "clear": 238525,
+        "ignore": 841
+      },
+      "sample_labels": {
+        "rock": 599,
+        "clear": 6745
+      },
+      "point_labels": {
+        "rock": 1751,
+        "clear": 263705,
+        "ignore": 846
+      },
+      "bev_cells": {
+        "rock": 1408,
+        "clear": 149484,
+        "ignore": 1205908
+      },
+      "stamp_fallbacks": 0
+    },
+    "VolleyBallTest2.reslam": {
+      "run_id": "VolleyBallTest2.reslam",
+      "mcap_path": "/home/brandon/Documents/perception-2026-testing/rocklabel/recordings/VolleyBallTest2.reslam.mcap",
+      "labels_path": "/home/brandon/Documents/perception-2026-testing/rocklabel/labels/VolleyBallTest2.reslam.labels.json",
+      "rock_count": 5,
+      "arena_vertices": 4,
+      "z_band": [
+        -2.3658,
+        -0.463
+      ],
+      "level": {
+        "mode": "manual",
+        "roll_deg": 0.175,
+        "pitch_deg": 36.7498,
+        "floor_z": -0.7459
+      },
+      "intensity_available": true,
+      "generated": "2026-08-18T00:29:12Z",
+      "frames_kept": 202,
+      "frames_skipped_pose": 0,
+      "frames_skipped_empty": 0,
+      "point_samples": 7773,
+      "bev_frames": 202,
+      "seg_frames": 195,
+      "seg_points": 228525,
+      "seg_point_labels": {
+        "rock": 2483,
+        "clear": 224020,
+        "ignore": 2022
+      },
+      "sample_labels": {
+        "rock": 1561,
+        "clear": 6212
+      },
+      "point_labels": {
+        "rock": 2491,
+        "clear": 249728,
+        "ignore": 2029
+      },
+      "bev_cells": {
+        "rock": 1553,
+        "clear": 139836,
+        "ignore": 1151411
+      },
+      "stamp_fallbacks": 0
+    },
+    "VolleyBallTest3.reslam": {
+      "run_id": "VolleyBallTest3.reslam",
+      "mcap_path": "/home/brandon/Documents/perception-2026-testing/rocklabel/recordings/VolleyBallTest3.reslam.mcap",
+      "labels_path": "/home/brandon/Documents/perception-2026-testing/rocklabel/labels/VolleyBallTest3.reslam.labels.json",
+      "rock_count": 4,
+      "arena_vertices": 4,
+      "z_band": [
+        -2.4474,
+        -0.304
+      ],
+      "level": {
+        "mode": "manual",
+        "roll_deg": 0.0236,
+        "pitch_deg": 33.3373,
+        "floor_z": -0.8298
+      },
+      "intensity_available": true,
+      "generated": "2026-08-18T00:29:17Z",
+      "frames_kept": 235,
+      "frames_skipped_pose": 0,
+      "frames_skipped_empty": 1,
+      "point_samples": 9180,
+      "bev_frames": 235,
+      "seg_frames": 232,
+      "seg_points": 263563,
+      "seg_point_labels": {
+        "rock": 3167,
+        "clear": 258218,
+        "ignore": 2178
+      },
+      "sample_labels": {
+        "rock": 2244,
+        "clear": 6936
+      },
+      "point_labels": {
+        "rock": 3173,
+        "clear": 291703,
+        "ignore": 2188
+      },
+      "bev_cells": {
+        "rock": 1857,
+        "clear": 167643,
+        "ignore": 1334500
+      },
+      "stamp_fallbacks": 0
+    },
+    "VolleyBallTest4.reslam": {
+      "run_id": "VolleyBallTest4.reslam",
+      "mcap_path": "/home/brandon/Documents/perception-2026-testing/rocklabel/recordings/VolleyBallTest4.reslam.mcap",
+      "labels_path": "/home/brandon/Documents/perception-2026-testing/rocklabel/labels/VolleyBallTest4.reslam.labels.json",
+      "rock_count": 7,
+      "arena_vertices": 4,
+      "z_band": [
+        -1.0,
+        -0.596
+      ],
+      "level": {
+        "mode": "manual",
+        "roll_deg": -7.3597,
+        "pitch_deg": 31.202,
+        "floor_z": -0.7818
+      },
+      "intensity_available": true,
+      "generated": "2026-08-18T00:29:23Z",
+      "frames_kept": 254,
+      "frames_skipped_pose": 0,
+      "frames_skipped_empty": 0,
+      "point_samples": 11515,
+      "bev_frames": 254,
+      "seg_frames": 252,
+      "seg_points": 310858,
+      "seg_point_labels": {
+        "rock": 3881,
+        "clear": 303637,
+        "ignore": 3340
+      },
+      "sample_labels": {
+        "rock": 2284,
+        "clear": 9231
+      },
+      "point_labels": {
+        "rock": 3898,
+        "clear": 333472,
+        "ignore": 3352
+      },
+      "bev_cells": {
+        "rock": 2539,
+        "clear": 181465,
+        "ignore": 1441596
+      },
+      "stamp_fallbacks": 0
+    },
+    "VolleyBallTest5.reslam": {
+      "run_id": "VolleyBallTest5.reslam",
+      "mcap_path": "/home/brandon/Documents/perception-2026-testing/rocklabel/recordings/VolleyBallTest5.reslam.mcap",
+      "labels_path": "/home/brandon/Documents/perception-2026-testing/rocklabel/labels/VolleyBallTest5.reslam.labels.json",
+      "rock_count": 5,
+      "arena_vertices": 4,
+      "z_band": [
+        -2.4679,
+        -0.125
+      ],
+      "level": {
+        "mode": "manual",
+        "roll_deg": 5.9817,
+        "pitch_deg": 33.8755,
+        "floor_z": -0.8578
+      },
+      "intensity_available": true,
+      "generated": "2026-08-18T00:29:28Z",
+      "frames_kept": 212,
+      "frames_skipped_pose": 0,
+      "frames_skipped_empty": 0,
+      "point_samples": 8354,
+      "bev_frames": 212,
+      "seg_frames": 204,
+      "seg_points": 262125,
+      "seg_point_labels": {
+        "rock": 1865,
+        "clear": 258811,
+        "ignore": 1449
+      },
+      "sample_labels": {
+        "rock": 1002,
+        "clear": 7352
+      },
+      "point_labels": {
+        "rock": 1873,
+        "clear": 276786,
+        "ignore": 1454
+      },
+      "bev_cells": {
+        "rock": 1229,
+        "clear": 153984,
+        "ignore": 1201587
+      },
+      "stamp_fallbacks": 0
+    },
+    "VolleyBallTest6.reslam": {
+      "run_id": "VolleyBallTest6.reslam",
+      "mcap_path": "/home/brandon/Documents/perception-2026-testing/rocklabel/recordings/VolleyBallTest6.reslam.mcap",
+      "labels_path": "/home/brandon/Documents/perception-2026-testing/rocklabel/labels/VolleyBallTest6.reslam.labels.json",
+      "rock_count": 7,
+      "arena_vertices": 4,
+      "z_band": [
+        -1.735,
+        -0.572
+      ],
+      "level": {
+        "mode": "manual",
+        "roll_deg": 2.3575,
+        "pitch_deg": 28.2049,
+        "floor_z": -0.8517
+      },
+      "intensity_available": true,
+      "generated": "2026-08-18T00:29:33Z",
+      "frames_kept": 213,
+      "frames_skipped_pose": 0,
+      "frames_skipped_empty": 0,
+      "point_samples": 6687,
+      "bev_frames": 213,
+      "seg_frames": 205,
+      "seg_points": 227403,
+      "seg_point_labels": {
+        "rock": 1220,
+        "clear": 224646,
+        "ignore": 1537
+      },
+      "sample_labels": {
+        "rock": 424,
+        "clear": 6263
+      },
+      "point_labels": {
+        "rock": 1237,
+        "clear": 253918,
+        "ignore": 1558
+      },
+      "bev_cells": {
+        "rock": 965,
+        "clear": 143813,
+        "ignore": 1218422
+      },
+      "stamp_fallbacks": 0
+    },
+    "VolleyBallTest7.reslam": {
+      "run_id": "VolleyBallTest7.reslam",
+      "mcap_path": "/home/brandon/Documents/perception-2026-testing/rocklabel/recordings/VolleyBallTest7.reslam.mcap",
+      "labels_path": "/home/brandon/Documents/perception-2026-testing/rocklabel/labels/VolleyBallTest7.reslam.labels.json",
+      "rock_count": 7,
+      "arena_vertices": 4,
+      "z_band": [
+        -2.5248,
+        -0.539
+      ],
+      "level": {
+        "mode": "manual",
+        "roll_deg": 5.8307,
+        "pitch_deg": 28.3175,
+        "floor_z": -0.8235
+      },
+      "intensity_available": true,
+      "generated": "2026-08-18T00:29:40Z",
+      "frames_kept": 298,
+      "frames_skipped_pose": 0,
+      "frames_skipped_empty": 0,
+      "point_samples": 10523,
+      "bev_frames": 298,
+      "seg_frames": 286,
+      "seg_points": 322030,
+      "seg_point_labels": {
+        "rock": 2672,
+        "clear": 315984,
+        "ignore": 3374
+      },
+      "sample_labels": {
+        "rock": 1701,
+        "clear": 8822
+      },
+      "point_labels": {
+        "rock": 2686,
+        "clear": 361290,
+        "ignore": 3395
+      },
+      "bev_cells": {
+        "rock": 1770,
+        "clear": 205129,
+        "ignore": 1700301
+      },
+      "stamp_fallbacks": 0
+    },
+    "VolleyBallTest8.reslam": {
+      "run_id": "VolleyBallTest8.reslam",
+      "mcap_path": "/home/brandon/Documents/perception-2026-testing/rocklabel/recordings/VolleyBallTest8.reslam.mcap",
+      "labels_path": "/home/brandon/Documents/perception-2026-testing/rocklabel/labels/VolleyBallTest8.reslam.labels.json",
+      "rock_count": 4,
+      "arena_vertices": 4,
+      "z_band": [
+        -2.4392,
+        -0.478
+      ],
+      "level": {
+        "mode": "manual",
+        "roll_deg": 2.1472,
+        "pitch_deg": 34.6278,
+        "floor_z": -0.8019
+      },
+      "intensity_available": true,
+      "generated": "2026-08-18T00:29:45Z",
+      "frames_kept": 252,
+      "frames_skipped_pose": 0,
+      "frames_skipped_empty": 0,
+      "point_samples": 9972,
+      "bev_frames": 252,
+      "seg_frames": 248,
+      "seg_points": 316871,
+      "seg_point_labels": {
+        "rock": 2199,
+        "clear": 313124,
+        "ignore": 1548
+      },
+      "sample_labels": {
+        "rock": 1074,
+        "clear": 8898
+      },
+      "point_labels": {
+        "rock": 2213,
+        "clear": 333883,
+        "ignore": 1551
+      },
+      "bev_cells": {
+        "rock": 1478,
+        "clear": 187698,
+        "ignore": 1423624
+      },
+      "stamp_fallbacks": 0
+    },
+    "VolleyBallTest9.reslam": {
+      "run_id": "VolleyBallTest9.reslam",
+      "mcap_path": "/home/brandon/Documents/perception-2026-testing/rocklabel/recordings/VolleyBallTest9.reslam.mcap",
+      "labels_path": "/home/brandon/Documents/perception-2026-testing/rocklabel/labels/VolleyBallTest9.reslam.labels.json",
+      "rock_count": 7,
+      "arena_vertices": 4,
+      "z_band": [
+        -2.4214,
+        -0.401
+      ],
+      "level": {
+        "mode": "manual",
+        "roll_deg": 0.7125,
+        "pitch_deg": 21.8845,
+        "floor_z": -0.8677
+      },
+      "intensity_available": true,
+      "generated": "2026-08-18T00:29:50Z",
+      "frames_kept": 209,
+      "frames_skipped_pose": 0,
+      "frames_skipped_empty": 0,
+      "point_samples": 8823,
+      "bev_frames": 209,
+      "seg_frames": 203,
+      "seg_points": 231092,
+      "seg_point_labels": {
+        "rock": 3701,
+        "clear": 224774,
+        "ignore": 2617
+      },
+      "sample_labels": {
+        "rock": 2639,
+        "clear": 6184
+      },
+      "point_labels": {
+        "rock": 3730,
+        "clear": 249009,
+        "ignore": 2628
+      },
+      "bev_cells": {
+        "rock": 2526,
+        "clear": 144211,
+        "ignore": 1190863
+      },
+      "stamp_fallbacks": 0
+    },
+    "VolleyBallTest11.reslam": {
+      "run_id": "VolleyBallTest11.reslam",
+      "mcap_path": "/home/brandon/Documents/perception-2026-testing/rocklabel/recordings/VolleyBallTest11.reslam.mcap",
+      "labels_path": "/home/brandon/Documents/perception-2026-testing/rocklabel/labels/VolleyBallTest11.reslam.labels.json",
+      "rock_count": 7,
+      "arena_vertices": 4,
+      "z_band": [
+        -2.115,
+        -0.286
+      ],
+      "level": {
+        "mode": "manual",
+        "roll_deg": 0.2209,
+        "pitch_deg": 30.9737,
+        "floor_z": -0.8127
+      },
+      "intensity_available": true,
+      "generated": "2026-08-18T00:29:54Z",
+      "frames_kept": 161,
+      "frames_skipped_pose": 0,
+      "frames_skipped_empty": 0,
+      "point_samples": 6153,
+      "bev_frames": 161,
+      "seg_frames": 155,
+      "seg_points": 150159,
+      "seg_point_labels": {
+        "rock": 2873,
+        "clear": 145656,
+        "ignore": 1630
+      },
+      "sample_labels": {
+        "rock": 1942,
+        "clear": 4211
+      },
+      "point_labels": {
+        "rock": 2942,
+        "clear": 204383,
+        "ignore": 1661
+      },
+      "bev_cells": {
+        "rock": 1822,
+        "clear": 114880,
+        "ignore": 913698
+      },
+      "stamp_fallbacks": 0
+    },
+    "VolleyBallTest12.reslam": {
+      "run_id": "VolleyBallTest12.reslam",
+      "mcap_path": "/home/brandon/Documents/perception-2026-testing/rocklabel/recordings/VolleyBallTest12.reslam.mcap",
+      "labels_path": "/home/brandon/Documents/perception-2026-testing/rocklabel/labels/VolleyBallTest12.reslam.labels.json",
+      "rock_count": 6,
+      "arena_vertices": 5,
+      "z_band": [
+        -2.083,
+        -0.438
+      ],
+      "level": {
+        "mode": "manual",
+        "roll_deg": 1.5679,
+        "pitch_deg": 31.0838,
+        "floor_z": -0.8429
+      },
+      "intensity_available": true,
+      "generated": "2026-08-18T00:29:59Z",
+      "frames_kept": 194,
+      "frames_skipped_pose": 0,
+      "frames_skipped_empty": 0,
+      "point_samples": 8195,
+      "bev_frames": 194,
+      "seg_frames": 193,
+      "seg_points": 204886,
+      "seg_point_labels": {
+        "rock": 3691,
+        "clear": 198936,
+        "ignore": 2259
+      },
+      "sample_labels": {
+        "rock": 2359,
+        "clear": 5836
+      },
+      "point_labels": {
+        "rock": 3699,
+        "clear": 245778,
+        "ignore": 2262
+      },
+      "bev_cells": {
+        "rock": 2257,
+        "clear": 137299,
+        "ignore": 1102044
+      },
+      "stamp_fallbacks": 0
+    }
+  },
+  "generated": "2026-08-18T00:29:59Z"
+}

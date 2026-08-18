@@ -800,6 +800,59 @@ COMMANDS: list[Command] = [
         long_running=True,
     ),
     Command(
+        id="train-matched", bin="rocklabel-train", sub="matched", stage="train",
+        icon="⇔",
+        title="Segmenter vs classifier",
+        tagline="Compare a per-point model against a sliding-window one, fairly.",
+        what="Takes a finished sweep that trained both kinds of model and re-scores "
+             "them on one shared set of candidate spots. The sliding-window model "
+             "already gives each spot a score. The per-point model is asked for one "
+             "by taking the strongest rock score it gave to any point sitting within "
+             "a few centimetres of that spot. Both then get graded on the same spots "
+             "with the same right answers, and you get a per-run table, a win/loss "
+             "count and a significance test.",
+        why="Because the two kinds of model are normally graded on different things "
+            "and their scores cannot be read off one table. A sliding-window model "
+            "is graded on candidate spots, about a fifth of which are rock; a "
+            "per-point model is graded on individual points, only about one in a "
+            "hundred of which are rock. The main score used everywhere in this tool "
+            "moves with that proportion, so the per-point model looks far worse than "
+            "it is. This puts them on equal footing.",
+        notes=[
+            "Needs a sweep that has both kinds of model in it - the 'fullsweep' "
+            "set does. Runs in seconds and trains nothing, so it is safe to run "
+            "while a sweep is still going.",
+            "Point --cache-dir at the same cache the sweep was trained on; the "
+            "point positions are read from it.",
+        ],
+        params=[
+            Param("suite", "enum", "Which sweep", arg="--suite",
+                  choices=sorted(ABLATION_SUITES), default="fullsweep",
+                  help="Only a set holding both a per-point model and a "
+                       "sliding-window model has anything to compare."),
+            Param("cache_dir", "dir", "Cache folder", arg="--cache-dir",
+                  default="training/cache", source="caches",
+                  help="The cache the sweep was trained on."),
+            Param("ablate_root", "dir", "Runs folder", arg="--ablate-root",
+                  default="training/ablate",
+                  help="Where that sweep's trained folds live."),
+            Param("out", "outdir", "Output directory", arg="--out",
+                  help="Where the table and figures land. Defaults to "
+                       "training/results_matched/<sweep>."),
+            Param("radius", "float", "Match radius", arg="--radius", default=0.15,
+                  min=0.01, max=1.0, step=0.01, unit="m", advanced=True,
+                  help="How far from a candidate spot a scored point may sit and "
+                       "still count as describing it. Candidate spots are the "
+                       "centre of a 5 cm cell, so their own points are within about "
+                       "4 cm; the default keeps those and the immediate surround."),
+            Param("aggregation", "enum", "Combine nearby points by", arg="--aggregation",
+                  choices=["max", "mean", "nearest"], default="max", advanced=True,
+                  help="How the scores of the points near a spot become one number. "
+                       "'max' asks whether the model thinks anything there is rock, "
+                       "which is the question the label actually poses."),
+        ],
+    ),
+    Command(
         id="train-reflect", bin="rocklabel-train", sub="reflect", stage="train",
         icon="✸",
         title="Reflectivity check",

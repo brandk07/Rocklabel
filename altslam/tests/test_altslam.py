@@ -430,3 +430,84 @@ def test_cli_refuses_output_with_many_inputs():
     from altslam.cli import main
 
     assert main(["a.mcap", "b.mcap", "-o", "out.mcap"]) == 2
+
+
+# --------------------------------------------------------------------------- #
+# Revisit diagnostics
+# --------------------------------------------------------------------------- #
+def _flat_visits(offsets, noise=0.005, n=40000, dt=1.0):
+    """One frame per 'visit' of a flat patch, each nudged up/down by offsets[i].
+
+    Sensor-frame geometry is identical every visit, so anything the diagnostics
+    report as *between*-visit error is exactly the offset we injected.
+    """
+    frames = []
+    for i, off in enumerate(offsets):
+        g = np.column_stack([
+            RNG.uniform(-2, 2, n), RNG.uniform(-2, 2, n), RNG.normal(0, noise, n),
+        ])
+        frames.append(RecordedFrame(
+            points=g.astype(np.float32),
+            intensity=np.ones(n, dtype=np.float32),
+            timestamp=i * dt,
+            orientation=np.array([1.0, 0.0, 0.0, 0.0]),
+            pose_position=np.array([0.0, 0.0, off]),
+            pose_quat=np.array([1.0, 0.0, 0.0, 0.0]),
+            log_time_ns=int(i * dt * 1e9),
+        ))
+    return frames
+
+
+def test_revisit_error_separates_sensor_noise_from_pose_error():
+    from altslam.evaluate import revisit_error
+
+    offsets = [0.0, 0.02, -0.02, 0.01, -0.01]
+    frames = _flat_visits(offsets, noise=0.005)
+    r = revisit_error(frames, up=np.array([0.0, 0.0, 1.0]), bin_sec=1.0,
+                      stride=1, radius=8.0)
+    # The floor should read back the roughness we put in (5 mm).
+    assert 3.0 < r["within_mm"] < 8.0, r
+    # ...and the pose term should read back the spread of the offsets.
+    expected = np.std(offsets) * 1000
+    assert abs(r["between_mm"] - expected) < 5.0, (r, expected)
+    assert r["cells"] > 100
+
+
+def test_revisit_error_reports_a_clean_trajectory_as_clean():
+    from altslam.evaluate import revisit_error
+
+    r = revisit_error(_flat_visits([0.0] * 5, noise=0.005),
+                      up=np.array([0.0, 0.0, 1.0]), bin_sec=1.0, stride=1)
+    assert r["between_mm"] < 3.0, r
+
+
+def test_error_vs_gap_detects_accumulating_drift():
+    """A trajectory that slides steadily must show error growing with the gap."""
+    from altslam.evaluate import error_vs_gap
+
+    drift = np.linspace(0.0, 0.12, 14)
+    rows = error_vs_gap(_flat_visits(drift, noise=0.003), up=np.array([0.0, 0.0, 1.0]),
+                        bin_sec=1.0, stride=1, min_pairs=50)
+    assert len(rows) >= 3, rows
+    assert rows[-1][2] > 3.0 * rows[0][2], rows
+
+
+def test_error_vs_gap_is_flat_without_drift():
+    """Random per-visit wobble (no accumulation) must NOT grow with the gap —
+    this is the signature that says loop closure would not help."""
+    from altslam.evaluate import error_vs_gap
+
+    wobble = RNG.normal(0, 0.01, 14)
+    rows = error_vs_gap(_flat_visits(wobble, noise=0.003), up=np.array([0.0, 0.0, 1.0]),
+                        bin_sec=1.0, stride=1, min_pairs=50)
+    assert len(rows) >= 3, rows
+    assert rows[-1][2] < 2.0 * rows[0][2], rows
+
+
+def test_revisit_diagnostics_need_an_up_vector():
+    from altslam.evaluate import error_vs_gap, revisit_error
+
+    with pytest.raises(ValueError):
+        revisit_error(_flat_visits([0.0, 0.01]))
+    with pytest.raises(ValueError):
+        error_vs_gap(_flat_visits([0.0, 0.01]))

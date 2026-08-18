@@ -20,6 +20,7 @@ from ..neighborhoods import FEATURES
 from .models_meta import MODELS
 from . import TRAIN_DEFAULTS
 from .ablate import DEFAULT_ROOT as ABLATE_ROOT, SUITES
+from .matched import AGGREGATIONS, DEFAULT_RADIUS_M
 from .data import DEFAULT_DATASETS, run_dir_name, run_suffix
 
 DEFAULT_ROOT = "training"
@@ -202,6 +203,25 @@ def build_parser() -> argparse.ArgumentParser:
     _add_common(p)
     _add_train_args(p)
 
+    p = sub.add_parser("matched", help="score a segmenter and a sliding-window "
+                                       "classifier on one shared set of candidate "
+                                       "centers, so their numbers can be compared")
+    p.add_argument("--suite", default="fullsweep", choices=sorted(SUITES),
+                   help="which sweep's arms to read; only suites holding both a "
+                        "segmentation arm and a classifier arm have anything to "
+                        "compare")
+    p.add_argument("--ablate-root", default=ABLATE_ROOT,
+                   help=f"where the sweep's runs live (default: {ABLATE_ROOT})")
+    p.add_argument("--cache-dir", default=os.path.join(DEFAULT_ROOT, "cache"))
+    p.add_argument("--out", default=None,
+                   help=f"output dir (default: {DEFAULT_ROOT}/results_matched/<suite>)")
+    p.add_argument("--radius", type=float, default=DEFAULT_RADIUS_M,
+                   help="how far from a candidate center a segmented point may sit "
+                        f"and still describe it (default: {DEFAULT_RADIUS_M} m)")
+    p.add_argument("--aggregation", default="max", choices=list(AGGREGATIONS),
+                   help="how the per-point probabilities near a center become one "
+                        "number for it (default: max)")
+
     p = sub.add_parser("reflect", help="measure what the reflectivity channel "
                                        "actually carries, straight off the cache "
                                        "(no training)")
@@ -311,6 +331,13 @@ def main(argv: list[str] | None = None) -> int:
         out = args.results_dir or os.path.join(DEFAULT_ROOT, "results_ablate",
                                                args.suite)
         render_ablation(args.ablate_root, args.suite, out)
+        return 0
+
+    if args.command == "matched":
+        from .matched import render_matched
+        out = args.out or os.path.join(DEFAULT_ROOT, "results_matched", args.suite)
+        render_matched(args.cache_dir, args.ablate_root, args.suite, out,
+                       radius=args.radius, aggregation=args.aggregation)
         return 0
 
     if args.command == "reflect":

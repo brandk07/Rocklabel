@@ -21,6 +21,10 @@ with no changes at all; they just see a better-aligned world.
 
 Nothing under `rocklabel/` imports this package. It only ever reads from it.
 
+Picking this up cold? Read **[HANDOFF.md](HANDOFF.md)** — what was
+measured, what worked, what was tried and abandoned, and where the remaining
+headroom is.
+
 ## Why the stock one struggles on the volleyball court
 
 Measured on `VolleyBallTest1.mcap`:
@@ -124,13 +128,48 @@ with this package.
 | `--degeneracy` | 0.03 | 0 disables the flat-ground guard entirely |
 | `--voxel` | 0.20 m | registration only; does not limit final rock detail |
 
-## Known limits
+## Known limits — measured, not guessed
 
-- **No loop closure.** Revisiting a spot after a long excursion will not snap
-  the map back into place. The multi-pass refinement helps but is not the same
-  thing.
-- **The refinement passes find a local optimum.** They sharpen the trajectory
-  they are given; they cannot rescue one that is badly wrong to begin with.
+Checked on `VolleyBallTest1.reslam.mcap` by asking how far apart the same patch
+of sand lands when the sensor looks at it twice:
+
+| delay between the two looks | disagreement |
+|---|---|
+| under 2 s | 5.5 mm |
+| 5-10 s | 8.0 mm |
+| 20-35 s | 7.5 mm |
+| 35-60 s | 9.5 mm |
+
+**It stops growing after about five seconds.** So there is no accumulating
+drift left to remove, and loop closure — the obvious next feature, and what an
+earlier draft of this file called the main gap — would buy almost nothing here.
+The multi-pass refinement already makes the trajectory globally consistent.
+
+What is left is about **8 mm of pose error against about 11 mm of sensor
+noise** (measured within a single look, 1-6 m range). Pose is no longer the
+larger term. A *perfect* trajectory would take the surface from 17 mm to
+roughly 12 mm — worth having, but not another 2x.
+
+So, in order of what is actually worth building:
+
+1. **Joint optimisation of all poses at once.** The refinement passes move one
+   window at a time against a frozen map, which is coordinate descent and
+   crawls into a local optimum. Solving every pose simultaneously is the real
+   remaining algorithmic gap.
+2. **Distribution-to-distribution matching** (GICP / NDT) instead of
+   point-to-plane. Sand is rough; matching the full local shape rather than a
+   single normal suits it better.
+3. **A continuous-time trajectory** (spline) rather than one rigid pose per
+   0.1 s window. Inside a window the rotation still comes only from the IMU,
+   which is the component we know is unreliable during a hand sweep.
+
+Loop closure is deliberately *not* on that list.
+
+Other standing limits:
+
 - **Moving objects get built into the map.** The robust kernel stops them
   dragging the solve, but they still land in the cloud.
 - **Offline only.** At ~2.7x realtime it cannot run live as-is.
+- **Only the fused IMU quaternion is recorded**, not raw gyro/accelerometer.
+  Raw gyro would allow proper tight coupling and is immune to the
+  hand-swinging problem; it would need a recording-format change to capture.

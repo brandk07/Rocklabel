@@ -138,6 +138,77 @@ REFLECTIVITY_CONTRASTS = [
      "Noise floor: the same shape+reflectivity setting, two different seeds."),
 ]
 
+#: The full-sweep question, as a set of arms. Two things change at once
+#: relative to the reflectivity suite, on purpose:
+#:
+#: * the dataset is built from whole 20 Hz sensor rotations instead of single
+#:   ~4 ms sensor batches, so a frame carries ~1250 points in the crop box
+#:   instead of ~110, and
+#: * a third model joins in - the per-point segmenter, which could not be
+#:   trained at all on the batch-sized frames (they fell below the 512-point
+#:   floor, so the generator produced zero segmentation frames).
+#:
+#: Order is priority order: the segmenter-vs-classifier headline runs first,
+#: then reflectivity, then the seed repeats that say how big a meaningless
+#: difference looks. Stopping early still leaves the headline finished.
+FULLSWEEP_ARMS = [
+    Arm("pointnet2-geom", "pointnet2", _GEOM, "PointNet++ · shape only",
+        "PointNet++ scoring one 0.5 m ball at a time, with the reflectivity "
+        "channel removed. This is the arm to line up against the same-named "
+        "arm of the reflectivity suite: same model, same settings, same folds - "
+        "the only difference is that a frame here is a whole sensor rotation."),
+    Arm("pointnet2seg-geom", "pointnet2_seg", _GEOM, "Segmentation · shape only",
+        "PointNet++ labelling every point of a whole frame in one pass, shape "
+        "only. The headline arm: it answers a rock question in one forward pass "
+        "per frame instead of one per candidate ball."),
+    Arm("pointnet-geom", "pointnet", _GEOM, "PointNet · shape only",
+        "Plain PointNet on single balls, shape only - the cheapest model, kept "
+        "as the floor everything else has to beat."),
+    Arm("pointnet2-refl", "pointnet2", _ALL, "PointNet++ · shape + reflectivity",
+        "PointNet++ on single balls with reflectivity added back, using the "
+        "standard brightness jitter."),
+    Arm("pointnet2seg-refl", "pointnet2_seg", _ALL, "Segmentation · shape + reflectivity",
+        "The whole-frame segmenter with reflectivity added back. Denser frames "
+        "give the segmenter far more brightness context than a single ball has, "
+        "so this is where reflectivity has its best chance of paying off."),
+    Arm("pointnet-refl", "pointnet", _ALL, "PointNet · shape + reflectivity",
+        "Plain PointNet with reflectivity included."),
+    Arm("pointnet2-geom-s43", "pointnet2", _GEOM, "PointNet++ · shape only (seed 43)",
+        "Same setting as the shape-only PointNet++ arm, different random seed. "
+        "Exists only to measure how far two identical settings land apart, so a "
+        "difference between two real arms can be called real or not.", seed=43),
+    Arm("pointnet2seg-geom-s43", "pointnet2_seg", _GEOM, "Segmentation · shape only (seed 43)",
+        "Seed repeat of the shape-only segmentation arm - the noise floor for "
+        "the segmenter.", seed=43),
+]
+
+#: Head-to-head questions for the full-sweep suite.
+#:
+#: NOTE the first two are scored per point for the segmenter and per candidate
+#: ball for the classifiers, which are different populations with very
+#: different rock prevalence (~1% of points vs ~19% of balls). The paired table
+#: still says which arm won each fold, but the raw PR-AUC gap between a
+#: segmenter and a classifier is not a like-for-like number - `vb_compare.py`
+#: re-scores both at the same candidate centers for that.
+FULLSWEEP_CONTRASTS = [
+    ("pointnet2-geom", "pointnet2seg-geom",
+     "Shape only: does whole-frame segmentation beat the sliding-window classifier?"),
+    ("pointnet2-refl", "pointnet2seg-refl",
+     "Shape + reflectivity: does whole-frame segmentation beat the classifier?"),
+    ("pointnet-geom", "pointnet2-geom",
+     "Shape only: is PointNet++ better than plain PointNet?"),
+    ("pointnet2-geom", "pointnet2-refl",
+     "PointNet++: does adding reflectivity beat shape alone?"),
+    ("pointnet2seg-geom", "pointnet2seg-refl",
+     "Segmentation: does adding reflectivity beat shape alone?"),
+    ("pointnet-geom", "pointnet-refl",
+     "PointNet: does adding reflectivity beat shape alone?"),
+    ("pointnet2-geom", "pointnet2-geom-s43",
+     "Noise floor: the same PointNet++ setting, two different seeds."),
+    ("pointnet2seg-geom", "pointnet2seg-geom-s43",
+     "Noise floor: the same segmentation setting, two different seeds."),
+]
+
 SUITES: dict[str, dict] = {
     "reflectivity": {
         "arms": REFLECTIVITY_ARMS,
@@ -146,6 +217,15 @@ SUITES: dict[str, dict] = {
         "blurb": "PointNet and PointNet++, with and without the reflectivity "
                  "channel, plus seed repeats that show how big a meaningless "
                  "difference looks.",
+    },
+    "fullsweep": {
+        "arms": FULLSWEEP_ARMS,
+        "contrasts": FULLSWEEP_CONTRASTS,
+        "title": "Full sensor sweeps, and per-point segmentation",
+        "blurb": "Trained on frames built from whole 20 Hz sensor rotations "
+                 "(~1250 points in the crop box) instead of single ~4 ms sensor "
+                 "batches (~110 points). Adds the whole-frame segmenter, which "
+                 "the batch-sized frames were too sparse to train at all.",
     },
 }
 
