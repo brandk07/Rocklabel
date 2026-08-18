@@ -618,6 +618,8 @@ select.input { cursor: pointer; }
   background: var(--surface-3); color: var(--text-secondary); white-space: nowrap;
 }
 .pill.rock { background: color-mix(in srgb, var(--series-2) 22%, transparent); color: var(--text-primary); }
+.pill.ok { background: color-mix(in srgb, var(--good) 18%, transparent); color: var(--good); }
+.pill.warn { background: color-mix(in srgb, var(--warning) 18%, transparent); color: var(--warning); }
 .mono { font-family: var(--mono); font-size: 12px; }
 .wrap-anywhere { word-break: break-word; }
 .nowrap { white-space: nowrap; }

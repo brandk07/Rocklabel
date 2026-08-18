@@ -18,6 +18,20 @@ metres to port, arena floor" from "four metres to port, a couch"; without an
 arena the negative class ends up partly defined by whatever furniture shared
 the room. Measured on the comforter runs, 29% of clear samples contained
 structure over half a metre tall.
+
+Schema v4 adds an optional ``level``: the mount rotation that was applied to
+the cloud these centers were picked on (see :mod:`rocklabel.leveling`). It is
+not geometry, it is a frame stamp - centers are world coordinates, so the
+generator has to be able to tell that it is replaying the recording the same
+way up. Absent (every v1-v3 file) means unlevelled.
+
+Schema v5 adds an optional ``z_band``: the odom-frame (min, max) height slab
+the labeler's z clip was left at. It is the vertical half of what ``arena``
+does horizontally - together they bound the volume that is eligible to become
+training data. Without it the only vertical bound is the generator's crop box,
+which follows the sensor, so anything within crop_up_m *above* the sensor -
+ceiling, lights, the person holding the rig - trains as clear ground. Absent
+(every v1-v4 file) means no height restriction.
 """
 
 from __future__ import annotations
@@ -31,8 +45,9 @@ import numpy as np
 
 from . import __version__
 
-SCHEMA_VERSION = 3
-_READABLE_VERSIONS = (1, 2, 3)  # v1 = spheres only, v2 = shaped, v3 = + arena
+SCHEMA_VERSION = 5
+# v1 = spheres only, v2 = shaped, v3 = + arena, v4 = + level, v5 = + z_band
+_READABLE_VERSIONS = (1, 2, 3, 4, 5)
 
 
 @dataclass
@@ -79,11 +94,19 @@ class LabelSet:
     #: Optional arena footprint: [N, 2] odom xy, N >= 3. None = no boundary,
     #: which is the pre-v3 behavior (every candidate center is eligible).
     arena: np.ndarray | None = None
+    #: Frame stamp: the levelling applied to the cloud these centers were
+    #: picked on, as :func:`rocklabel.leveling.level_record` returns it.
+    #: None = unlevelled, which is the pre-v4 behavior.
+    level: dict | None = None
+    #: Optional height slab, odom-frame (min, max) meters. The vertical
+    #: partner of ``arena``. None = no height restriction, which is the
+    #: pre-v5 behavior (the generator's crop box is the only vertical bound).
+    z_band: tuple[float, float] | None = None
     _next_id: int = 1
 
     def set_arena(self, vertices) -> np.ndarray:
-        """Replace the arena footprint. Only xy is used - the vertical extent
-        is already handled by the generator's crop box."""
+        """Replace the arena footprint. Only xy is used - the height slab is
+        the separate ``z_band``, set from the labeler's z clip."""
         v = np.asarray(vertices, float).reshape(-1, 2)
         if len(v) < 3:
             raise ValueError(f"an arena polygon needs at least 3 vertices, got {len(v)}")
@@ -92,6 +115,16 @@ class LabelSet:
 
     def clear_arena(self) -> None:
         self.arena = None
+
+    def set_z_band(self, z_min: float, z_max: float) -> tuple[float, float]:
+        """Replace the eligible height slab. Ends are sorted, so a caller can
+        hand over two slider values without caring which one is on top."""
+        lo, hi = sorted((float(z_min), float(z_max)))
+        self.z_band = (lo, hi)
+        return self.z_band
+
+    def clear_z_band(self) -> None:
+        self.z_band = None
 
     def _append(self, rock: Rock) -> Rock:
         self._next_id += 1
@@ -147,6 +180,10 @@ class LabelSet:
         if self.arena is not None:
             data["arena"] = {"vertices": [[_r4(x), _r4(y)]
                                           for x, y in np.asarray(self.arena, float)]}
+        if self.level is not None:
+            data["level"] = dict(self.level)
+        if self.z_band is not None:
+            data["z_band"] = [_r4(self.z_band[0]), _r4(self.z_band[1])]
         tmp = path + ".tmp"
         with open(tmp, "w") as f:
             json.dump(data, f, indent=2)
@@ -196,10 +233,14 @@ def load_labels(path: str) -> LabelSet:
         odom_frame=data.get("odom_frame", "odom"),
         intensity_available=data.get("intensity_available", True),
         accumulator_voxel_m=data.get("accumulator_voxel_m", 0.03),
+        level=data.get("level"),
     )
     ls.rocks = [_rock_from_dict(r) for r in data.get("rocks", [])]
     arena = data.get("arena")
     if arena:
         ls.arena = np.asarray(arena["vertices"], float).reshape(-1, 2)
+    band = data.get("z_band")
+    if band:
+        ls.z_band = (float(band[0]), float(band[1]))
     ls._next_id = max((r.id for r in ls.rocks), default=0) + 1
     return ls

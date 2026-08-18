@@ -25,8 +25,12 @@ import open3d.visualization.rendering as rendering
 from scipy.spatial import cKDTree
 
 from .camera import CAMERA_HELP, CAMERA_HINT, PivotCamera
-from .labeling import points_in_rock
+from .labeling import inside_arena, points_in_rock
 from .labels import sync_bounds, translate_rock
+# Pure-NumPy scale helpers, shared with the live viewer so one slider position
+# means the same thing there and here (both work in fraction of full scale).
+from .live.colormap import clamp_range, move_range_end, percentile_range
+from .relief import relief_above_ground
 
 RADIUS_STEP = 0.02
 NUDGE_STEP = 0.02
@@ -37,6 +41,17 @@ WIRE_SELECTED = [1.00, 0.85, 0.10]
 WIRE_NORMAL = [0.95, 0.20, 0.15]
 #: Arena boundary: green, so it never reads as a rock outline (red/yellow).
 ARENA_COLOR = [0.25, 0.90, 0.45]
+#: In-progress arena outline: the same green, lighter, so the ring being
+#: clicked reads as "this is the arena" and not as another rock lasso (cyan).
+ARENA_PREVIEW_COLOR = [0.60, 1.00, 0.70]
+#: The arena ring is also drawn as a short fence this tall (metres, or 5% of
+#: the cloud's z extent if that is more). A ring lying flat on the floor is
+#: invisible from above - it disappears into the floor points it sits in.
+ARENA_FENCE_M = 0.35
+#: Points outside the arena keep their shape but lose their color: luminance
+#: is remapped into this gray band, so "out" reads at a glance from any angle
+#: while the geometry stays legible enough to aim the next click at.
+OUTSIDE_GRAY = (0.24, 0.34)  # (darkest, span)
 #: Editing tools, in dropdown order; index maps to the combo selection.
 TOOLS = ("navigate", "box", "lasso", "arena")
 
@@ -90,11 +105,41 @@ def height_colors(z: np.ndarray) -> np.ndarray:
     return colorize(z, "turbo")
 
 
-def reflectivity_colors(inten: np.ndarray) -> np.ndarray:
-    """Reflectivity (RSSI) coloring: 5-95 percentile so retro tape pops."""
+def relief_colors(relief: np.ndarray, high_m: float = 0.25) -> np.ndarray:
+    """Colour by height above the local ground, on a fixed 0..``high_m`` scale.
+
+    Fixed on purpose. A percentile ramp re-normalizes every time the visible
+    set changes, so a rock is bright until you clip away the sand and then it
+    is not — the one thing you must not have while deciding what is a rock.
+    Here 10 cm is the same colour whatever else is on screen, and anything at
+    or above ``high_m`` saturates rather than compressing the rest.
+    """
+    t = np.clip(np.asarray(relief, dtype=np.float64) / max(high_m, 1e-3), 0.0, 1.0)
+    return _turbo(t)
+
+
+def reflectivity_colors(inten: np.ndarray,
+                        limits: tuple[float, float] | None = None) -> np.ndarray:
+    """Reflectivity (RSSI) coloring over an explicit ``(low, high)`` window.
+
+    ``limits`` are absolute, in the same units the offline path normalizes
+    intensity to (fraction of the sensor's full scale, see
+    :func:`rocklabel.mcap_io.intensity_scale_for_peak`), and both ends clamp
+    hard: a return at or above ``high`` takes the top color rather than being
+    squeezed into the ramp with everything else. That is the difference that
+    matters on arena data, where every return lands in a narrow band and any
+    scale covering the whole of it paints the floor and the rocks the same
+    color. ``None`` falls back to the frame's own 5-95 percentile window,
+    which is the same idea fitted automatically — convenient, but it moves
+    whenever the visible points change.
+    """
     if len(inten) and float(inten.max()) <= 0.0:
         return np.full((len(inten), 3), 0.35)  # no RSSI data: flat gray
-    return colorize(inten, "inferno", pct=(5.0, 95.0))
+    if limits is None:
+        return colorize(inten, "inferno", pct=(5.0, 95.0))
+    lo, hi = clamp_range(*limits)
+    t = (np.asarray(inten, dtype=np.float64) - lo) / (hi - lo)
+    return _inferno(np.clip(t, 0.0, 1.0))
 
 
 # -- small helpers -----------------------------------------------------------
@@ -206,14 +251,34 @@ tools  (keys N / B / L / A or the Tool dropdown)
                    Enter or double-click closes it, Esc cancels;
                    then edit base/top z sliders
   A  arena         same clicking, but the closed outline becomes the
-                   competition boundary (green) instead of a rock.
-                   Candidate centers outside it never become training
-                   samples, so the couch across the room stops teaching
-                   the model what "clear ground" looks like.
+                   competition boundary instead of a rock: a green fence
+                   plus gray. Everything outside the ring is drawn gray
+                   instead of by height/reflectivity - while you click
+                   (from the 3rd point on, so you can see what you are
+                   roping in) and afterwards, so a saved arena is never
+                   invisible. Candidate centers out there never become
+                   training samples, so the couch across the room stops
+                   teaching the model what "clear ground" looks like.
                    Shift+A removes it. Optional: no arena = keep everything.
   points inside the active shape light up in cyan
 keys
-  C          cycle color: height / reflectivity
+  C          cycle color: height / relief / reflectivity
+             relief is how far each point stands above the ground directly
+             beneath it, so a rock reads the same whether the floor under
+             it sags, tilts or is covered in footprints - which plain
+             height coloring cannot do. Pair it with the Display panel's
+             "hide below" slider: at 8-10 cm the sand disappears and only
+             things standing proud of the ground are left on screen, which
+             is the fast way to find rocks worth labeling.
+             (the reflectivity ramp min/max sliders set which returns
+              saturate at each end of the reflectivity colors)
+z clip     the Display panel's z min/max does two jobs. While you drag it,
+           it only hides points - nothing is deleted and nothing is written.
+           But wherever you leave it is saved as the run's training height
+           band, and generate will build training data from that slab only.
+           It is the vertical partner of the arena ring: arena bounds the
+           floor plan, the z clip bounds the height. Leave it at the full
+           cloud (or press "Reset to full height") for no height limit.
   + / -      grow/shrink selected (radius, box, or lasso top)
   arrows     nudge selected in x/y
   PgUp/PgDn  nudge selected in z
@@ -234,10 +299,35 @@ class _LabelerApp(PivotCamera):
         self.default_radius = cfg["labeler"]["default_rock_radius_m"]
         self.color_mode = "height"
         self.point_size = 2.5
+        #: Reflectivity color window, (low, high) fractions of full scale, hard
+        #: clamped at both ends. Seeded from the cloud's own 5-95 percentile —
+        #: the window the old fixed stretch used — so the first look is the
+        #: familiar one, and from there the sliders move it without the colors
+        #: shifting under you every time the z clip changes.
+        self.refl_range = percentile_range(inten, (5.0, 95.0), full_scale=1.0) \
+            or (0.0, 1.0)
+        #: Height of every point above the ground *beneath it* (see
+        #: :mod:`rocklabel.relief`). Computed once here rather than lazily
+        #: because everything below — the colour ramp, the clip, the status
+        #: line — wants it, and on a few million points it costs a fraction
+        #: of a second.
+        self.relief = relief_above_ground(xyz)
+        #: Top of the relief colour ramp, metres. A rock is a rock at 25 cm.
+        self.relief_high = 0.25
+        #: Hide anything standing less than this above the local ground. 0
+        #: shows everything; raising it is what makes the sand go away.
+        self.relief_min = 0.0
         zlo, zhi = float(xyz[:, 2].min()), float(xyz[:, 2].max())
         self.z_bounds = (zlo, zhi)
-        self.z_min = zlo if z_min is None else float(z_min)
-        self.z_max = zhi if z_max is None else float(z_max)
+        # The clip is both the view filter and the saved training height band,
+        # so reopening a labeled run has to come back up on the band it was
+        # left at - otherwise the first save would quietly widen it back to the
+        # whole cloud. Explicit --z-min/--z-max still win over the saved band.
+        saved = labelset.z_band
+        self.z_min = float(z_min) if z_min is not None else (
+            saved[0] if saved is not None else zlo)
+        self.z_max = float(z_max) if z_max is not None else (
+            saved[1] if saved is not None else zhi)
         self.selected_id: int | None = None
         self._tree: cKDTree | None = None
         self._status_flash = ""
@@ -250,6 +340,8 @@ class _LabelerApp(PivotCamera):
         self._box_corner: np.ndarray | None = None
         self._lasso: list[np.ndarray] = []
         self._lasso_gen = 0                    # invalidates in-flight vertex picks
+        self._shaded_arena: np.ndarray | None = None   # polygon the cloud is grayed by
+        self._inside_count: int | None = None          # visible points inside it
         self._highlight_rock = None            # shape whose points glow cyan
         self._shift_down = False               # KeyEvent has no modifier state
 
@@ -279,10 +371,9 @@ class _LabelerApp(PivotCamera):
         self.window.add_child(self.panel)
         self.window.set_on_layout(self._on_layout)
 
-        self._rebuild_cloud(first=True)
+        self._rebuild_cloud(first=True)   # also draws the arena and grays outside it
         for rock in self.labelset.rocks:
             self._draw_rock(rock)
-        self._draw_arena()
         self._refresh_rock_list()
         self._update_status()
 
@@ -309,6 +400,8 @@ class _LabelerApp(PivotCamera):
         self.tool_hint = gui.Label("Shift+click always places a sphere")
         self.tool_hint.text_color = DIM
         tools.add_child(self.tool_hint)
+        self.arena_label = gui.Label("")
+        tools.add_child(self.arena_label)
         self.panel.add_child(tools)
 
         # --- camera section ---
@@ -328,10 +421,55 @@ class _LabelerApp(PivotCamera):
         row.add_child(gui.Label("Color by"))
         self.color_combo = gui.Combobox()
         self.color_combo.add_item("Height")
+        self.color_combo.add_item("Relief (above local ground)")
         self.color_combo.add_item("Reflectivity")
         self.color_combo.set_on_selection_changed(self._on_color_combo)
         row.add_child(self.color_combo)
         disp.add_child(row)
+
+        # Relief controls. The clip is the one that unblocks labelling on a
+        # textured floor: dial it up and the sand, ruts and footprints drop
+        # out of the scene, leaving only what actually stands proud of the
+        # ground. It is independent of the colour mode on purpose — you want
+        # to clip by relief while still reading reflectivity.
+        disp.add_child(gui.Label("Relief · hide below (cm) / ramp top (cm)"))
+        self.relief_min_slider = gui.Slider(gui.Slider.DOUBLE)
+        self.relief_min_slider.set_limits(0.0, 40.0)
+        self.relief_min_slider.double_value = self.relief_min * 100.0
+        self.relief_min_slider.set_on_value_changed(self._on_relief_min)
+        disp.add_child(self.relief_min_slider)
+        self.relief_high_slider = gui.Slider(gui.Slider.DOUBLE)
+        self.relief_high_slider.set_limits(5.0, 80.0)
+        self.relief_high_slider.double_value = self.relief_high * 100.0
+        self.relief_high_slider.set_on_value_changed(self._on_relief_high)
+        disp.add_child(self.relief_high_slider)
+        self.relief_label = gui.Label("")
+        self.relief_label.text_color = DIM
+        disp.add_child(self.relief_label)
+        self._refresh_relief_label()
+
+        # Reflectivity ramp window. Absolute and hard-clamped, so returns past
+        # either end saturate instead of compressing everything else into a
+        # single flat color — the whole point on arena data, where floor and
+        # rock differ by a few percent of full scale.
+        disp.add_child(gui.Label("Reflectivity ramp · min / max"))
+        self.refl_lo_slider = gui.Slider(gui.Slider.DOUBLE)
+        self.refl_lo_slider.set_limits(0.0, 1.0)
+        self.refl_lo_slider.double_value = self.refl_range[0]
+        self.refl_lo_slider.set_on_value_changed(self._on_refl_lo)
+        disp.add_child(self.refl_lo_slider)
+        self.refl_hi_slider = gui.Slider(gui.Slider.DOUBLE)
+        self.refl_hi_slider.set_limits(0.0, 1.0)
+        self.refl_hi_slider.double_value = self.refl_range[1]
+        self.refl_hi_slider.set_on_value_changed(self._on_refl_hi)
+        disp.add_child(self.refl_hi_slider)
+        self.refl_label = gui.Label("")
+        self.refl_label.text_color = DIM
+        disp.add_child(self.refl_label)
+        refl_fit = gui.Button("Auto-fit ramp to visible points")
+        refl_fit.set_on_clicked(self._autofit_refl)
+        disp.add_child(refl_fit)
+        self._refresh_refl_label()
 
         disp.add_child(gui.Label("Point size"))
         self.size_slider = gui.Slider(gui.Slider.DOUBLE)
@@ -342,7 +480,7 @@ class _LabelerApp(PivotCamera):
 
         zlo, zhi = self.z_bounds
         pad = max((zhi - zlo) * 0.02, 0.01)
-        disp.add_child(gui.Label("Z clip · min / max (m)"))
+        disp.add_child(gui.Label("Z clip · min / max (m)  —  ALSO THE TRAINING BAND"))
         self.zmin_slider = gui.Slider(gui.Slider.DOUBLE)
         self.zmin_slider.set_limits(zlo - pad, zhi + pad)
         self.zmin_slider.double_value = self.z_min
@@ -353,6 +491,16 @@ class _LabelerApp(PivotCamera):
         self.zmax_slider.double_value = self.z_max
         self.zmax_slider.set_on_value_changed(self._on_zmax)
         disp.add_child(self.zmax_slider)
+        # The clip has two jobs now: hide points while you work, and record the
+        # height slab Generate is allowed to build training data from. Dragging
+        # it stays a pure view change - nothing is written until a save - but
+        # where it is *left* is what gets saved, so it has to say so on screen.
+        self.zband_label = gui.Label("")
+        disp.add_child(self.zband_label)
+        zband_reset = gui.Button("Reset to full height (no training limit)")
+        zband_reset.set_on_clicked(self._reset_z_clip)
+        disp.add_child(zband_reset)
+        self._refresh_zband_label()
 
         toggles = gui.Horiz(0.8 * em)
         self.grid_check = gui.Checkbox("Grid")
@@ -443,7 +591,10 @@ class _LabelerApp(PivotCamera):
     # -- rendering ----------------------------------------------------------
 
     def _visible_mask(self) -> np.ndarray:
-        return (self.xyz[:, 2] >= self.z_min) & (self.xyz[:, 2] <= self.z_max)
+        keep = (self.xyz[:, 2] >= self.z_min) & (self.xyz[:, 2] <= self.z_max)
+        if self.relief_min > 0.0:
+            keep &= self.relief >= self.relief_min
+        return keep
 
     def _rebuild_cloud(self, first: bool = False) -> None:
         mask = self._visible_mask()
@@ -454,14 +605,21 @@ class _LabelerApp(PivotCamera):
             mask[0] = True
         self._tree = cKDTree(pts)
         self._visible_pts = pts
-        colors = (height_colors(pts[:, 2]) if self.color_mode == "height"
-                  else reflectivity_colors(self.inten[mask]))
+        if self.color_mode == "height":
+            colors = height_colors(pts[:, 2])
+        elif self.color_mode == "relief":
+            colors = relief_colors(self.relief[mask], self.relief_high)
+        else:
+            colors = reflectivity_colors(self.inten[mask], self.refl_range)
+        colors = self._gray_outside_arena(pts, colors)
         pcd = _point_cloud(pts, colors)
         if self.scene.scene.has_geometry("cloud"):
             self.scene.scene.remove_geometry("cloud")
         self.cloud_mat.point_size = self.point_size
         self.scene.scene.add_geometry("cloud", pcd, self.cloud_mat)
         self._refresh_highlight()
+        self._draw_arena()      # the ring sits on the floor of what is visible
+        self._refresh_arena_label()
         if first:
             bbox = pcd.get_axis_aligned_bounding_box()
             self.scene.setup_camera(60.0, bbox, bbox.get_center())
@@ -499,8 +657,60 @@ class _LabelerApp(PivotCamera):
 
     # -- arena boundary -------------------------------------------------------
 
+    def _shading_arena(self) -> np.ndarray | None:
+        """The xy polygon the cloud is currently grayed against, or None.
+
+        An arena outline still being clicked wins over the committed one: the
+        whole point of shading live is to show what the ring you are drawing
+        right now would keep, before you commit to it.
+        """
+        if self.tool == "arena" and len(self._lasso) >= 3:
+            return np.stack(self._lasso)[:, :2]
+        return self.labelset.arena
+
+    def _gray_outside_arena(self, pts: np.ndarray, colors: np.ndarray) -> np.ndarray:
+        """Desaturate everything outside the arena footprint.
+
+        Outside points keep a luminance ramp rather than going one flat gray:
+        flat gray erases the floor/furniture relief you need to see to aim the
+        next outline click, and the ramp is unsaturated enough that no gray
+        point can be mistaken for a turbo/inferno one.
+        """
+        arena = self._shading_arena()
+        self._shaded_arena = arena
+        self._inside_count = None
+        if arena is None or len(pts) == 0:
+            return colors
+        inside = inside_arena(pts, arena)
+        self._inside_count = int(inside.sum())
+        if inside.all():
+            return colors
+        colors = np.array(colors, float, copy=True)
+        lum = colors[~inside] @ np.array([0.299, 0.587, 0.114])
+        floor, span = OUTSIDE_GRAY
+        colors[~inside] = (floor + span * lum)[:, None]
+        return colors
+
+    def _refresh_arena_shading(self) -> None:
+        """Recolor the cloud, but only when the polygon it is shaded against
+        actually changed - this runs on every outline click and every tool
+        switch, and rebuilding a million-point cloud for nothing is felt."""
+        want = self._shading_arena()
+        have = self._shaded_arena
+        if want is have:
+            return
+        if (want is not None and have is not None and want.shape == have.shape
+                and np.array_equal(want, have)):
+            return
+        self._rebuild_cloud()
+
     def _draw_arena(self) -> None:
-        """(Re)draw the arena outline, flat on the ground at the cloud's floor."""
+        """(Re)draw the arena boundary as a short fence standing on the floor.
+
+        A ring lying flat at floor level is what the boundary used to be, and
+        it was invisible: seen from above it is buried in the very floor points
+        it sits among. Extruding it upward gives it something to occlude.
+        """
         self._remove("_arena")
         arena = self.labelset.arena
         if arena is None:
@@ -508,11 +718,33 @@ class _LabelerApp(PivotCamera):
             return
         z = (float(np.percentile(self._visible_pts[:, 2], 1.0))
              if len(self._visible_pts) else 0.0)
-        ring = np.column_stack([arena, np.full(len(arena), z)])
-        line = _polyline_lineset(ring, close=True)
-        line.paint_uniform_color(ARENA_COLOR)
-        self.scene.scene.add_geometry("_arena", line, _line_material(3.0))
+        top = z + max(ARENA_FENCE_M, 0.05 * (self.z_bounds[1] - self.z_bounds[0]))
+        fence = _prism_lineset(np.asarray(arena, float), z, top)
+        fence.paint_uniform_color(ARENA_COLOR)
+        self.scene.scene.add_geometry("_arena", fence, _line_material(3.0))
         self.window.post_redraw()
+
+    def _refresh_arena_label(self) -> None:
+        """Panel readout: the arena has no entry in the rock list, so without
+        this there is nothing on screen that says whether one is set."""
+        label = getattr(self, "arena_label", None)
+        if label is None:
+            return
+        # Report the polygon the colors actually came from, which during an
+        # outline is the unsaved draft, not the committed arena underneath it.
+        shading = self._shaded_arena
+        drafting = shading is not None and shading is not self.labelset.arena
+        if shading is None:
+            label.text = "Arena: none - every point is eligible"
+            label.text_color = WARN
+        else:
+            label.text = (f"Arena{' (drafting)' if drafting else ''}: "
+                          f"{len(shading)} vertices")
+            if self._inside_count is not None:
+                label.text += (f"\n{self._inside_count:,} of "
+                               f"{len(self._visible_pts):,} visible pts inside")
+            label.text_color = ACCENT if drafting else OK_GREEN
+        self.window.set_needs_layout()
 
     def _clear_arena(self) -> None:
         if self.labelset.arena is None:
@@ -520,7 +752,7 @@ class _LabelerApp(PivotCamera):
             return
         self.labelset.clear_arena()
         self._save()
-        self._draw_arena()
+        self._rebuild_cloud()   # redraws the (now absent) fence and un-grays
         self._update_status("arena cleared - every candidate center is eligible again")
 
     def _refresh_rock_list(self) -> None:
@@ -539,6 +771,9 @@ class _LabelerApp(PivotCamera):
     def _update_status(self, flash: str = "") -> None:
         n = len(self.labelset.rocks)
         parts = [f"{n} rock{'s' if n != 1 else ''}", f"color: {self.color_mode}"]
+        band = self._z_band()
+        parts.append("band: full height" if band is None
+                     else f"band: z {band[0]:.2f}..{band[1]:.2f} m")
         if flash:
             parts.append(flash)
         self.status.text = "  ·  ".join(parts) + f"\n{self.save_path}"
@@ -547,10 +782,54 @@ class _LabelerApp(PivotCamera):
 
     # -- widget callbacks ---------------------------------------------------
 
+    _COLOR_MODES = ("height", "relief", "reflectivity")
+
     def _on_color_combo(self, _text, index) -> None:
-        self.color_mode = "height" if index == 0 else "reflectivity"
+        self.color_mode = self._COLOR_MODES[index]
         self._rebuild_cloud()
         self._update_status()
+
+    def _on_refl_lo(self, value) -> None:
+        self._set_refl_range(*move_range_end(self.refl_range, "lo", value))
+
+    def _on_refl_hi(self, value) -> None:
+        self._set_refl_range(*move_range_end(self.refl_range, "hi", value))
+
+    def _set_refl_range(self, lo, hi) -> None:
+        """Move the reflectivity window and redraw (no-op if unchanged)."""
+        window = clamp_range(lo, hi)
+        if window == self.refl_range:
+            return
+        self.refl_range = window
+        self._sync_refl_sliders()
+        if self.color_mode != "height":
+            self._rebuild_cloud()
+        self.window.post_redraw()
+
+    def _autofit_refl(self) -> None:
+        """Fit the window to the currently visible points' 5-95 percentile.
+
+        Visible, not the whole cloud: once the z clip is down to the floor
+        band, the ceiling's returns are no longer competing for the ramp.
+        """
+        mask = self._visible_mask()
+        window = percentile_range(self.inten[mask], (5.0, 95.0), full_scale=1.0)
+        if window is None:
+            self._update_status("no reflectivity data to fit a ramp to")
+            return
+        self._set_refl_range(*window)
+        if self.color_mode == "height":
+            self._update_status("ramp fitted - press C to color by reflectivity")
+
+    def _sync_refl_sliders(self) -> None:
+        self.refl_lo_slider.double_value = self.refl_range[0]
+        self.refl_hi_slider.double_value = self.refl_range[1]
+        self._refresh_refl_label()
+
+    def _refresh_refl_label(self) -> None:
+        lo, hi = self.refl_range
+        self.refl_label.text = (f"{lo:.3f} – {hi:.3f} of full scale · "
+                                "outside saturates")
 
     def _on_point_size(self, value) -> None:
         self.point_size = float(value)
@@ -561,13 +840,74 @@ class _LabelerApp(PivotCamera):
                 "highlight", _unlit_material(self.point_size + 2.5))
         self.window.post_redraw()
 
+    def _on_relief_min(self, value) -> None:
+        self.relief_min = max(0.0, float(value)) / 100.0
+        self._refresh_relief_label()
+        self._rebuild_cloud()
+
+    def _on_relief_high(self, value) -> None:
+        self.relief_high = max(0.05, float(value)) / 100.0
+        self._refresh_relief_label()
+        if self.color_mode == "relief":
+            self._rebuild_cloud()
+        self.window.post_redraw()
+
+    def _refresh_relief_label(self) -> None:
+        kept = int(np.count_nonzero(self.relief >= self.relief_min))
+        share = 100.0 * kept / max(len(self.relief), 1)
+        shown = (f"showing the {share:.0f}% of points standing "
+                 f"{self.relief_min * 100:.0f} cm+ above the ground"
+                 if self.relief_min > 0.0 else "showing every point")
+        self.relief_label.text = f"ramp tops out at {self.relief_high * 100:.0f} cm · {shown}"
+
     def _on_zmin(self, value) -> None:
         self.z_min = min(float(value), self.z_max)
         self._rebuild_cloud()
+        self._refresh_zband_label()
 
     def _on_zmax(self, value) -> None:
         self.z_max = max(float(value), self.z_min)
         self._rebuild_cloud()
+        self._refresh_zband_label()
+
+    def _reset_z_clip(self) -> None:
+        """Put the clip back to the full cloud, which is also how you say
+        "no height limit" to the generator."""
+        self.z_min, self.z_max = self.z_bounds
+        self.zmin_slider.double_value = self.z_min
+        self.zmax_slider.double_value = self.z_max
+        self._rebuild_cloud()
+        self._refresh_zband_label()
+        self._save()
+        self._update_status("height limit cleared")
+
+    def _z_band(self) -> tuple[float, float] | None:
+        """The clip as a training height band, or None when it is not cutting
+        anything. A clip left at the cloud's own extent is not a decision, so
+        it saves as "no limit" and the run behaves exactly as it did before
+        bands existed."""
+        zlo, zhi = self.z_bounds
+        eps = 1e-6
+        if self.z_min <= zlo + eps and self.z_max >= zhi - eps:
+            return None
+        return (self.z_min, self.z_max)
+
+    def _refresh_zband_label(self) -> None:
+        label = getattr(self, "zband_label", None)
+        if label is None:
+            return
+        band = self._z_band()
+        if band is None:
+            label.text = ("Saved band: none — every height trains.\n"
+                          "Drag either slider to limit it.")
+            label.text_color = WARN
+        else:
+            lo, hi = band
+            label.text = (f"Saved band: z {lo:.2f} to {hi:.2f} m ({hi - lo:.2f} m tall).\n"
+                          f"Generate will train on this slab only.")
+            label.text_color = OK_GREEN
+        # No relayout: both branches are two lines, and this runs during panel
+        # construction before the window has ever laid out.
 
     def _on_grid(self, checked) -> None:
         # The GroundPlane enum moved between Open3D versions; find it wherever
@@ -598,9 +938,13 @@ class _LabelerApp(PivotCamera):
             "box": "drag the footprint on the ground,\nrelease, then set the sliders",
             "lasso": "click outline points; Enter or\ndouble-click closes, Esc cancels",
             "arena": "click outline points; Enter or\ndouble-click closes, Esc cancels.\n"
-                     "Shift+A clears it",
+                     "points outside go gray from the\n3rd point on. Shift+A clears it",
         }
         self.tool_hint.text = hints[tool]
+        # Switching between the two outline tools keeps the in-progress ring
+        # (see above) but changes what it means, so the shading follows.
+        self._update_lasso_preview()
+        self._refresh_arena_shading()
         self._update_status(f"tool: {tool}")
 
     def _camera_status(self, text: str) -> None:
@@ -715,6 +1059,15 @@ class _LabelerApp(PivotCamera):
     # -- interaction --------------------------------------------------------
 
     def _save(self) -> None:
+        # Stamp the clip on the way out rather than on every drag: moving the
+        # sliders stays a free, reversible view change, and what lands in the
+        # file is wherever they were left when the save fired (every edit, S,
+        # and the auto-save on quit).
+        band = self._z_band()
+        if band is None:
+            self.labelset.clear_z_band()
+        else:
+            self.labelset.set_z_band(*band)
         self.labelset.save(self.save_path)
 
     # -- picking helpers ----------------------------------------------------
@@ -796,10 +1149,15 @@ class _LabelerApp(PivotCamera):
 
     def _update_lasso_preview(self) -> None:
         self._remove("_preview")
+        arena = self.tool == "arena"
         if len(self._lasso) >= 2:
             line = _polyline_lineset(np.stack(self._lasso), close=len(self._lasso) >= 3)
-            line.paint_uniform_color(PREVIEW_COLOR)
+            line.paint_uniform_color(ARENA_PREVIEW_COLOR if arena else PREVIEW_COLOR)
             self.scene.scene.add_geometry("_preview", line, _line_material(3.0))
+        if arena:
+            # From the third vertex on the ring encloses something, so shade
+            # the cloud by it: what stays colored is what this arena keeps.
+            self._refresh_arena_shading()
         self.window.post_redraw()
 
     def _finish_lasso(self) -> None:
@@ -814,9 +1172,12 @@ class _LabelerApp(PivotCamera):
         if self.tool == "arena":
             self.labelset.set_arena(pts[:, :2])
             self._save()
-            self._draw_arena()
-            self._update_status(f"arena set ({len(pts)} vertices) - centers outside "
-                                "it will not become training samples")
+            # The in-progress ring was already shading the cloud and the
+            # committed one is the same polygon, so this only ever redraws the
+            # fence and the panel readout - the gray does not flicker.
+            self._rebuild_cloud()
+            self._update_status(f"arena set ({len(pts)} vertices) - grayed points "
+                                "outside it will not become training samples")
             return
         base = float(pts[:, 2].min()) - 0.03
         # Default the top to hug whatever points the outline actually contains.
@@ -839,6 +1200,7 @@ class _LabelerApp(PivotCamera):
         self._lasso = []
         self._lasso_gen += 1
         self._clear_preview()
+        self._refresh_arena_shading()   # back to whatever arena is committed
         if had and not quiet:
             self._update_status(
                 f"{'arena' if self.tool == 'arena' else 'lasso'} cancelled")
@@ -1009,9 +1371,11 @@ class _LabelerApp(PivotCamera):
             else:
                 self._set_tool("arena")
         elif k == gui.KeyName.C:
-            self.color_mode = "reflectivity" if self.color_mode == "height" else "height"
-            self.color_combo.selected_index = 0 if self.color_mode == "height" else 1
+            nxt = (self._COLOR_MODES.index(self.color_mode) + 1) % len(self._COLOR_MODES)
+            self.color_mode = self._COLOR_MODES[nxt]
+            self.color_combo.selected_index = nxt
             self._rebuild_cloud()
+            self._update_status()
         elif k == gui.KeyName.EQUALS:  # '+' is Shift+'=' on US layouts
             self._mutate_selected(d_size=RADIUS_STEP)
         elif k == gui.KeyName.MINUS:

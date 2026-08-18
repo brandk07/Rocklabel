@@ -1,0 +1,161 @@
+# rocklabel configuration - shared by `label`, `driftcheck`, and `generate`.
+#
+# Every value below is the built-in default; delete anything you don't need to
+# change. Precedence: CLI flags > this file > built-in defaults. The fully
+# resolved config is hashed into the dataset manifest, so ANY change here
+# requires a fresh --out directory for `generate`.
+
+# NOTE: native lidarrig recordings (/lidar/frames) need none of the topics:
+# section - poses and reflectivity are embedded per frame and the format is
+# auto-detected. topics: only matters for ROS 2 bags.
+
+topics:
+  # PointCloud2 topic with the LiDAR scans. If the recording has several
+  # PointCloud2 topics, this must be set (run `rocklabel inspect` to list them,
+  # with each topic's frame and fields).
+  #
+  # Raw driver topic vs. a filtered topic from your perception stack: pick the
+  # one your classifier will consume at inference time, so training data
+  # matches. Raw keeps intensity but includes robot self-hits and reflection
+  # ghosts; filtered is clean but may drop intensity. Clouds already expressed
+  # in the odom frame (frame_id = odom) work fine - each message's own
+  # frame_id is used for the transform.
+  pointcloud_topic: /multiscan/lidar_scan
+
+  # Frame IDs as they appear in TF (also shown by `rocklabel inspect`).
+  # Note: the frame each point cloud is expressed in comes from the message's
+  # own header.frame_id; lidar_frame below is only the fallback for clouds
+  # with an empty frame_id, and the frame the static_lidar_to_base fallback
+  # mount attaches to.
+  odom_frame: odom
+  base_frame: base_link
+  lidar_frame: lidar_link
+
+  # TF topic names (rarely need changing).
+  tf_topic: /tf
+  tf_static_topic: /tf_static
+
+  # Max extrapolation (seconds) tolerated when a scan's stamp falls slightly
+  # outside the recorded TF range; scans further out are skipped and counted.
+  pose_tolerance_s: 0.15
+
+  # Fallback LiDAR mount if the recording is missing the static
+  # base_link -> lidar_link transform. Leave null if /tf_static has it.
+  # static_lidar_to_base:
+  #   translation: [0.20, 0.0, 0.50]     # meters, in base_link
+  #   quaternion: [0.0, 0.0, 0.0, 1.0]   # x, y, z, w
+  static_lidar_to_base: null
+
+  # Drop points within this xy-distance (meters) of the robot base in every
+  # scan - removes LiDAR self-hits on the robot body, which raw driver topics
+  # usually include. ~0.7 works for most rovers; 0 disables. Applies to
+  # labeling, driftcheck, AND generate, so the view matches the dataset.
+  min_range_m: 0.0
+
+level:
+  # Undo a tilted sensor mount. A recording's odom/world frame is only as level
+  # as the rig that made it - a native lidarrig frame is the sensor frame at
+  # startup - so a LiDAR on a slanted mast tilts the entire cloud. A z clip then
+  # slices a diagonal wedge out of the floor instead of a horizontal slab, and
+  # the model's neighborhoods see the mount angle as relief.
+  #
+  # Applied inside the scan stream, so `label`, `generate`, and `driftcheck` all
+  # share one geometry - they must, because rock centers are stored in world
+  # coordinates. `generate` replays the exact angle the label file recorded.
+  #
+  #   off     no rotation (what every pre-levelling dataset used)
+  #   ground  RANSAC ground-plane fit over the recording
+  #   manual  use mount_roll_deg / mount_pitch_deg verbatim
+  #
+  # CLI: --level / --mount-roll / --mount-pitch
+  mode: "off"
+
+  # Mount angles (deg) for mode "manual", in the same convention the live rig's
+  # IMU and `rocklabel label` report: a sensor pitched nose-up by theta about
+  # its own +y axis is mount_pitch_deg: theta.
+  mount_roll_deg: 0.0
+  mount_pitch_deg: 0.0
+
+  # Pool floor candidates from the first N scans (0 = whole recording).
+  fit_scans: 0
+
+  # 3D range band (m) around the sensor for pooled points: the inner radius
+  # skips the rig's own frame, the outer keeps the floor dense and flat.
+  # Measured per scan, so it follows a rig that walks.
+  range_min_m: 0.6
+  range_max_m: 6.0
+
+  # Voxel size the pooled cloud is downsampled to before fitting.
+  fit_voxel_m: 0.05
+
+  # RANSAC inlier distance (m) and hypothesis count.
+  plane_thresh_m: 0.05
+  ransac_iters: 512
+
+  # Reject planes tilted more than this from +z. This is what keeps the fit off
+  # walls: indoors a wall often has more coplanar points than the floor.
+  max_tilt_deg: 50.0
+
+  # Acceptance gate. Loose on purpose: in a still-tilted frame the pooled set is
+  # mostly walls, so the floor is a minority of it.
+  min_inlier_frac: 0.15
+
+  # A fitted plane this far above the sensor is the ceiling, not the floor.
+  ceiling_margin_m: 0.2
+
+labeler:
+  # Voxel size of the streaming accumulator that fuses all scans for display.
+  # Smaller = denser cloud, more memory.
+  accumulator_voxel_m: 0.03
+
+  # Radius (meters) of a newly placed rock sphere; adjust per rock with +/-.
+  default_rock_radius_m: 0.15
+
+  # Accumulate every Nth scan (CLI: --stride). 1 = use every scan.
+  stride: 1
+
+  # Initial z clipping planes in odom meters (CLI: --z-min / --z-max).
+  # null = no clipping; adjust live with [ and ].
+  z_min: null
+  z_max: null
+
+generator:
+  # Keep every Nth scan as a training frame (reduces near-duplicate frames).
+  frame_stride: 4
+
+  # Merge all scans within this time window (seconds) into one dataset frame
+  # BEFORE frame_stride is applied. 0 = one frame per message. Essential for
+  # native lidarrig recordings, whose messages are raw ~4 ms sensor batches
+  # (~400 points each): 0.25 fuses ~60 batches into one dense frame.
+  # Harmless for ROS 2 bags (their messages are already full scans).
+  frame_window_s: 0.05
+
+  # Robot-centered crop box, axis-aligned in the odom frame (deliberately NOT
+  # rotated with heading; heading invariance is a training-time augmentation).
+  crop_forward_m: 6.0
+  crop_backward_m: 2.0
+  crop_left_m: 4.0
+  crop_right_m: 4.0
+  crop_up_m: 1.5
+  crop_down_m: 1.0
+
+  # Points inside sphere+shell but outside the sphere are labeled "ignore"
+  # (255 in masks, skipped as samples) - the fuzzy rock boundary.
+  boundary_shell_m: 0.05
+
+  # --- format A: point-neighborhood samples (points/<run_id>/*.npz) ---
+  centers_voxel_m: 0.05        # voxel grid producing candidate center points
+  neighborhood_radius_m: 0.5   # gather all points within this radius
+  min_neighbors: 20            # discard sparser candidates
+  neighborhood_points: 256     # fixed sample size (subsample / pad-by-repeat)
+  negative_keep_prob: 0.05     # keep this fraction of clear samples (all rocks kept)
+
+  # --- format C: whole-frame per-point segmentation (seg/<run_id>/*.npz) ---
+  segmentation_points: 4096     # fixed frame size (subsample / pad-by-repeat)
+  segmentation_min_points: 512  # skip frames sparser than this
+
+  # --- format B: BEV rasters (bev/<run_id>/*.npz) ---
+  bev_cell_m: 0.10             # with the default crop: 80 x 80 cells
+
+  # RNG seed for negative subsampling and neighborhood subsample/pad.
+  seed: 42

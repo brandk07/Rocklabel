@@ -189,8 +189,8 @@ function renderControl(c) {
     // can type an exact -1.50 into, which is what a slider can never do.
     const cell = h('div', 'ctl-value');
     const wide = (c.max != null && c.min != null) && (c.max - c.min) > 1000;
-    const typed = wide || c.id.startsWith('region.') || c.id === 'view.accum_frames'
-      || c.id === 'view.accum_max_points';
+    const typed = wide || c.id.startsWith('region.') || c.id.startsWith('crop.')
+      || c.id === 'view.accum_frames' || c.id === 'view.accum_max_points';
     let input;
     let readback = null;
     if (typed) {

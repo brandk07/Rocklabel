@@ -55,6 +55,7 @@ out/
 # Editor / tooling scratch
 # ---------------------------------------------------------------------------
 .claude/
+CLAUDE.md
 .vscode/
 .idea/
 tempCodeRunnerFile.py

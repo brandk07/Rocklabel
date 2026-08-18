@@ -122,6 +122,27 @@ SECTIONS: list[Section] = [
                         Choice("reflectivity_stretch", "Reflectivity (contrast)"),
                         Choice("model", "Model prediction", requires="scorer"),
                     ]),
+            Control("view.refl_min", "float", "Refl. min",
+                    "Low end of the reflectivity color ramp, as a fraction of "
+                    "the sensor's full scale. Everything at or below it takes "
+                    "the bottom color instead of being squeezed into the ramp. "
+                    "Absolute, so unlike 'Reflectivity (contrast)' the colors "
+                    "still mean the same thing frame to frame.",
+                    min=0.0, max=1.0, step=0.005, requires="viewer"),
+            Control("view.refl_max", "float", "Refl. max",
+                    "High end of the ramp. Everything at or above it takes the "
+                    "top color. Bring the two ends in around the band the arena "
+                    "actually returns (try auto-fit, then nudge) and "
+                    "ground/rock separate instead of rendering as one flat "
+                    "blob.",
+                    min=0.0, max=1.0, step=0.005, requires="viewer"),
+            Control("view.refl_autofit", "action", "Auto-fit reflectivity range",
+                    "Set both ends from what is on screen now — the 5th and "
+                    "95th percentile of the current returns. That is the same "
+                    "window 'Reflectivity (contrast)' picks per frame, except "
+                    "it stops moving, so from here you can nudge it by hand and "
+                    "compare frames.",
+                    key="A", requires="viewer"),
             Control("view.nav_mode", "enum", "Navigation",
                     "How the mouse drives the camera. Orbit spins around the "
                     "pivot — double-click a point in the 3D window to move it "
@@ -174,6 +195,39 @@ SECTIONS: list[Section] = [
                     help="Throw away the fused height map and start rebuilding "
                          "it from the incoming scans.",
                     requires="live"),
+        ],
+    ),
+
+    Section(
+        "crop", "Crop",
+        "The band of points the pipeline keeps. Applied to every batch before "
+        "fusion, so unlike the View card this one changes the data. Without a "
+        "model loaded it is also the region 'Crop view to region' follows.",
+        controls=[
+            Control("crop.enabled", "bool", "Apply crop",
+                    help="Off feeds every return to the heightmap — walls and "
+                         "ceiling included, which a 2.5D map cannot represent."),
+            Control("crop.z_min", "float", "z min",
+                    "Lower edge of the band. Handheld rig ~1 m above the "
+                    "floor: -1.5.",
+                    min=-10.0, max=10.0, step=0.05, unit="m"),
+            Control("crop.z_max", "float", "z max",
+                    "Upper edge. Keeping it below the sensor (-0.5) throws "
+                    "away walls and ceiling before they ever reach the map.",
+                    min=-10.0, max=10.0, step=0.05, unit="m"),
+            Control("crop.floor_relative", "bool", "Anchor to floor",
+                    help="Measure the band from the levelled floor plane "
+                         "instead of the sensor, so one setting works across "
+                         "rigs of different heights (CLI: --floor-band). "
+                         "Stays absolute until levelling has found a floor."),
+            Control("crop.range_max", "float", "Max range",
+                    "Keep only returns closer than this to the sensor. 0 "
+                    "disables the gate; 8 m covers a room.",
+                    min=0.0, max=50.0, step=0.1, unit="m"),
+            Control("crop.range_min", "float", "Min range",
+                    "Drop returns closer than this — self-hits off the rig, "
+                    "dust at the lens. 0 disables it.",
+                    min=0.0, max=10.0, step=0.05, unit="m"),
         ],
     ),
 

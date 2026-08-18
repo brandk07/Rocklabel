@@ -116,6 +116,6 @@ def test_the_recorded_schema_is_the_full_one(fixtures):
     render test's coverage without failing it."""
     schema = json.loads(fixtures.read_text())["/api/schema"]
     ids = {s["id"] for s in schema["sections"]}
-    assert ids == {"status", "replay", "view", "level", "model", "region"}
+    assert ids == {"status", "replay", "view", "crop", "level", "model", "region"}
     kinds = {c["kind"] for s in schema["sections"] for c in s["controls"]}
     assert kinds >= {"bool", "int", "float", "enum", "action", "readout"}

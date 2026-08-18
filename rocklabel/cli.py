@@ -29,6 +29,35 @@ def _add_mcap_arg(p: argparse.ArgumentParser) -> None:
     p.add_argument("--mcap", dest="mcap_flag", help=argparse.SUPPRESS)
 
 
+def _add_level_args(p: argparse.ArgumentParser) -> None:
+    """Levelling flags, shared by every command that replays a recording.
+
+    All three must agree on the frame: labels are stored in world coordinates,
+    so labelling levelled and generating unlevelled misplaces every rock.
+    """
+    p.add_argument("--level", choices=["auto", "off", "ground", "manual"],
+                   help="undo a tilted sensor mount before anything sees the points: "
+                        "'auto' (default) measures it and leaves already-level "
+                        "recordings alone, 'ground' insists on a floor fit, "
+                        "'manual' uses --mount-roll/--mount-pitch "
+                        "(default from config: off)")
+    p.add_argument("--mount-roll", type=float, metavar="DEG",
+                   help="known sensor mount roll (deg); implies --level manual")
+    p.add_argument("--mount-pitch", type=float, metavar="DEG",
+                   help="known sensor mount pitch (deg); implies --level manual")
+
+
+def _apply_level_args(cfg: dict, args: argparse.Namespace) -> dict:
+    mode = args.level
+    if mode is None and (args.mount_roll is not None or args.mount_pitch is not None):
+        mode = "manual"
+    return apply_overrides(cfg, {
+        "level.mode": mode,
+        "level.mount_roll_deg": args.mount_roll,
+        "level.mount_pitch_deg": args.mount_pitch,
+    })
+
+
 def _resolve_mcap(args: argparse.Namespace, parser: argparse.ArgumentParser) -> str:
     path = getattr(args, "mcap_pos", None) or getattr(args, "mcap_flag", None)
     if not path:
@@ -61,18 +90,21 @@ def build_parser() -> argparse.ArgumentParser:
                    help="write the fused cloud to a PLY file and exit without opening a window")
     p.add_argument("--fallback-viewer", action="store_true",
                    help="use the legacy pick-then-terminal viewer instead of the GUI")
+    _add_level_args(p)
 
     p = sub.add_parser("driftcheck", help="overlay first/last 10%% of scans around one rock to spot odometry drift")
     _add_mcap_arg(p)
     p.add_argument("--labels", required=True, help="label JSON produced by 'rocklabel label'")
     p.add_argument("--rock-id", type=int, required=True, help="id of the rock to inspect")
     _add_config_arg(p)
+    _add_level_args(p)
 
     p = sub.add_parser("generate", help="write both training-dataset formats from a labeled recording")
     _add_mcap_arg(p)
     p.add_argument("--labels", help="label JSON (default: <mcap>.labels.json)")
     _add_config_arg(p)
     p.add_argument("--out", required=True, help="dataset output directory")
+    _add_level_args(p)
 
     p = sub.add_parser(
         "trim",
@@ -160,6 +192,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     from .generate import ManifestConflict
+    from .leveling import LevelError
     from .mcap_io import McapFormatError
     from .pose import PoseUnavailable
 
@@ -174,11 +207,13 @@ def main(argv: list[str] | None = None) -> int:
                 "labeler.z_min": args.z_min,
                 "labeler.z_max": args.z_max,
             })
+            cfg = _apply_level_args(cfg, args)
             from .labeler import run_label
             run_label(mcap, cfg, args.labels, args.stride, args.z_min, args.z_max,
                       dump_accumulated=args.dump_accumulated,
                       fallback_viewer=args.fallback_viewer)
         elif args.command == "driftcheck":
+            cfg = _apply_level_args(cfg, args)
             from .driftcheck import run_driftcheck
             run_driftcheck(_resolve_mcap(args, parser), args.labels, args.rock_id, cfg)
         elif args.command == "generate":
@@ -187,6 +222,7 @@ def main(argv: list[str] | None = None) -> int:
             if not labels:
                 from .labeler import default_labels_path
                 labels = default_labels_path(mcap)
+            cfg = _apply_level_args(cfg, args)
             from .generate import run_generate
             run_generate(mcap, labels, args.out, cfg)
         elif args.command == "trim":
@@ -205,7 +241,8 @@ def main(argv: list[str] | None = None) -> int:
     except ConfigError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
-    except (McapFormatError, PoseUnavailable, ManifestConflict, FileNotFoundError) as e:
+    except (McapFormatError, PoseUnavailable, ManifestConflict, LevelError,
+            FileNotFoundError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
     return 0

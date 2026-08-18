@@ -36,6 +36,9 @@ DIRS = {
     "cache": os.path.join("training", "cache"),
     "results": os.path.join("training", "results"),
     "exported": os.path.join("training", "exported"),
+    "ablate": os.path.join("training", "ablate"),
+    "results_ablate": os.path.join("training", "results_ablate"),
+    "results_reflect": os.path.join("training", "results_reflect"),
 }
 
 _info_cache: dict[tuple, dict] = {}
@@ -145,6 +148,12 @@ def labels(root: str) -> list[dict]:
                 "shapes": shapes,
                 "rock_ids": [r.get("id") for r in rocks][:64],
                 "created": data.get("created", ""),
+                # The two halves of "which volume is eligible to train": the
+                # arena footprint bounds the floor plan, z_band bounds the
+                # height. Both are optional, and a run missing them trains on
+                # whatever the generator's crop box swept up.
+                "arena_vertices": len((data.get("arena") or {}).get("vertices") or []),
+                "z_band": data.get("z_band"),
                 "intensity": bool(data.get("intensity_available")),
                 "schema_version": data.get("schema_version"),
                 "size": st["size"],
@@ -493,23 +502,124 @@ def checkpoints(root: str) -> list[dict]:
     people go looking for it.
     """
     out = []
-    base = os.path.join(root, DIRS["runs"])
-    if not os.path.isdir(base):
-        return out
-    for name in sorted(os.listdir(base)):
-        for ck in ("best.pt", "last.pt"):
-            full = os.path.join(base, name, ck)
-            if os.path.exists(full):
-                st = _stat(full)
-                out.append({
-                    "name": f"{name}/{ck}",
-                    "path": os.path.relpath(full, root),
-                    "size": st["size"],
-                    "mtime": st["mtime"],
-                    "disabled": ck == "last.pt",
-                    "note": "resume point, not loadable" if ck == "last.pt" else "",
-                })
+    # training/runs/<run>/ plus training/ablate/<suite>/<arm>/<fold>/. An
+    # ablation arm's checkpoints are ordinary checkpoints - a shape-only model
+    # is exactly the thing you want to replay against the reflectivity one - so
+    # they belong in the same picker, just named by the arm that produced them.
+    bases = [(os.path.join(root, DIRS["runs"]), 1),
+             (os.path.join(root, DIRS["ablate"]), 3)]
+    for base, depth in bases:
+        if not os.path.isdir(base):
+            continue
+        for run_dir in sorted(_dirs_at_depth(base, depth)):
+            name = os.path.relpath(run_dir, base).replace(os.sep, "/")
+            for ck in ("best.pt", "last.pt"):
+                full = os.path.join(run_dir, ck)
+                if os.path.exists(full):
+                    st = _stat(full)
+                    out.append({
+                        "name": f"{name}/{ck}",
+                        "path": os.path.relpath(full, root),
+                        "size": st["size"],
+                        "mtime": st["mtime"],
+                        "disabled": ck == "last.pt",
+                        "note": "resume point, not loadable" if ck == "last.pt" else "",
+                    })
     out.sort(key=lambda c: (not c["name"].endswith("best.pt"), c["name"]))
+    return out
+
+
+def _dirs_at_depth(base: str, depth: int) -> list[str]:
+    """Directories exactly ``depth`` levels below ``base``."""
+    level = [base]
+    for _ in range(depth):
+        nxt = []
+        for d in level:
+            if os.path.isdir(d):
+                nxt += [os.path.join(d, n) for n in sorted(os.listdir(d))
+                        if os.path.isdir(os.path.join(d, n))]
+        level = nxt
+    return level
+
+
+def _arm_progress(arm_dir: str) -> tuple[dict, int, list[float]]:
+    """(arm metadata, folds finished, their PR-AUCs) for one arm directory."""
+    meta, done, scores = {}, 0, []
+    if not os.path.isdir(arm_dir):
+        return meta, done, scores
+    for fold in sorted(os.listdir(arm_dir)):
+        fdir = os.path.join(arm_dir, fold)
+        if not os.path.isdir(fdir):
+            continue
+        meta = meta or (_read_json(os.path.join(fdir, "arm.json")) or {})
+        m = _read_json(os.path.join(fdir, "test_metrics.json"))
+        if m:
+            done += 1
+            scores.append(m.get("pr_auc", 0.0))
+    return meta, done, scores
+
+
+def ablations(root: str) -> list[dict]:
+    """Progress of every ablation suite under training/ablate/.
+
+    A suite is a matrix (settings x folds), so the useful summary is how much
+    of the matrix is filled in and how the settings currently rank - not a flat
+    list of 121 run directories, which is what the runs table would become if
+    these were folded into it.
+
+    The denominator comes from the suite *definition* and the cache, not from
+    what happens to be on disk. Counting only started arms would report the
+    first hour of an overnight sweep as "2 of 3 done", which is exactly
+    backwards from what someone watching it needs to know.
+    """
+    from ..train.ablate import SUITES  # torch-free
+
+    base = os.path.join(root, DIRS["ablate"])
+    if not os.path.isdir(base):
+        return []
+    n_folds = len(cache_runs(root))
+    out = []
+    for suite in sorted(os.listdir(base)):
+        sdir = os.path.join(base, suite)
+        if not os.path.isdir(sdir):
+            continue
+        declared = SUITES.get(suite)
+        # Names from the definition where there is one, so arms that have not
+        # started yet still appear; otherwise fall back to the directories.
+        names = ([a.name for a in declared["arms"]] if declared
+                 else sorted(n for n in os.listdir(sdir)
+                             if os.path.isdir(os.path.join(sdir, n))))
+        by_name = {a.name: a for a in declared["arms"]} if declared else {}
+        arms, folds_seen = [], set()
+        for name in names:
+            adir = os.path.join(sdir, name)
+            meta, done, scores = _arm_progress(adir)
+            spec_arm = by_name.get(name)
+            if os.path.isdir(adir):
+                folds_seen.update(f for f in os.listdir(adir)
+                                  if os.path.isdir(os.path.join(adir, f)))
+            arms.append({
+                "name": name,
+                "label": (spec_arm.label if spec_arm else None) or meta.get("label") or name,
+                "model": (spec_arm.model if spec_arm else None) or meta.get("model") or "",
+                "features": list(spec_arm.features) if spec_arm else (meta.get("features") or []),
+                "folds_done": done,
+                "pr_auc": round(sum(scores) / len(scores), 4) if scores else None,
+            })
+        summary = _read_json(
+            os.path.join(root, DIRS["results_ablate"], suite, "summary.json")) or {}
+        folds = n_folds or len(folds_seen)
+        out.append({
+            "name": suite,
+            "path": os.path.relpath(sdir, root),
+            "title": (declared["title"] if declared else None) or summary.get("title") or suite,
+            "arms": arms,
+            "folds": folds,
+            "runs_done": sum(a["folds_done"] for a in arms),
+            "runs_total": len(arms) * max(folds, 1),
+            "reported": bool(summary),
+            "noise_floor": summary.get("noise_floor_pr_auc"),
+        })
     return out
 
 
@@ -531,15 +641,33 @@ def results_summary(root: str) -> dict:
     return _read_json(os.path.join(root, DIRS["results"], "summary.json")) or {}
 
 
-def result_figures(root: str) -> list[dict]:
-    base = os.path.join(root, DIRS["results"])
+def _pngs_in(base: str, root: str, group: str, blurb: str) -> list[dict]:
     if not os.path.isdir(base):
         return []
-    out = []
-    for name in sorted(os.listdir(base)):
-        if name.endswith(".png"):
-            out.append({"name": name, "path": os.path.relpath(
-                os.path.join(base, name), root), **_stat(os.path.join(base, name))})
+    return [{"name": n, "group": group, "blurb": blurb,
+             "path": os.path.relpath(os.path.join(base, n), root),
+             **_stat(os.path.join(base, n))}
+            for n in sorted(os.listdir(base)) if n.endswith(".png")]
+
+
+def result_figures(root: str) -> list[dict]:
+    """Every report figure on disk, tagged with which report wrote it.
+
+    Three reports write figures now, not one, so a flat list would mix a
+    reflectivity histogram in among the confusion matrices with nothing saying
+    which command produced which. The ``group`` field is what the Overview page
+    sections on.
+    """
+    out = _pngs_in(os.path.join(root, DIRS["results"]), root, "Model comparison",
+                   "Written by Compare models / Regenerate report.")
+    out += _pngs_in(os.path.join(root, DIRS["results_reflect"]), root,
+                    "Reflectivity check",
+                    "Written by Reflectivity check — measured off the cache, no training.")
+    ab = os.path.join(root, DIRS["results_ablate"])
+    if os.path.isdir(ab):
+        for suite in sorted(os.listdir(ab)):
+            out += _pngs_in(os.path.join(ab, suite), root, f"Ablation · {suite}",
+                            f"Written by Ablation sweep --suite {suite}.")
     return out
 
 
@@ -646,6 +774,7 @@ def snapshot(root: str) -> dict:
     labs = labels(root)
     dss = datasets(root)
     rns = runs(root)
+    abl = ablations(root)
     complete = [r for r in rns if r["complete"]]
     best = max(complete, key=lambda r: r["metrics"].get("f1", 0.0), default=None)
     return {
@@ -658,6 +787,7 @@ def snapshot(root: str) -> dict:
         "cache_runs": cache_runs(root),
         "figures": result_figures(root),
         "summary": results_summary(root),
+        "ablations": abl,
         "totals": {
             "recordings": len(recs),
             "recordings_bytes": sum(r["size"] for r in recs),
@@ -671,6 +801,8 @@ def snapshot(root: str) -> dict:
             "datasets_bytes": sum(d["size"] for d in dss),
             "runs": len(rns),
             "runs_complete": len(complete),
+            "ablation_runs_done": sum(s["runs_done"] for s in abl),
+            "ablation_runs_total": sum(s["runs_total"] for s in abl),
             "best_run": best["name"] if best else "",
             "best_f1": round(best["metrics"].get("f1", 0.0), 4) if best else 0.0,
             "best_model": best["model"] if best else "",

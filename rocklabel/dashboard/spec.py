@@ -15,6 +15,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+# Both are torch-free by construction (see rocklabel/train/__init__.py), which
+# is what lets the dashboard quote the real training defaults and the real list
+# of ablation suites instead of copies that go stale.
+from ..train import TRAIN_DEFAULTS
+from ..train.ablate import SUITES as ABLATION_SUITES
+
+#: Early-stop patience, read from the training defaults rather than repeated.
+#: It was repeated once, and the form went on offering 6 for months after the
+#: real default moved to 10.
+TRAIN_PATIENCE = TRAIN_DEFAULTS["patience"]
+
 #: Pipeline stages, in workflow order. Drives the Overview flow diagram and the
 #: grouping of the command list.
 STAGES = [
@@ -121,6 +132,45 @@ def _config(advanced: bool = True) -> Param:
              "ROS 2 bags need the topics: section — native recordings carry "
              "their own poses. Any change here forces a fresh dataset directory.",
     )
+
+
+def _level_params() -> list[Param]:
+    """Undo a sensor mount tilt baked into a recording.
+
+    Shared by `label`, `driftcheck` and `generate` because all three must be
+    given the *same* answer: rock centers are stored in world coordinates, so
+    labelling levelled and generating unlevelled misplaces every one of them.
+    The CLI refuses that combination outright, but the form is where a user
+    would otherwise never think to look twice.
+    """
+    return [
+        Param("level", "enum", "Undo mount tilt", arg="--level",
+              choices=["", "auto", "off", "ground", "manual"],
+              help="A sensor bolted on at an angle tilts every point in the "
+                   "recording: the floor climbs steadily as you pan, the z-clip "
+                   "range spans tens of metres, and a z clip cuts a diagonal "
+                   "wedge instead of a horizontal slab. 'auto' is the default "
+                   "and normally the right answer — it measures the angle from "
+                   "the sensor's own path and the floor, and leaves a recording "
+                   "that was already levelled at capture time untouched. "
+                   "'ground' insists on a floor fit and fails loudly if it "
+                   "cannot get one; 'manual' uses the roll/pitch below; 'off' "
+                   "keeps the recording exactly as captured. Leave empty for "
+                   "the config's setting. Pass the SAME choice to Label and "
+                   "Generate — labels are world coordinates, and a mismatch is "
+                   "refused rather than silently misplacing every rock."),
+        Param("mount_roll", "float", "Mount roll", arg="--mount-roll", unit="°",
+              min=-90.0, max=90.0, step=0.5, advanced=True,
+              help="Known mount roll, in the same convention the live rig's IMU "
+                   "and Label's own levelling readout report. Setting this "
+                   "implies --level manual."),
+        Param("mount_pitch", "float", "Mount pitch", arg="--mount-pitch", unit="°",
+              min=-90.0, max=90.0, step=0.5, advanced=True,
+              help="Known mount pitch (a sensor tipped nose-up by 40° is +40). "
+                   "Use this when the ground fit picks the wrong plane, or to "
+                   "reproduce an earlier session's angle exactly. Setting this "
+                   "implies --level manual."),
+    ]
 
 
 def _device() -> Param:
@@ -405,10 +455,32 @@ COMMANDS: list[Command] = [
         notes=[
             "Labels auto-save on every change to labels/<recording>.labels.json — "
             "there is no way to lose work by forgetting to save.",
-            "Best trick: drag the z-max slider down near floor level and the rocks "
-            "pop out as everything above them disappears.",
+            "Can't see the rocks at all? Use the Relief controls in the Display "
+            "panel, not the z clip. Relief is how far each point stands above "
+            "the ground directly beneath it, so it ignores whatever the floor "
+            "is doing — sag, slope, ruts, footprints. Press C to colour by it, "
+            "then drag 'hide below' up to about 8-10 cm: the sand vanishes and "
+            "only things standing proud of the ground are left on screen. That "
+            "works on outdoor ground, where the z clip does not, because a "
+            "single flat z plane cannot follow a floor that is not flat.",
+            "On flat indoor floors the z clip is still the quickest thing: drag "
+            "z-max down near floor level and the rocks pop out as everything "
+            "above them disappears.",
+            "The z clip is also the run's training height band. Dragging it only "
+            "hides points — nothing is deleted, and it stays as responsive as it "
+            "always was — but wherever you leave it is written to the label file "
+            "on save, and Generate then builds training data from that slab of "
+            "height only. It is the vertical partner of the arena ring: the "
+            "arena bounds the floor plan, the z clip bounds the height. Use it "
+            "to throw away everything above the sensor — ceiling, lights, the "
+            "person holding the rig — which otherwise trains as clear ground. "
+            "The panel shows the saved band live, and a 'Reset to full height' "
+            "button clears the limit.",
             "Switch to reflectivity coloring to find retroreflective markers "
             "instantly.",
+            "Cloud looks like a tilted ramp and the z-clip range spans tens of "
+            "metres? The sensor's mount angle is baked into the recording. Set "
+            "'Undo mount tilt' to ground, and give Generate the same setting.",
             "--dump-accumulated writes the fused cloud to a PLY and exits without "
             "a window, which is the SSH-friendly way to check fusion.",
         ],
@@ -419,11 +491,18 @@ COMMANDS: list[Command] = [
                   help="Accumulate every Nth scan. 1 uses everything (densest, "
                        "slowest to open); raise it on very long recordings."),
             Param("z_min", "float", "Initial z min", arg="--z-min", unit="m", step=0.1,
-                  help="Starting lower clip plane in odom meters. Adjustable live "
-                       "with [ and ]."),
+                  help="Starting lower clip plane in odom meters. The clip is "
+                       "also the saved training height band, so this seeds that "
+                       "band too — but you normally set it by eye in the window "
+                       "instead. Leave empty to reopen on whatever band the run "
+                       "was last saved with."),
             Param("z_max", "float", "Initial z max", arg="--z-max", unit="m", step=0.1,
                   help="Starting upper clip plane. Dropping this near floor level "
-                       "is how you find rocks fast."),
+                       "is how you find rocks fast — and, because the clip is the "
+                       "saved height band, it is also how you stop the ceiling, "
+                       "the lights and your own head from training as clear "
+                       "ground. Leave empty to reopen on the run's saved band."),
+            *_level_params(),
             _config(),
             Param("dump_accumulated", "outpath", "Dump fused cloud to PLY",
                   arg="--dump-accumulated", advanced=True, placeholder="cloud.ply",
@@ -455,6 +534,7 @@ COMMANDS: list[Command] = [
             Param("rock_id", "int", "Rock id", arg="--rock-id", required=True, min=1,
                   help="Which labeled rock to inspect. Ids are listed in the label "
                        "file and in the Labels table."),
+            *_level_params(),
             _config(),
         ],
     ),
@@ -481,6 +561,17 @@ COMMANDS: list[Command] = [
             "config, use a fresh --out.",
             "A loud warning at the end about zero rock samples means label/frame "
             "misalignment — go run Drift check.",
+            "'Undo mount tilt' must match what Label used. With 'ground' the fit "
+            "is not re-run: the label file's own angle is replayed, so the two "
+            "frames match exactly. A mismatch is an error, not a warning.",
+            "The height band comes from the label file, not from here. Wherever "
+            "you left the z clip in Label is the slab of height this trains on, "
+            "and it replaces the crop box's up/down limits entirely (the "
+            "forward/back/left/right limits still apply). The run's first lines "
+            "print which band was used, so check there if the output looks thin. "
+            "No band in the label file means the crop box's crop_up_m/"
+            "crop_down_m are the only vertical bound, as before — and those are "
+            "measured from the sensor, so crop_up_m lets in everything overhead.",
         ],
         params=[
             _recording(),
@@ -489,6 +580,7 @@ COMMANDS: list[Command] = [
                   help="Where to write. An existing directory is appended to, as "
                        "long as the config matches exactly."),
             _labels(),
+            *_level_params(),
             _config(advanced=False),
         ],
         long_running=True,
@@ -588,9 +680,12 @@ COMMANDS: list[Command] = [
             Param("batch", "int", "Batch size", arg="--batch", default=256, min=8, max=4096),
             Param("lr", "float", "Learning rate", arg="--lr", default=0.001,
                   min=0.00001, max=0.1, step=0.0001),
-            Param("patience", "int", "Early-stop patience", arg="--patience", default=6,
-                  min=1, max=100,
-                  help="Epochs without validation improvement before stopping."),
+            Param("patience", "int", "Early-stop patience", arg="--patience",
+                  default=TRAIN_PATIENCE, min=1, max=100,
+                  help="Epochs without validation improvement before stopping. "
+                       "Keep it long enough for the learning-rate schedule to "
+                       "finish annealing, or the fold stops before it ever sees "
+                       "its fine-tuning phase."),
             Param("weight_decay", "float", "Weight decay", arg="--weight-decay",
                   default=0.0001, advanced=True, step=0.0001),
             Param("val_frac", "float", "Validation fraction", arg="--val-frac",
@@ -636,12 +731,100 @@ COMMANDS: list[Command] = [
             Param("epochs", "int", "Epochs", arg="--epochs", default=30, min=1, max=500),
             Param("batch", "int", "Batch size", arg="--batch", default=256, min=8, max=4096),
             Param("lr", "float", "Learning rate", arg="--lr", default=0.001, step=0.0001),
-            Param("patience", "int", "Early-stop patience", arg="--patience", default=6, min=1),
+            Param("patience", "int", "Early-stop patience", arg="--patience",
+                  default=TRAIN_PATIENCE, min=1),
             _device(),
             Param("fresh", "bool", "Retrain everything", arg="--fresh", advanced=True,
                   help="Ignore existing results and redo every fold from scratch."),
         ],
         long_running=True,
+    ),
+    Command(
+        id="train-ablate", bin="rocklabel-train", sub="ablate", stage="train",
+        icon="⚖",
+        title="Ablation sweep",
+        tagline="Settle whether one thing — a channel, a model — actually changes the score.",
+        what="Trains a whole set of settings on every leave-one-run-out fold, then "
+             "compares them fold by fold rather than as two averages. The built-in "
+             "'reflectivity' set covers PointNet and PointNet++ with and without the "
+             "reflectivity channel, a run with the reflectivity augmentation switched "
+             "off, a reflectivity-only model, and repeats of two settings under "
+             "different random seeds. Those repeats are the point of the whole thing: "
+             "they show how far apart two runs of the *same* setting land, which is "
+             "the only way to know whether a difference between two *different* "
+             "settings means anything.",
+        why="Reach for this instead of eyeballing two Compare runs. Which recording "
+            "gets held out swings the score far more than any channel does, so an "
+            "unpaired comparison cannot see an effect this small. The report gives "
+            "you a per-fold difference, a win/loss count and a significance test.",
+        notes=[
+            "This is the longest job in the tool — a full sweep is 100+ trainings. "
+            "Finished folds are skipped, so it picks up where it left off.",
+            "Every setting gets its own folder under training/ablate/, so two "
+            "settings that differ only in an augmentation value cannot overwrite "
+            "each other the way Compare would.",
+            "Tick 'Report only' to rebuild the tables and figures from whatever "
+            "has already finished — safe to do while the sweep is still running.",
+        ],
+        params=[
+            Param("suite", "enum", "Question to settle", arg="--suite",
+                  choices=sorted(ABLATION_SUITES), default="reflectivity",
+                  help="Which set of settings to run. 'reflectivity' asks whether "
+                       "the LiDAR brightness channel earns its place next to shape."),
+            Param("arms", "text", "Only these settings", arg="--arms", repeat=True,
+                  nargs=True, advanced=True,
+                  placeholder="pointnet-geom, pointnet-refl",
+                  help="Run only the named settings instead of the whole set. "
+                       "Leave empty for all of them, which is the normal case. "
+                       "Useful for finishing a sweep that was stopped partway."),
+            Param("report_only", "bool", "Report only (no training)",
+                  arg="--report-only",
+                  help="Skip straight to the figures and tables, built from the "
+                       "folds already on disk. Costs seconds and touches nothing."),
+            Param("epochs", "int", "Epochs", arg="--epochs", default=30, min=1, max=500,
+                  advanced=True),
+            Param("batch", "int", "Batch size", arg="--batch", default=256, min=8,
+                  max=4096, advanced=True),
+            Param("patience", "int", "Early-stop patience", arg="--patience",
+                  default=TRAIN_PATIENCE, min=1, advanced=True,
+                  help="Stop a fold after this many epochs with no validation "
+                       "gain. Keep it long enough for the learning-rate schedule "
+                       "to finish, or no fold ever sees its fine-tuning phase."),
+            Param("ablate_root", "outdir", "Runs folder", arg="--ablate-root",
+                  default="training/ablate", advanced=True,
+                  help="Where each setting's trained folds are written."),
+            _device(),
+            Param("fresh", "bool", "Retrain everything", arg="--fresh", advanced=True,
+                  help="Ignore finished folds and redo the whole matrix."),
+        ],
+        long_running=True,
+    ),
+    Command(
+        id="train-reflect", bin="rocklabel-train", sub="reflect", stage="train",
+        icon="✸",
+        title="Reflectivity check",
+        tagline="Measure what the brightness channel carries — in seconds, without training.",
+        what="Goes at the cached samples directly and scores each labeled "
+             "neighborhood several ways: plain average brightness, its spread, the "
+             "brightness of the middle versus the outer ring, the brightness of the "
+             "tall points versus the low ones, and how well brightness tracks "
+             "height. Each is rated on how well it alone tells a rock from clear "
+             "ground, run by run, against the same measurements made on height as a "
+             "reference. It also reports how far the overall brightness level drifts "
+             "between recordings, which decides whether any fixed brightness "
+             "threshold could ever transfer.",
+        why="Run this before spending hours on an ablation sweep. If the channel is "
+            "empty at this level, no model is going to find something in it, and "
+            "you have the answer in under a minute instead of overnight.",
+        notes=[
+            "Needs a built cache (Build cache), nothing else. No GPU, no model.",
+            "Writes training/results_reflect/ — four figures plus summary.md.",
+        ],
+        params=[
+            Param("out", "outdir", "Output directory", arg="--out",
+                  default="training/results_reflect",
+                  help="Where the figures and tables land."),
+        ],
     ),
     Command(
         id="train-report", bin="rocklabel-train", sub="report", stage="train",

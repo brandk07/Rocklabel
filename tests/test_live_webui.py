@@ -111,8 +111,12 @@ def client(replay_ctl):
 class FakeViz:
     """The VizApp surface LiveController drives."""
 
-    def __init__(self, scorer=None) -> None:
+    def __init__(self, scorer=None, cfg=None) -> None:
+        # The real VizApp shares the controller's AppConfig, which is how a
+        # crop write reaches the engine: both hold the same CropConfig object.
+        self._cfg = cfg
         self.color_mode = "height"
+        self.reflectivity_range = (0.0, 1.0)
         self.nav_mode = "orbit"
         self.point_size = 3.0
         self._show_points = True
@@ -135,6 +139,14 @@ class FakeViz:
         self.color_mode = mode
         self.calls.append(("color_mode", mode))
 
+    def set_reflectivity_range(self, lo, hi):
+        from rocklabel.live.colormap import clamp_range
+
+        self.reflectivity_range = clamp_range(lo, hi)
+
+    def autofit_reflectivity(self):
+        self.calls.append(("autofit_reflectivity",))
+
     def set_nav_mode(self, mode):
         self.nav_mode = mode
 
@@ -155,6 +167,9 @@ class FakeViz:
 
     def set_score_setting(self, name, value):
         setattr(self._scorer.settings, name, value)
+
+    def set_crop_setting(self, name, value):
+        setattr(self._cfg.crop, name, value)
 
     def reset_camera(self):
         self.calls.append(("reset_camera",))
@@ -215,7 +230,7 @@ def full_controller(path: str, fuse_sec: float = 0.0) -> LiveController:
     """A replay controller with every capability turned on."""
     ctl = _replay_controller(path, fuse_sec=fuse_sec)
     ctl._scorer = FakeScorer()
-    ctl._viz = FakeViz(ctl._scorer)
+    ctl._viz = FakeViz(ctl._scorer, ctl._cfg)
     # Levelling defaults to mode="auto", which is what makes it active.
     assert ctl._engine.leveler.active
     return ctl
@@ -287,6 +302,42 @@ def test_headless_schema_drops_display_only_controls(replay_ctl):
 def test_no_model_means_no_model_or_region_sections(replay_ctl):
     sections = {s["id"] for s in replay_ctl.schema()["sections"]}
     assert "model" not in sections and "region" not in sections
+
+
+def test_the_crop_band_is_offered_without_a_model(replay_ctl):
+    """The z band a replay run is watching is not the scorer's to own.
+
+    Without --model there is no Scoring region card, and before this the crop
+    was a startup-only flag: the operator could see the wrong band but not move
+    it. The Crop card is the same knobs on the CropConfig the engine reads.
+    """
+    sections = {s["id"] for s in replay_ctl.schema()["sections"]}
+    assert "crop" in sections and "region" not in sections
+    ids = {c["id"] for s in replay_ctl.schema()["sections"] for c in s["controls"]}
+    assert {"crop.z_min", "crop.z_max", "crop.range_max"} <= ids
+
+
+def test_crop_writes_reach_the_config_the_engine_reads(replay_ctl):
+    """Same object the pipeline holds, so the next batch is cropped by it."""
+    assert replay_ctl._engine._crop is replay_ctl._cfg.crop
+    replay_ctl.set("crop.z_min", -1.5)
+    replay_ctl.set("crop.z_max", -0.5)
+    replay_ctl.set("crop.range_max", 8.0)
+    replay_ctl.set("crop.enabled", True)
+    crop = replay_ctl._engine._crop
+    assert (crop.z_min, crop.z_max, crop.range_max) == (-1.5, -0.5, 8.0)
+    values = replay_ctl.snapshot()["values"]
+    assert values["crop.z_min"] == pytest.approx(-1.5)
+    assert values["crop.z_max"] == pytest.approx(-0.5)
+
+
+def test_crop_band_draws_the_ring_on_the_overhead_map(replay_ctl):
+    """With no scorer the map's region ring follows the crop instead."""
+    replay_ctl.set("crop.enabled", True)
+    replay_ctl.set("crop.range_max", 6.0)
+    assert replay_ctl.scene()["region"]["range_max"] == pytest.approx(6.0)
+    replay_ctl.set("crop.enabled", False)
+    assert replay_ctl.scene().get("region") is None
 
 
 def test_model_choice_appears_only_with_a_scorer():
@@ -453,6 +504,9 @@ def test_writes_reach_the_objects_they_claim_to(full_ctl):
     assert scorer.threshold == pytest.approx(0.42)
     full_ctl.set("region.z_min", -1.5)
     assert scorer.settings.z_min == pytest.approx(-1.5)
+    full_ctl.set("crop.z_max", -0.25)   # the ingest crop, not the scoring band
+    assert full_ctl._engine._crop.z_max == pytest.approx(-0.25)
+    assert scorer.settings.z_max != pytest.approx(-0.25)
     full_ctl.set("model.enabled", False)
     assert scorer.settings.enabled is False
 
@@ -462,6 +516,25 @@ def test_writes_reach_the_objects_they_claim_to(full_ctl):
     assert ("recalibrate_level",) in viz.calls
     full_ctl.action("model.clear")
     assert scorer.cleared == 1
+
+
+def test_reflectivity_window_is_two_sliders_over_one_window(full_ctl):
+    """The page sends one end at a time; the controller has to fold that into
+    the pair the viewer holds without the ends crossing."""
+    full_ctl.set("view.refl_min", 0.30)
+    full_ctl.set("view.refl_max", 0.60)
+    assert full_ctl._viz.reflectivity_range == pytest.approx((0.30, 0.60))
+    values = full_ctl.snapshot()["values"]
+    assert values["view.refl_min"] == pytest.approx(0.30)
+    assert values["view.refl_max"] == pytest.approx(0.60)
+
+    # dragging max below min moves max where it was asked and min out of its way
+    full_ctl.set("view.refl_max", 0.10)
+    lo, hi = full_ctl._viz.reflectivity_range
+    assert hi == pytest.approx(0.10) and lo < hi
+
+    full_ctl.action("view.refl_autofit")
+    assert ("autofit_reflectivity",) in full_ctl._viz.calls
 
 
 def test_a_write_waits_for_the_gui_thread_before_answering(full_ctl):
@@ -627,7 +700,12 @@ def test_scene_payload_has_what_the_page_draws(fused):
     # No scorer: nothing to detect, nothing to plot a distribution of.
     assert sc["detections"] == {"rows": [], "total": 0, "shown": 0}
     assert sc["histogram"] is None
-    assert "region" not in sc
+    # No scorer, but the ingest crop is still a region, and it is the one the
+    # ring on the map has to describe. Off entirely, there is nothing to draw.
+    assert sc["region"]["z_min"] == pytest.approx(cfg.crop.z_min)
+    cfg.crop.enabled = False
+    assert "region" not in ctl.scene()
+    cfg.crop.enabled = True
 
 
 def test_detections_and_histogram_come_from_the_scorer(fused):

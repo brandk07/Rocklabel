@@ -25,8 +25,14 @@ MUTED = "#898781"
 GRID = "#e1e0d9"
 BASE = "#c3c2b7"
 SERIES = ["#2a78d6", "#008300", "#e87ba4", "#eda100"]  # slots 1-4, fixed order
-MODEL_COLOR = {"pointnet": SERIES[0], "pointnet2": SERIES[1]}
-MODEL_LABEL = {"pointnet": "PointNet", "pointnet2": "PointNet++"}
+MODEL_COLOR = {"pointnet": SERIES[0], "pointnet2": SERIES[1],
+               "pointnet2_seg": SERIES[2]}
+#: Short names for figures. The task matters more than the backbone here, so
+#: every label says which of the two approaches it is: a classifier scored per
+#: candidate center, or a segmenter scored per point.
+MODEL_LABEL = {"pointnet": "PointNet (classifier)",
+               "pointnet2": "PointNet++ (classifier)",
+               "pointnet2_seg": "PointNet++ (segmentation)"}
 SEQ_BLUE = ["#fcfcfb", "#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#256abf", "#184f95", "#0d366b"]
 
 plt.rcParams.update({
@@ -55,8 +61,19 @@ def _read_history(run_dir: str) -> dict[str, np.ndarray]:
 
 
 def _read_preds(run_dir: str):
-    z = np.load(os.path.join(run_dir, "predictions.npz"))
-    return z["labels"], z["probs"], float(z["threshold"])
+    """(labels, probs, threshold) as flat 1-D arrays, whatever the task.
+
+    A segmenter stores [frames, points] plus a per-frame count; flattening to
+    the points it was actually scored on (real, non-boundary-shell) is what
+    makes every curve and confusion matrix below task-agnostic.
+    """
+    z = np.load(os.path.join(run_dir, "predictions.npz"), allow_pickle=True)
+    labels, probs = z["labels"], z["probs"]
+    if labels.ndim == 2:
+        n = labels.shape[1]
+        keep = (np.arange(n)[None, :] < z["counts"][:, None]) & (labels >= 0)
+        labels, probs = labels[keep], probs[keep]
+    return labels, probs, float(z["threshold"])
 
 
 def plot_history(run_dir: str, out_path: str | None = None) -> None:

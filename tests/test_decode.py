@@ -140,3 +140,64 @@ def test_reflectivity_marks_missing_data_mid_gray():
     v = reflectivity_values(np.array([np.nan, 65535.0, np.inf]))
     assert v[0] == 0.5 and v[2] == 0.5 and v[1] == 1.0
     assert np.all(reflectivity_values(np.full(4, np.nan)) == 0.5)
+
+
+# -- the manual contrast window ----------------------------------------------
+
+def test_window_saturates_outside_and_spreads_inside():
+    """The point of the window: returns past either end take the end color
+    instead of compressing everything between them into one flat shade."""
+    from rocklabel.live.colormap import reflectivity_values
+
+    inten = np.array([0.0, 0.40, 0.475, 0.50, 0.525, 0.60, 1.0]) * 65535.0
+    v = reflectivity_values(inten, limits=(0.45, 0.55))
+    np.testing.assert_allclose(v, [0.0, 0.0, 0.25, 0.5, 0.75, 1.0, 1.0])
+    # the same band on the full scale is the flat blob the window fixes
+    flat = reflectivity_values(inten[2:5])
+    assert flat.max() - flat.min() < 0.06
+
+
+def test_window_is_absolute_so_frames_stay_comparable():
+    """Unlike the stretch mode, the window does not move when the scene does:
+    a rock leaving the view must not repaint the ground behind it."""
+    from rocklabel.live.colormap import reflectivity_values
+
+    window = (0.3, 0.7)
+    ground = np.array([0.45, 0.50, 0.55]) * 65535.0
+    with_rock = np.concatenate([ground, [0.95 * 65535.0]])
+    np.testing.assert_allclose(
+        reflectivity_values(ground, limits=window),
+        reflectivity_values(with_rock, limits=window)[:3])
+    # the stretch mode is exactly what does not hold this property
+    assert not np.allclose(
+        reflectivity_values(ground, stretch=True),
+        reflectivity_values(with_rock, stretch=True)[:3])
+
+
+def test_autofit_reproduces_the_stretch_it_replaces():
+    """Auto-fit hands back the window the stretch mode picks per frame, so the
+    first click changes nothing on screen — it only stops it moving."""
+    from rocklabel.live.colormap import percentile_range, reflectivity_values
+
+    band = np.linspace(0.26, 0.82, 500) * 65535.0
+    window = percentile_range(band, (5.0, 95.0))
+    np.testing.assert_allclose(
+        reflectivity_values(band, limits=window),
+        reflectivity_values(band, stretch=True, pct=(5.0, 95.0)), atol=1e-6)
+    assert percentile_range(np.full(4, np.nan)) is None
+
+
+def test_window_ends_cannot_cross_and_the_dragged_one_wins():
+    """Two sliders, one window: the end being moved lands where it was put and
+    the other yields, rather than the handle snapping back under the cursor."""
+    from rocklabel.live.colormap import (MIN_RANGE_SPAN, clamp_range,
+                                         move_range_end)
+
+    lo, hi = move_range_end((0.20, 0.60), "lo", 0.90)
+    assert lo == pytest.approx(0.90) and hi > lo
+    lo, hi = move_range_end((0.20, 0.60), "hi", 0.10)
+    assert hi == pytest.approx(0.10) and lo < hi
+    # and a window can never invert or collapse, however it is asked to
+    for asked in [(0.8, 0.2), (0.5, 0.5), (-3.0, 7.0), (1.0, 1.0)]:
+        lo, hi = clamp_range(*asked)
+        assert 0.0 <= lo < hi <= 1.0 and hi - lo >= MIN_RANGE_SPAN - 1e-12

@@ -9,6 +9,7 @@ import numpy as np
 
 from .accumulate import VoxelAccumulator, write_ply
 from .labels import LabelSet, load_labels
+from .leveling import level_record, pin_level_to_labels
 from .pipeline import ScanStream
 
 
@@ -47,6 +48,15 @@ def run_label(mcap_path: str, cfg: dict, labels_path: str | None, stride: int | 
     z_min = z_min if z_min is not None else lcfg["z_min"]
     z_max = z_max if z_max is not None else lcfg["z_max"]
 
+    # Resume before accumulating, not after: rock centers are world
+    # coordinates, so a levelling angle measured now that differs from the one
+    # they were picked in would move every existing rock off its rock. Pin the
+    # frame to whatever the label file says before a single scan is read.
+    labels_path = labels_path or default_labels_path(mcap_path)
+    resumed = load_labels(labels_path) if os.path.exists(labels_path) else None
+    if resumed is not None and resumed.rocks:
+        cfg = pin_level_to_labels(cfg, resumed.level)
+
     xyz, inten, _counts, stream = accumulate_cloud(mcap_path, cfg, stride)
     if len(xyz) == 0:
         raise SystemExit("No points accumulated - check topic/frame configuration with 'rocklabel inspect'.")
@@ -56,9 +66,8 @@ def run_label(mcap_path: str, cfg: dict, labels_path: str | None, stride: int | 
         print(f"Wrote accumulated cloud ({len(xyz)} points) to {dump_accumulated}; exiting without viewer.")
         return
 
-    labels_path = labels_path or default_labels_path(mcap_path)
-    if os.path.exists(labels_path):
-        labelset = load_labels(labels_path)
+    if resumed is not None:
+        labelset = resumed
         print(f"Resuming {len(labelset.rocks)} existing labels from {labels_path}")
     else:
         labelset = LabelSet()
@@ -69,6 +78,9 @@ def run_label(mcap_path: str, cfg: dict, labels_path: str | None, stride: int | 
                            else cfg["topics"]["odom_frame"])
     labelset.intensity_available = bool(stream.counters.intensity_available)
     labelset.accumulator_voxel_m = lcfg["accumulator_voxel_m"]
+    # Stamp the frame these centers are about to be picked in, so `generate`
+    # can refuse to replay the recording the other way up.
+    labelset.level = level_record(stream)
 
     from . import viewer  # Open3D import deferred so headless paths never touch it
 

@@ -152,6 +152,10 @@ rocklabel generate recordings/RUN.mcap --out datasets/DATASET   # 2. write datas
 rocklabel preview datasets/DATASET                         # 3. skip through the written frames
 ```
 
+If the recording was captured with the rig's own levelling off and the fused
+cloud comes up tilted, add `--level ground` to **both** the `label` and the
+`generate` step (see [`--level`](#levelling-a-tilted-recording---level)).
+
 ROS 2 robot log (needs topic/frame names in a config):
 
 ```bash
@@ -191,8 +195,9 @@ auto-record. The window has a settings panel (styled like the other rocklabel
 viewers) where everything is adjustable while running: layer visibility,
 color mode, point size, recording start/stop, and all model-scoring
 parameters. Keys mirror the panel: `S` record on/off, `V` cycle point colors,
-`P`/`M`/`C`/`B` toggle layers, `L` re-measure mount tilt, `space` pause, `R`
-reset, `Q` quit. Live-rig tuning (grid/crop/SLAM/display) comes from
+`A` auto-fit the reflectivity range, `P`/`M`/`C`/`B` toggle layers, `L`
+re-measure mount tilt, `space` pause, `R` reset, `Q` quit. Live-rig tuning
+(grid/crop/SLAM/display) comes from
 `--rig-config RIG.yaml` plus flags like `--floor-band`, `--no-slam`,
 `--yaw-only` — this is a separate config from the offline rocklabel YAML.
 
@@ -237,6 +242,28 @@ They cost a second endpoint (`/api/scene`) polled once a second, and only
 appear when there is something to show — no `--model`, no detections and no
 histogram, but the overhead map still works.
 
+**Reflectivity contrast (`--refl-range`, the View sliders, `A`).** `V` cycles
+between three point colorings: height, **Reflectivity**, and **Reflectivity
+(contrast)**. The plain reflectivity mode is the sensor's calibrated scale, so
+a material keeps its color from frame to frame — but real returns occupy a
+narrow slice of that scale, which is why an arena on the full scale renders as
+one flat yellow blob with the rocks invisible in it.
+
+The fix is the **Refl. min / Refl. max** sliders (View panel, or the same two
+in the browser panel): they set which returns take the bottom and the top
+color, as fractions of full scale, and both ends **clamp hard** — anything
+above the max is the top color, anything below the min the bottom, instead of
+being compressed into the ramp along with everything else. Narrowing the
+window around the band the arena actually returns is what separates ground
+from rock. **`A`** (or the Auto-fit button) sets both ends from the 5–95
+percentile of the raw points on screen, which is the window to start nudging
+from; `--refl-range LOW HIGH` seeds it at launch. The window is absolute, so
+unlike **Reflectivity (contrast)** — which refits per frame, and repaints the
+whole scene whenever a bright target enters or leaves — colors still compare
+across frames and across the whole recording. The raw points, the accumulated
+cloud and the fused surface mesh all share one window, so the mesh and the
+points sitting on it never disagree about what a color means.
+
 **Levelling (a tilt-mounted sensor).** The world frame is otherwise just the
 sensor frame at startup, so a LiDAR bolted to a slanted mast tilts the entire
 map with it — the crop band cuts a diagonal wedge out of the floor, the 2.5D
@@ -267,6 +294,15 @@ so at startup instead of silently fusing nothing.
 rocklabel live --source udp --floor-band -0.10 0.60 --max-range 8
 rocklabel live --source udp --level manual --mount-pitch 31   # angle already known
 ```
+
+None of that is a one-shot decision: with `--web-ui` the band is the **Crop**
+card in the browser, so z min, z max, the range gate and the floor anchor move
+while the run is going — the flags above only seed it. The engine reads the
+crop per batch, so the next scan obeys the new band; points already fused into
+the heightmap stay until the map is rebuilt, and "Crop view to region" hides
+the ones outside it in the meantime. This is the *ingest* crop, which throws
+points away for real — with a model loaded, the separate **Scoring region**
+card is the band the model is fed.
 
 **Live model predictions:** pass a trained checkpoint to either command and
 the viewer gains a third color mode, cycled with `V` alongside height and
@@ -371,7 +407,9 @@ resize, so you can see exactly what a label captures.
 rocklabel label RUN.mcap [--config config.yaml] \
     [--labels RUN.labels.json]   # resume an existing label file
     [--stride N]                 # accumulate every Nth scan (default 1)
-    [--z-min A --z-max B]        # initial z clip planes (meters)
+    [--z-min A --z-max B]        # initial z clip planes = training height band (meters)
+    [--level ground|manual|off]  # undo a tilted sensor mount (see below)
+    [--mount-roll D --mount-pitch D]  # known mount angle; implies --level manual
     [--dump-accumulated CLOUD.PLY]  # write fused cloud and exit (no window; SSH-friendly)
     [--fallback-viewer]          # legacy pick-then-terminal viewer
 ```
@@ -380,8 +418,9 @@ If `--labels` is omitted, labels are saved to `labels/<mcap basename>.labels.jso
 (the `labels/` folder is created if missing). The file is auto-saved on every change.
 
 The window has a side panel with everything mouse-driven — a **Tool** combo
-(Navigate / Box / Lasso), a **Camera** combo (orbit / WASD fly), a **color-by
-combo** (height / reflectivity), **point size** and **z-clip sliders**, grid
+(Navigate / Box / Lasso / Arena), a **Camera** combo (orbit / WASD fly), a **color-by
+combo** (height / reflectivity), **reflectivity ramp min/max sliders** with an
+Auto-fit button, **point size** and **z-clip sliders**, grid
 and axes toggles, a **rock list** (click to select, with Focus/Delete buttons
 and per-shape sliders: radius for spheres, width/depth/height for boxes,
 base/top z for lassos), and a Save button — plus keyboard shortcuts for the
@@ -393,9 +432,10 @@ fast path:
 | **double-click** | set the orbit pivot on the clicked point (CAD-style) |
 | **Shift + click** | place a new rock sphere at the clicked point (any tool) |
 | **Ctrl + click** | select the nearest existing rock |
-| `N` / `B` / `L` | switch tool: navigate / box / lasso |
+| `N` / `B` / `L` / `A` | switch tool: navigate / box / lasso / arena |
 | box tool | left-drag the footprint on the ground, release, then set the sliders |
 | lasso tool | left-click outline points; `Enter` or double-click closes, `Esc` cancels |
+| arena tool | same clicking, but the closed ring is the arena boundary, not a rock; `Shift+A` clears it |
 | `C` | cycle color mode: height (turbo) / reflectivity (inferno) |
 | `+` / `-` | grow / shrink the selected shape by 0.02 m (radius / box / lasso top) |
 | arrow keys | nudge the selected rock in x/y by 0.02 m |
@@ -405,6 +445,40 @@ fast path:
 | `S` | save (labels are also auto-saved on every change) |
 | `Q` / `Esc` | quit |
 
+**The arena boundary (`A`).** One optional xy polygon marking the competition
+floor. Candidate centers outside it never become training samples, so the couch
+across the room stops teaching the model what "clear ground" looks like. It is
+drawn as a **green fence** standing on the floor (not a flat ring, which would
+be invisible from above), and everything outside it is drawn **gray** instead of
+by height/reflectivity — while you are still clicking the outline (from the
+third point on, so you can see what you are roping in before committing) and
+afterwards, so a saved arena is never invisible. Rock outlines stay in their own
+red/yellow through all of it. The Tool section reports the vertex count and how
+many visible points fall inside. `Shift+A` removes the boundary.
+
+**The training height band (the z clip).** The vertical partner of the arena:
+the arena bounds the floor plan, the z clip bounds the height, and together they
+are the volume that is eligible to become training data. The clip does two jobs
+at once. While you drag it, it is a pure view filter — points are hidden, never
+deleted, and nothing is written to disk — so it stays exactly as responsive as
+it has always been. But **wherever you leave it is saved** into the label file
+on the next save (every edit, `S`, and the auto-save on quit), and `generate`
+then builds training data from that slab of height only.
+
+This is what stops points *above* the sensor — ceiling, lights, the person
+holding the rig — from training as clear ground. Without a band the only
+vertical bound is the generator's crop box, and its `crop_up_m` is measured
+from the sensor, so everything overhead within that distance is swept in.
+
+A band **replaces** the crop box's `crop_up_m` / `crop_down_m` outright; the
+horizontal `crop_forward_m` / `crop_backward_m` / `crop_left_m` /
+`crop_right_m` limits still apply. Leaving the clip at the full extent of the
+cloud (or pressing **Reset to full height**) means "no height limit", and the
+run behaves exactly as it did before bands existed. The Display panel shows the
+saved band live, the status line repeats it, and `generate` prints which band it
+used and records it in the dataset manifest as `z_band`. Reopening a labeled run
+comes back up on its saved band; `--z-min` / `--z-max` override it.
+
 Clicks are forgiving: the picker searches a ~10 px patch around the cursor,
 so you don't have to hit a 3-px point exactly. In **Fly** camera mode, WASD
 moves and dragging looks around; `Esc` returns to orbit mode. Right/middle
@@ -413,8 +487,69 @@ mouse drags always navigate, even while the box or lasso tool is active.
 Labeling tips: drag the **z-max slider** down near the floor level — rocks pop
 out visually as everything above them disappears. Switch to **reflectivity**
 coloring to find retroreflective markers / distinctly-reflective rocks
-instantly (RSSI is percentile-normalized so bright targets pop without washing
-out the floor).
+instantly.
+
+The reflectivity ramp has an explicit window: the **min / max sliders** set
+which returns get the bottom and the top color, as fractions of the sensor's
+full scale, and everything outside saturates rather than being squeezed in
+with the rest. That is what to reach for when the whole floor renders as one
+flat color — real returns occupy a narrow slice of full scale, so bringing the
+two ends in around that slice (say 0.45–0.55) is what makes a rock's surface
+readable against the ground. **Auto-fit** sets both ends from the 5–95
+percentile of the points currently visible, which is a good starting point to
+nudge from; it fits the *visible* points, so clip in z first and the ceiling
+stops competing for the ramp. Because the ends are absolute, the colors keep
+meaning the same thing as you scrub and clip.
+
+#### Levelling a tilted recording (`--level`)
+
+If the fused cloud looks like a ramp — colored by height, the floor climbing
+steadily as you pan across it, and a z-clip range spanning tens of metres —
+the recording has a **mount tilt baked into it**. A recording's world frame is
+only as level as the rig that made it: a native lidarrig frame's world frame
+*is* the sensor frame at startup, so a LiDAR on a slanted mast tilts every
+point in the file. The live rig levels at capture time (`### 0`, `--level`),
+but a recording made with it off carries the angle permanently.
+
+That breaks exactly the trick above: a z clip slices a diagonal wedge out of
+the floor instead of a horizontal slab. It also widens the generator's crop
+box into a wedge and makes the model's neighborhoods read the mount angle as
+relief — a flat floor inside a 0.5 m ball tilted 40° looks like 0.3 m of it.
+
+`--level ground` fits the floor with RANSAC and rotates it out:
+
+```bash
+rocklabel label RUN.mcap --level ground
+# === levelling ===
+#   levelling:             ground
+#   mount roll / pitch:    -0.64 deg / +39.25 deg (tilt 39.25 deg)
+#   ground fit:            30.6% inliers of 151466 pooled points
+#   floor (levelled):      z = -0.618 m
+```
+
+The reported floor height is where to put your z-min. On one 40°-tilted run
+the cloud's z extent went from 42 m to 13.7 m, with 52% of it landing within
+±0.20 m of the floor plane.
+
+Levelling happens inside the scan stream, so **`label`, `generate`, and
+`driftcheck` all see the same geometry** — they have to, because rock centers
+are stored in world coordinates. Three things follow from that:
+
+* the label file records the angle it was picked at (schema v4 `level`), and
+  `generate` **replays that exact angle** rather than re-fitting, so the two
+  frames match to the bit;
+* mixing frames is refused outright — labelling levelled and generating
+  unlevelled (or vice versa) errors instead of silently misplacing every rock;
+* the levelling settings are part of the config hash, so a levelled dataset
+  can never be appended to an unlevelled one. **Turning levelling on means
+  regenerating the dataset directory.**
+
+Use `--level manual --mount-roll R --mount-pitch P` when you already know the
+angle (same convention the live rig's IMU reports), or when the fit picks the
+wrong plane — it refuses a plane more than `level.max_tilt_deg` from vertical
+(that's what keeps it off walls) and one that sits above the sensor (that's a
+ceiling). Best of all, record with the live rig's own `--level` on and none of
+this is needed.
 
 ### 3. `rocklabel driftcheck` — verify odometry per run
 
@@ -455,6 +590,11 @@ Multiple recordings accumulate into one `DATASET_DIR` as long as they were
 generated with the **identical** config; re-running a run_id replaces its
 files. A different config against an existing dataset directory is refused
 (see manifest below) — mixed-config datasets are impossible by construction.
+
+Pass the same `--level` you labeled with (see `### 2`). With `--level ground`
+the fit is not re-run: the label file's recorded angle is replayed verbatim,
+so `generate`'s frame matches `label`'s exactly even though the two use
+different strides. A frame mismatch is an error, not a warning.
 
 ### 5. `rocklabel preview` — skip through what was actually written
 
@@ -516,6 +656,29 @@ Schema v2 adds shaped labels: axis-aligned **boxes** (`center` + full-extent
 rock, whatever its shape, also stores its bounding sphere (`center` +
 `radius`) so shape-agnostic consumers (driftcheck, preview, sample placement)
 keep working. v1 files (spheres only, no `shape` field) still load.
+
+Schema v4 adds an optional `level` — the mount rotation the cloud was levelled
+by when these centers were picked (see [`--level`](#levelling-a-tilted-recording---level)):
+
+```json
+"level": {"mode": "ground", "roll_deg": -0.6356, "pitch_deg": 39.2459, "floor_z": -0.6182}
+```
+
+It is not geometry, it is a **frame stamp**: centers are world coordinates, so
+`generate` uses it both to replay the exact same rotation and to refuse a run
+that would project them into a different frame. Absent (every v1–v3 file)
+means unlevelled, so old label files keep loading and keep matching.
+
+Schema v5 adds an optional `z_band` — the odom-frame height slab the labeler's
+z clip was left at, and the vertical half of what `arena` does horizontally:
+
+```json
+"z_band": [-0.62, 0.55]
+```
+
+`generate` uses it in place of the crop box's `crop_up_m` / `crop_down_m`.
+Absent (every v1–v4 file) means no height restriction, so the crop box stays
+the only vertical bound and old label files behave exactly as before.
 
 Rock ids are stable within a session (monotonic counter, never reused).
 
@@ -639,6 +802,10 @@ Notable robustness knobs:
 - `topics.static_lidar_to_base` — fallback LiDAR mount transform if the
   recording lacks it on `/tf_static`.
 - `topics.pose_tolerance_s` — max TF extrapolation before a frame is skipped.
+- `level.mode` — undo a sensor mount tilt baked into the recording
+  ([`--level`](#levelling-a-tilted-recording---level)). Off by default, so
+  every existing dataset keeps its geometry. Quote the value in YAML: bare
+  `off` parses as a boolean.
 - Missing intensity field → one prominent warning, zeros written, and
   `"intensity_available": false` recorded in all output metadata.
 - Intensity is always normalized to `[0, 1]`, whatever units the driver wrote.
@@ -694,6 +861,13 @@ the config hash, so `generate` requires a fresh `--out` directory.
   didn't publish intensity. Everything still works; intensity is 0 everywhere
   and `intensity_available: false` is recorded so training code can drop that
   channel.
+- **The fused cloud is a ramp / the z-clip range spans tens of metres** —
+  the sensor's mount tilt is baked into the recording. Re-run with
+  `--level ground` ([details](#levelling-a-tilted-recording---level)), and
+  pass the same flag to `generate`.
+- **"was labelled in a different frame than this run is generating"** — the
+  labels and this `generate` disagree about which way is up. The message
+  prints the exact flags that reproduce the labels' own frame.
 - **`[entity=...] missing required attributes` lines from the labeler
   window** — harmless Open3D/filament rendering chatter about the transparent
   spheres; ignore.
@@ -796,6 +970,65 @@ Caveat: the four myroom runs share one small set of labeled rocks and are much
 rock-richer (24-44%) than e.g. the lance arena runs (1-3%), so treat the
 scores as "does the architecture learn this scene", not as competition-arena
 performance.
+
+### Settling whether a channel earns its place
+
+`compare` answers "how do the models score". Two more commands answer "does
+*this one thing* actually matter", which is a different question and needs a
+different shape of experiment.
+
+```bash
+rocklabel-train reflect     # seconds, no GPU: what is in the intensity channel?
+rocklabel-train ablate      # overnight: train every setting on every fold, paired
+rocklabel-train ablate --report-only    # rebuild the tables from what has finished
+```
+
+**`reflect`** reads the cache directly and scores each labeled neighborhood
+several ways — average intensity, its spread, middle-versus-ring contrast,
+tall-points-versus-low-points contrast, and the correlation between intensity
+and height — then rates each on how well it alone separates rock from clear,
+run by run, with the same measurements on height as the reference. It also
+reports how far the absolute intensity level drifts between recordings, which
+is what decides whether any fixed intensity threshold could transfer. Writes
+`training/results_reflect/`. Run it before an ablation sweep: if the channel is
+empty at this level, no model will find something in it.
+
+**`ablate`** trains a named set of *arms* on every leave-one-run-out fold and
+compares them **paired by fold**. Two rules make it different from `compare`:
+
+- **One arm, one run root.** `compare` names a run directory after model + fold
+  + channels, so two settings differing only in an augmentation value would
+  collide and the second would archive the first as stale. Each arm here gets
+  `training/ablate/<suite>/<arm>/` to itself, so *any* two settings can be
+  compared.
+- **Paired, never pooled.** Which run is held out swings PR-AUC across roughly
+  0.5–0.95 on the volleyball data, an order of magnitude more than any channel
+  effect. Comparing two arms' averages cannot see an effect that small;
+  comparing them fold by fold can. The report gives a per-fold difference, a
+  win/loss count, and an exact Wilcoxon signed-rank p-value (written out in
+  numpy — scipy is not a dependency).
+
+The built-in `reflectivity` suite covers PointNet and PointNet++ with and
+without the intensity channel, both models with the intensity augmentation
+switched off (the default jitter is deliberately wider than the rock/clear
+intensity gap, so a model trained with it *cannot* use the absolute level even
+if the level were informative), an intensity-only control, and **repeats of two
+arms under different random seeds**. Those repeats are the point of the whole
+design: they measure how far apart two runs of the *same* setting land, which
+is the only way to judge whether a difference between two *different* settings
+means anything. The report prints that noise floor at the top and scales every
+effect against it.
+
+Both commands are on the dashboard's Train stage ("Reflectivity check" and
+"Ablation sweep"), and the sweep's progress, per-arm ranking and figures appear
+on the Models page while it runs.
+
+Note: `pointnet2_seg` (per-point segmentation) needs format C, which requires
+frames holding at least `segmentation_min_points` (512) points. Recordings
+captured as small scan segments with `frame_window_s: 0.0` produce ~100 points
+per frame and therefore no format-C data at all (`seg_frames: 0` in the
+manifest). Regenerate with a frame window — see `config.fused.yaml` — if you
+want to train the segmenter on such a recording.
 
 ## Non-goals
 

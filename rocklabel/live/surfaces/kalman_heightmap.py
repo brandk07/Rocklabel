@@ -30,7 +30,12 @@ import warnings
 
 import numpy as np
 
-from rocklabel.live.colormap import apply_colormap, normalize, reflectivity_values
+from rocklabel.live.colormap import (
+    apply_colormap,
+    clamp_range,
+    normalize,
+    reflectivity_values,
+)
 from rocklabel.live.config import AppConfig
 from rocklabel.live.filters import filter_keep_mask
 from rocklabel.live.surfaces.base import HeightRaster, MeshData, SurfaceBuilder
@@ -66,6 +71,10 @@ class KalmanHeightmap(SurfaceBuilder):
             ("reflectivity", "reflectivity_stretch") else "height"
         )
         self._reflectivity_pct = tuple(config.display.reflectivity_percentiles)
+        #: Manual contrast window for the fixed reflectivity mode, in fraction
+        #: of full scale — the mesh has to share the viewer's, or the surface
+        #: and the points sitting on it are colored by two different scales.
+        self._reflectivity_range = clamp_range(*config.display.reflectivity_range)
 
         self._lock = threading.Lock()
         self._allocate()
@@ -206,6 +215,16 @@ class KalmanHeightmap(SurfaceBuilder):
             if mode != self._color_mode:
                 self._color_mode = mode
                 self._mesh_dirty = True  # recolor on the next mesh fetch
+
+    def set_reflectivity_range(self, lo: float, hi: float) -> None:
+        """Set the fixed-mode contrast window, in fraction of full scale
+        (thread-safe). No effect while coloring by height."""
+        window = clamp_range(lo, hi)
+        with self._lock:
+            if window != self._reflectivity_range:
+                self._reflectivity_range = window
+                if self._color_mode == "reflectivity":
+                    self._mesh_dirty = True  # recolor on the next mesh fetch
 
     def get_mesh_arrays(self) -> MeshData:
         """Return the cached surface mesh, rebuilding only if new data arrived."""
@@ -356,5 +375,5 @@ class KalmanHeightmap(SurfaceBuilder):
         """Mesh reflectivity colors, on the same scale as the point clouds."""
         v = reflectivity_values(
             vals, stretch=self._color_mode == "reflectivity_stretch",
-            pct=self._reflectivity_pct)
+            pct=self._reflectivity_pct, limits=self._reflectivity_range)
         return apply_colormap(v, self._cfg.display.reflectivity_colormap)

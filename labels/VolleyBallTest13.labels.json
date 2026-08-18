@@ -1,0 +1,11 @@
+{
+  "schema_version": 4,
+  "mcap_file": "VolleyBallTest13.mcap",
+  "run_id": "VolleyBallTest13",
+  "odom_frame": "world",
+  "created": "2026-08-16T21:45:51Z",
+  "tool_version": "0.2.0",
+  "intensity_available": true,
+  "accumulator_voxel_m": 0.03,
+  "rocks": []
+}

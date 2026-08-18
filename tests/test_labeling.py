@@ -10,6 +10,7 @@ from rocklabel.labeling import (LABEL_CLEAR, LABEL_IGNORE, LABEL_ROCK,
                                 points_in_rock)
 from rocklabel.neighborhoods import build_neighborhood_samples
 from rocklabel.labels import LabelSet, load_labels
+from rocklabel.config import load_config
 
 
 def test_single_sphere_membership():
@@ -153,6 +154,35 @@ def test_labels_without_an_arena_stay_arena_free(tmp_path):
     assert load_labels(path).arena is None
 
 
+# -- training height band ------------------------------------------------------
+
+def test_z_band_survives_a_save_load_round_trip(tmp_path):
+    ls = LabelSet()
+    ls.add([1.0, 1.0, 0.0], 0.2)
+    ls.set_z_band(-0.4, 0.9)
+    path = str(tmp_path / "labels.json")
+    ls.save(path)
+    assert load_labels(path).z_band == (-0.4, 0.9)
+
+
+def test_labels_without_a_z_band_stay_band_free(tmp_path):
+    ls = LabelSet()
+    ls.add([0.0, 0.0, 0.0], 0.3)
+    path = str(tmp_path / "labels.json")
+    ls.save(path)
+    assert "z_band" not in json.loads(open(path).read())
+    assert load_labels(path).z_band is None
+
+
+def test_set_z_band_sorts_its_ends():
+    """The two ends come straight off slider callbacks, which can arrive in
+    either order while a drag crosses over."""
+    ls = LabelSet()
+    assert ls.set_z_band(1.5, -0.5) == (-0.5, 1.5)
+    ls.clear_z_band()
+    assert ls.z_band is None
+
+
 def test_set_arena_rejects_a_degenerate_polygon():
     ls = LabelSet()
     for bad in ([], [[0, 0]], [[0, 0], [1, 1]]):
@@ -186,3 +216,35 @@ def test_arena_restricts_sample_centers_but_not_neighborhood_context():
     near = np.argmin(np.linalg.norm(
         full["centers_odom"] - bounded["centers_odom"][edge], axis=1))
     assert abs(int(full["true_counts"][near]) - int(bounded["true_counts"][edge])) <= 2
+
+
+def test_resuming_labels_pins_the_frame_before_accumulating(tmp_path, monkeypatch):
+    """`label` must read the label file first, so the cloud it fuses is in the
+    same frame the existing rocks were picked in."""
+    import json
+
+    import rocklabel.labeler as labeler
+
+    labels_path = tmp_path / "run.labels.json"
+    labels_path.write_text(json.dumps({
+        "schema_version": 4, "run_id": "run", "mcap_file": "run.mcap",
+        "rocks": [{"id": 1, "shape": "sphere", "center": [1.0, 0.0, 0.0],
+                   "radius": 0.15}],
+    }))
+
+    seen = {}
+
+    def fake_accumulate(mcap_path, cfg, stride):
+        seen["mode"] = cfg["level"]["mode"]
+        raise SystemExit("stop after the config is settled")
+
+    monkeypatch.setattr(labeler, "accumulate_cloud", fake_accumulate)
+    cfg = load_config(None)
+    assert cfg["level"]["mode"] == "auto"
+    with pytest.raises(SystemExit):
+        labeler.run_label(str(tmp_path / "run.mcap"), cfg, str(labels_path),
+                          stride=1, z_min=None, z_max=None)
+    # The label file carries no frame, so levelling is pinned off for it.
+    assert seen["mode"] == "off"
+    # ...and the caller's config was not mutated on the way through.
+    assert cfg["level"]["mode"] == "auto"

@@ -52,6 +52,64 @@ topics:
   # labeling, driftcheck, AND generate, so the view matches the dataset.
   min_range_m: 0.7
 
+level:
+  # Undo a tilted sensor mount. A recording's odom/world frame is only as level
+  # as the rig that made it - a native lidarrig frame is the sensor frame at
+  # startup - so a LiDAR on a slanted mast tilts the entire cloud. A z clip then
+  # slices a diagonal wedge out of the floor instead of a horizontal slab, and
+  # the model's neighborhoods see the mount angle as relief.
+  #
+  # Applied inside the scan stream, so `label`, `generate`, and `driftcheck` all
+  # share one geometry - they must, because rock centers are stored in world
+  # coordinates. `generate` replays the exact angle the label file recorded.
+  #
+  #   auto    (default) measure it: seed the angle from the sensor's own path
+  #           through the recording - flat ground cannot make the sensor climb
+  #           as it walks - then refine on a ground-plane fit. A recording the
+  #           live rig already levelled measures near zero and is left alone.
+  #           Never fails; falls back to the path seed if the floor fit is
+  #           unusable.
+  #   off     no rotation (what every pre-levelling dataset used)
+  #   ground  insist on a RANSAC ground-plane fit; error out if it cannot get
+  #           a good one, rather than falling back
+  #   manual  use mount_roll_deg / mount_pitch_deg verbatim
+  #
+  # CLI: --level / --mount-roll / --mount-pitch
+  mode: "auto"
+
+  # Mount angles (deg) for mode "manual", in the same convention the live rig's
+  # IMU and `rocklabel label` report: a sensor pitched nose-up by theta about
+  # its own +y axis is mount_pitch_deg: theta.
+  mount_roll_deg: 0.0
+  mount_pitch_deg: 0.0
+
+  # Pool floor candidates from the first N scans (0 = whole recording).
+  fit_scans: 0
+
+  # 3D range band (m) around the sensor for pooled points: the inner radius
+  # skips the rig's own frame, the outer keeps the floor dense and flat.
+  # Measured per scan, so it follows a rig that walks.
+  range_min_m: 0.6
+  range_max_m: 6.0
+
+  # Voxel size the pooled cloud is downsampled to before fitting.
+  fit_voxel_m: 0.05
+
+  # RANSAC inlier distance (m) and hypothesis count.
+  plane_thresh_m: 0.05
+  ransac_iters: 512
+
+  # Reject planes tilted more than this from +z. This is what keeps the fit off
+  # walls: indoors a wall often has more coplanar points than the floor.
+  max_tilt_deg: 50.0
+
+  # Acceptance gate. Loose on purpose: in a still-tilted frame the pooled set is
+  # mostly walls, so the floor is a minority of it.
+  min_inlier_frac: 0.15
+
+  # A fitted plane this far above the sensor is the ceiling, not the floor.
+  ceiling_margin_m: 0.2
+
 labeler:
   # Voxel size of the streaming accumulator that fuses all scans for display.
   # Smaller = denser cloud, more memory.

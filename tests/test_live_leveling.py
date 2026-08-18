@@ -230,3 +230,84 @@ def test_crop_mask_applies_the_floor_relative_band():
     pts = np.array([[0.0, 0.0, -0.45], [0.0, 0.0, 0.0], [0.0, 0.0, 1.0]])
     keep = crop_mask(pts, cfg, floor_z=-0.45)
     assert keep.tolist() == [True, True, False]
+
+
+# --------------------------------------------------------------------------- #
+# Gravity cross-check: does the levelling in force still belong to this frame?
+# --------------------------------------------------------------------------- #
+def _engine_with_locked_level(pitch_deg: float):
+    """An engine whose leveller is locked for a sensor pitched ``pitch_deg``."""
+    from rocklabel.live.config import AppConfig
+    from rocklabel.live.pipeline import IngestEngine
+    from rocklabel.live.surfaces import make_surface_builder
+    from rocklabel.live.sources import make_source
+
+    cfg = AppConfig()
+    cfg.source.kind = "sim"
+    cfg.level.mode = "manual"
+    cfg.level.mount_pitch_deg = pitch_deg
+    engine = IngestEngine(make_source(cfg), make_surface_builder(cfg), cfg)
+    engine.leveler._state = GroundLeveler.LOCKED  # noqa: SLF001 — test fixture
+    return engine
+
+
+def _pin_reference(engine, pitch_deg: float) -> None:
+    """Make the engine's IMU reference that of a sensor pitched ``pitch_deg``."""
+    from rocklabel.live.motion import matrix_to_quat
+
+    engine.tracker.update(matrix_to_quat(mount_rotation(0.0, pitch_deg)))
+
+
+def test_level_residual_is_zero_when_levelling_matches_the_reference():
+    engine = _engine_with_locked_level(31.0)
+    _pin_reference(engine, 31.0)
+    assert engine.level_residual_deg() == pytest.approx(0.0, abs=0.01)
+    assert "⚠" not in engine.level_status()
+
+
+def test_level_residual_catches_a_stale_calibration():
+    """The VolleyBall failure: the world was re-anchored, the angle was not.
+
+    A 5° rotation left over from an earlier calibration cannot level a frame
+    anchored to a sensor sitting 31° nose-up — the residual is the ~26° of
+    ramp that everything downstream would then be measured on.
+    """
+    engine = _engine_with_locked_level(5.0)
+    _pin_reference(engine, 31.0)
+    assert engine.level_residual_deg() == pytest.approx(26.0, abs=0.5)
+    assert "⚠" in engine.level_status()
+
+
+def test_level_residual_is_unknown_without_a_reference_or_a_lock():
+    engine = _engine_with_locked_level(31.0)
+    assert engine.level_residual_deg() is None  # no IMU sample yet
+    _pin_reference(engine, 31.0)
+    engine.leveler._state = GroundLeveler.COLLECTING  # noqa: SLF001
+    assert engine.level_residual_deg() is None  # still measuring
+
+
+def test_full_reset_re_measures_the_mount_tilt():
+    """Resetting the map re-zeroes the IMU reference, which invalidates the
+    angle solved against the old one — so it must be measured again."""
+    from rocklabel.live.config import AppConfig
+    from rocklabel.live.pipeline import IngestEngine
+    from rocklabel.live.surfaces import make_surface_builder
+    from rocklabel.live.sources import make_source
+
+    cfg = AppConfig()
+    cfg.source.kind = "sim"
+    cfg.level.mode = "ground"
+    cfg.level.calib_sec = 0.5
+    cfg.level.min_points = 1000
+    cfg.level.plane_thresh = 0.03
+    engine = IngestEngine(make_source(cfg), make_surface_builder(cfg), cfg)
+    _feed(engine.leveler, _tilted_room(31.0))
+    assert engine.leveler.locked
+
+    engine.reset_surface()  # the R key / "Reset surface" button
+    assert engine.leveler.state == GroundLeveler.COLLECTING
+
+    # A reset that deliberately keeps the odometry map keeps the angle too.
+    _feed(engine.leveler, _tilted_room(31.0))
+    engine.reset_surface(reset_slam=False)
+    assert engine.leveler.locked

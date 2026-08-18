@@ -222,3 +222,115 @@ def test_cli_defaults_cannot_shadow_the_training_defaults():
                if k not in ("model", "train_runs", "test_run", "cache_dir")
                and cfg[k] != TRAIN_DEFAULTS[k]}
     assert not drifted, f"CLI defaults shadowed TRAIN_DEFAULTS: {drifted}"
+
+
+# -- segmentation -------------------------------------------------------------
+
+def test_model_registry_names_the_task_for_every_model():
+    from rocklabel.train.models import MODELS, model_task
+
+    assert model_task("pointnet") == "classify"
+    assert model_task("pointnet2") == "classify"
+    assert model_task("pointnet2_seg") == "segment"
+    for name, (task, label) in MODELS.items():
+        assert task in ("classify", "segment")
+        # the label has to say which approach it is, not just the backbone
+        assert "classifier" in label or "segmentation" in label
+    with pytest.raises(ValueError):
+        model_task("nope")
+
+
+def test_segmenter_emits_one_logit_per_point():
+    torch.manual_seed(0)
+    model = build_model("pointnet2_seg").eval()
+    pts = torch.randn(2, 512, 4) * 0.5
+    counts = torch.tensor([512, 300])
+    with torch.no_grad():
+        out = model(pts, counts)
+    assert out.shape == (2, 512) and torch.isfinite(out).all()
+
+
+def test_segmenter_is_not_translation_invariant():
+    """Same requirement as the classifier: moving the scene must move the
+    answer. A segmenter that ignored absolute position would label a rock's
+    points identically wherever the rock sat in the crop box."""
+    torch.manual_seed(0)
+    model = build_model("pointnet2_seg").eval()
+    pts = torch.randn(2, 512, 4) * 0.5
+    counts = torch.tensor([512, 512])
+    shifted = pts.clone()
+    shifted[..., 0] += 2.0
+    with torch.no_grad():
+        assert not torch.allclose(model(pts, counts), model(shifted, counts), atol=1e-4)
+
+
+def test_seg_masks_exclude_padding_and_the_boundary_shell():
+    from rocklabel.train.engine import seg_flatten, seg_valid_mask
+
+    labels = np.array([[1, 0, -1, 0, 1], [0, 1, 0, 0, 0]], np.int8)
+    counts = np.array([4, 2])          # row 0: 4 real rows, row 1: 2
+    keep = seg_valid_mask(labels, counts)
+    # row 0 drops index 2 (shell) and index 4 (padding); row 1 keeps only 0,1
+    np.testing.assert_array_equal(keep, [[1, 1, 0, 1, 0], [1, 1, 0, 0, 0]])
+    probs = np.arange(10, dtype=float).reshape(2, 5) / 10.0
+    y, p = seg_flatten(labels, probs, counts)
+    np.testing.assert_array_equal(y, [1, 0, 0, 0, 1])
+    np.testing.assert_allclose(p, [0.0, 0.1, 0.3, 0.5, 0.6])
+
+
+def test_thinning_keeps_per_point_labels_aligned():
+    """The density augmentation reorders points; segmentation labels must be
+    carried through the same permutation or the supervision is scrambled."""
+    from rocklabel.train.engine import _thin
+
+    torch.manual_seed(0)
+    gen = torch.Generator().manual_seed(0)
+    # tag each point with its own index in channel 0 so we can follow it
+    pts = torch.zeros(4, 64, 4)
+    pts[..., 0] = torch.arange(64).float()[None, :].expand(4, -1)
+    labels = torch.arange(64).float()[None, :].expand(4, -1).contiguous()
+    counts = torch.tensor([64, 40, 25, 12])
+    out, new_counts, new_labels = _thin(pts, counts, 0.4, gen, extra=labels)
+    assert new_labels is not None
+    # every surviving point still carries its own label
+    torch.testing.assert_close(out[..., 0], new_labels)
+    assert (new_counts <= counts).all()
+
+
+@pytest.mark.parametrize("model,task", [("pointnet", "classify"),
+                                        ("pointnet2_seg", "segment")])
+def test_one_training_step_runs_for_both_tasks(tmp_path, model, task):
+    """Exercise the real train loop body for one step of each task.
+
+    Guards a class of bug the unit tests missed: the augmentation returns a
+    labels tensor only for segmentation, and threading that through the shared
+    loop once clobbered the classifier's labels with None. It blew up on the
+    first batch of a 24-fold sweep.
+    """
+    from rocklabel.train.engine import _augment, default_config, seg_valid_mask
+
+    cfg = default_config(model=model)
+    torch.manual_seed(0)
+    gen = torch.Generator().manual_seed(0)
+    n = 256 if task == "classify" else 512
+    pts = torch.randn(4, n, 4).abs().clamp(max=1.0)
+    cnt = torch.tensor([n, n // 2, n // 3, n // 4])
+    y = (torch.rand(4) < 0.3).float() if task == "classify" else \
+        (torch.rand(4, n) < 0.1).float()
+
+    pts_a, cnt_a, y_aug = _augment(pts, cnt, cfg, gen,
+                                   labels=y if task == "segment" else None)
+    if y_aug is not None:
+        y = y_aug
+    assert y is not None and torch.is_tensor(y)
+
+    net = build_model(model)
+    logits = net(pts_a, cnt_a)
+    if task == "segment":
+        keep = (torch.arange(n)[None, :] < cnt_a[:, None]) & (y >= 0)
+        loss = torch.nn.functional.binary_cross_entropy_with_logits(logits[keep], y[keep])
+        assert seg_valid_mask(y.numpy().astype(np.int8), cnt_a.numpy()).sum() > 0
+    else:
+        loss = torch.nn.functional.binary_cross_entropy_with_logits(logits, y)
+    loss.backward()
+    assert torch.isfinite(loss)

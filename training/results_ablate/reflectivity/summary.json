@@ -1,0 +1,600 @@
+{
+  "suite": "reflectivity",
+  "title": "Does reflectivity help?",
+  "blurb": "PointNet and PointNet++, with and without the reflectivity channel, plus seed repeats that show how big a meaningless difference looks.",
+  "folds": [
+    "VolleyBallTest10.reslam",
+    "VolleyBallTest11.reslam",
+    "VolleyBallTest12.reslam"
+  ],
+  "arms": [
+    {
+      "arm": "pointnet-geom",
+      "label": "PointNet \u00b7 shape only",
+      "what": "PointNet with the reflectivity channel removed entirely. The control: whatever this scores is what pure geometry is worth.",
+      "model": "pointnet",
+      "features": [
+        "dx",
+        "dy",
+        "dz"
+      ],
+      "seed": null,
+      "overrides": {},
+      "folds_done": 3,
+      "folds": [
+        "VolleyBallTest10.reslam",
+        "VolleyBallTest11.reslam",
+        "VolleyBallTest12.reslam"
+      ],
+      "pr_auc": {
+        "mean": 0.7404751242116494,
+        "std": 0.0849545290810151,
+        "per_fold": {
+          "VolleyBallTest10.reslam": 0.7664444693371792,
+          "VolleyBallTest11.reslam": 0.8094139943377257,
+          "VolleyBallTest12.reslam": 0.6455669089600433
+        }
+      },
+      "roc_auc": {
+        "mean": 0.8200119104908233,
+        "std": 0.10779772784396924,
+        "per_fold": {
+          "VolleyBallTest10.reslam": 0.9223650443558538,
+          "VolleyBallTest11.reslam": 0.8301804910381849,
+          "VolleyBallTest12.reslam": 0.7074901960784313
+        }
+      },
+      "f1": {
+        "mean": 0.5819264427908065,
+        "std": 0.11969433864577558,
+        "per_fold": {
+          "VolleyBallTest10.reslam": 0.5251396648044693,
+          "VolleyBallTest11.reslam": 0.7194444444444444,
+          "VolleyBallTest12.reslam": 0.5011952191235061
+        }
+      },
+      "precision": {
+        "mean": 0.6800348064479698,
+        "std": 0.247984318824556,
+        "per_fold": {
+          "VolleyBallTest10.reslam": 0.3983050847457627,
+          "VolleyBallTest11.reslam": 0.8652561247216035,
+          "VolleyBallTest12.reslam": 0.7765432098765432
+        }
+      },
+      "recall": {
+        "mean": 0.5853937284040426,
+        "std": 0.20195739919704317,
+        "per_fold": {
+          "VolleyBallTest10.reslam": 0.7704918032786885,
+          "VolleyBallTest11.reslam": 0.615689381933439,
+          "VolleyBallTest12.reslam": 0.37
+        }
+      }
+    },
+    {
+      "arm": "pointnet-refl",
+      "label": "PointNet \u00b7 shape + reflectivity",
+      "what": "PointNet with reflectivity included, using the standard augmentation (reflectivity randomly rescaled and shifted each sample). This is the setting the existing runs used.",
+      "model": "pointnet",
+      "features": [
+        "dx",
+        "dy",
+        "dz",
+        "intensity"
+      ],
+      "seed": null,
+      "overrides": {},
+      "folds_done": 0,
+      "folds": [],
+      "pr_auc": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "roc_auc": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "f1": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "precision": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "recall": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      }
+    },
+    {
+      "arm": "pointnet2-geom",
+      "label": "PointNet++ \u00b7 shape only",
+      "what": "PointNet++ with no reflectivity. The shape-only control for the hierarchical model.",
+      "model": "pointnet2",
+      "features": [
+        "dx",
+        "dy",
+        "dz"
+      ],
+      "seed": null,
+      "overrides": {},
+      "folds_done": 0,
+      "folds": [],
+      "pr_auc": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "roc_auc": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "f1": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "precision": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "recall": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      }
+    },
+    {
+      "arm": "pointnet2-refl",
+      "label": "PointNet++ \u00b7 shape + reflectivity",
+      "what": "PointNet++ with reflectivity included and the standard augmentation.",
+      "model": "pointnet2",
+      "features": [
+        "dx",
+        "dy",
+        "dz",
+        "intensity"
+      ],
+      "seed": null,
+      "overrides": {},
+      "folds_done": 0,
+      "folds": [],
+      "pr_auc": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "roc_auc": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "f1": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "precision": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "recall": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      }
+    },
+    {
+      "arm": "pointnet-refl-raw",
+      "label": "PointNet \u00b7 reflectivity unjittered",
+      "what": "PointNet with reflectivity included and the reflectivity augmentation switched off, so the model may use the raw absolute brightness. If reflectivity helps anywhere, it helps most here \u2014 and the gap between this and the jittered arm is the size of the cue the augmentation deliberately destroys.",
+      "model": "pointnet",
+      "features": [
+        "dx",
+        "dy",
+        "dz",
+        "intensity"
+      ],
+      "seed": null,
+      "overrides": {
+        "aug_intensity_gain": 0.0,
+        "aug_intensity_shift": 0.0
+      },
+      "folds_done": 0,
+      "folds": [],
+      "pr_auc": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "roc_auc": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "f1": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "precision": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "recall": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      }
+    },
+    {
+      "arm": "pointnet2-refl-raw",
+      "label": "PointNet++ \u00b7 reflectivity unjittered",
+      "what": "PointNet++ with reflectivity included and its augmentation off.",
+      "model": "pointnet2",
+      "features": [
+        "dx",
+        "dy",
+        "dz",
+        "intensity"
+      ],
+      "seed": null,
+      "overrides": {
+        "aug_intensity_gain": 0.0,
+        "aug_intensity_shift": 0.0
+      },
+      "folds_done": 0,
+      "folds": [],
+      "pr_auc": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "roc_auc": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "f1": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "precision": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "recall": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      }
+    },
+    {
+      "arm": "pointnet-refl-only",
+      "label": "PointNet \u00b7 reflectivity only",
+      "what": "PointNet fed nothing but reflectivity \u2014 no coordinates at all. It cannot see shape, so its score is a direct read of how much the brightness numbers alone can separate rock from sand.",
+      "model": "pointnet",
+      "features": [
+        "intensity"
+      ],
+      "seed": null,
+      "overrides": {
+        "aug_intensity_gain": 0.0,
+        "aug_intensity_shift": 0.0
+      },
+      "folds_done": 0,
+      "folds": [],
+      "pr_auc": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "roc_auc": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "f1": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "precision": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "recall": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      }
+    },
+    {
+      "arm": "pointnet-geom-s43",
+      "label": "PointNet \u00b7 shape only (seed 43)",
+      "what": "Same setting as the shape-only arm, different random seed. Exists only to measure how far two identical settings land apart.",
+      "model": "pointnet",
+      "features": [
+        "dx",
+        "dy",
+        "dz"
+      ],
+      "seed": 43,
+      "overrides": {},
+      "folds_done": 0,
+      "folds": [],
+      "pr_auc": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "roc_auc": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "f1": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "precision": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "recall": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      }
+    },
+    {
+      "arm": "pointnet-refl-s43",
+      "label": "PointNet \u00b7 shape + reflectivity (seed 43)",
+      "what": "Seed repeat of the shape+reflectivity arm.",
+      "model": "pointnet",
+      "features": [
+        "dx",
+        "dy",
+        "dz",
+        "intensity"
+      ],
+      "seed": 43,
+      "overrides": {},
+      "folds_done": 0,
+      "folds": [],
+      "pr_auc": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "roc_auc": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "f1": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "precision": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "recall": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      }
+    },
+    {
+      "arm": "pointnet-geom-s44",
+      "label": "PointNet \u00b7 shape only (seed 44)",
+      "what": "Second seed repeat of the shape-only arm.",
+      "model": "pointnet",
+      "features": [
+        "dx",
+        "dy",
+        "dz"
+      ],
+      "seed": 44,
+      "overrides": {},
+      "folds_done": 0,
+      "folds": [],
+      "pr_auc": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "roc_auc": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "f1": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "precision": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "recall": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      }
+    },
+    {
+      "arm": "pointnet-refl-s44",
+      "label": "PointNet \u00b7 shape + reflectivity (seed 44)",
+      "what": "Second seed repeat of the shape+reflectivity arm.",
+      "model": "pointnet",
+      "features": [
+        "dx",
+        "dy",
+        "dz",
+        "intensity"
+      ],
+      "seed": 44,
+      "overrides": {},
+      "folds_done": 0,
+      "folds": [],
+      "pr_auc": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "roc_auc": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "f1": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "precision": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "recall": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      }
+    }
+  ],
+  "contrasts": [
+    {
+      "baseline": "pointnet-geom",
+      "variant": "pointnet-refl",
+      "question": "PointNet: does adding reflectivity beat shape alone?",
+      "n_folds": 0,
+      "folds": [],
+      "pr_auc": null,
+      "roc_auc": null,
+      "f1": null,
+      "precision": null,
+      "recall": null
+    },
+    {
+      "baseline": "pointnet2-geom",
+      "variant": "pointnet2-refl",
+      "question": "PointNet++: does adding reflectivity beat shape alone?",
+      "n_folds": 0,
+      "folds": [],
+      "pr_auc": null,
+      "roc_auc": null,
+      "f1": null,
+      "precision": null,
+      "recall": null
+    },
+    {
+      "baseline": "pointnet-geom",
+      "variant": "pointnet-refl-raw",
+      "question": "PointNet: does reflectivity help when its augmentation is switched off?",
+      "n_folds": 0,
+      "folds": [],
+      "pr_auc": null,
+      "roc_auc": null,
+      "f1": null,
+      "precision": null,
+      "recall": null
+    },
+    {
+      "baseline": "pointnet2-geom",
+      "variant": "pointnet2-refl-raw",
+      "question": "PointNet++: does reflectivity help when its augmentation is switched off?",
+      "n_folds": 0,
+      "folds": [],
+      "pr_auc": null,
+      "roc_auc": null,
+      "f1": null,
+      "precision": null,
+      "recall": null
+    },
+    {
+      "baseline": "pointnet-refl",
+      "variant": "pointnet-refl-raw",
+      "question": "PointNet: how much does the reflectivity augmentation cost?",
+      "n_folds": 0,
+      "folds": [],
+      "pr_auc": null,
+      "roc_auc": null,
+      "f1": null,
+      "precision": null,
+      "recall": null
+    },
+    {
+      "baseline": "pointnet-geom",
+      "variant": "pointnet2-geom",
+      "question": "Shape only: is PointNet++ better than PointNet?",
+      "n_folds": 0,
+      "folds": [],
+      "pr_auc": null,
+      "roc_auc": null,
+      "f1": null,
+      "precision": null,
+      "recall": null
+    },
+    {
+      "baseline": "pointnet-refl",
+      "variant": "pointnet2-refl",
+      "question": "Shape + reflectivity: is PointNet++ better than PointNet?",
+      "n_folds": 0,
+      "folds": [],
+      "pr_auc": null,
+      "roc_auc": null,
+      "f1": null,
+      "precision": null,
+      "recall": null
+    },
+    {
+      "baseline": "pointnet-geom",
+      "variant": "pointnet-geom-s43",
+      "question": "Noise floor: the same shape-only setting, two different seeds.",
+      "n_folds": 0,
+      "folds": [],
+      "pr_auc": null,
+      "roc_auc": null,
+      "f1": null,
+      "precision": null,
+      "recall": null
+    },
+    {
+      "baseline": "pointnet-refl",
+      "variant": "pointnet-refl-s43",
+      "question": "Noise floor: the same shape+reflectivity setting, two different seeds.",
+      "n_folds": 0,
+      "folds": [],
+      "pr_auc": null,
+      "roc_auc": null,
+      "f1": null,
+      "precision": null,
+      "recall": null
+    }
+  ],
+  "noise_floor_pr_auc": null
+}

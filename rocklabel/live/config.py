@@ -319,6 +319,14 @@ class DisplayConfig:
     color_mode: str = "height"
     #: Colormap used in both reflectivity modes.
     reflectivity_colormap: str = "turbo"
+    #: Contrast window for the fixed "reflectivity" mode, as (low, high)
+    #: fractions of the sensor's full scale. The whole scale (0, 1) is the
+    #: plain calibrated view; narrowing it spreads the ramp over the band the
+    #: arena actually occupies and hard-clamps everything outside — returns
+    #: at or above `high` take the top color, at or below `low` the bottom.
+    #: Adjustable live (View panel sliders / the web panel), and unlike the
+    #: stretch mode these are absolute, so colors still compare across frames.
+    reflectivity_range: tuple[float, float] = (0.0, 1.0)
     #: Percentile window for "reflectivity_stretch". Real surfaces occupy a
     #: narrow slice of the sensor's full scale - measured on arena data, the
     #: middle 98% of returns spans roughly 0.26-0.82 of full scale - so on the

@@ -1,0 +1,17 @@
+{
+  "schema_version": 4,
+  "mcap_file": "VolleyBallTest6.mcap",
+  "run_id": "VolleyBallTest6",
+  "odom_frame": "world",
+  "created": "2026-08-16T21:43:16Z",
+  "tool_version": "0.2.0",
+  "intensity_available": true,
+  "accumulator_voxel_m": 0.03,
+  "rocks": [],
+  "level": {
+    "mode": "ground",
+    "roll_deg": 3.8298,
+    "pitch_deg": 25.9615,
+    "floor_z": -0.7408
+  }
+}

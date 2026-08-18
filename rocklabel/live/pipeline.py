@@ -18,13 +18,18 @@ import numpy as np
 
 from rocklabel.live.config import AppConfig
 from rocklabel.live.filters import crop_mask
-from rocklabel.live.leveling import GroundLeveler
+from rocklabel.live.leveling import GroundLeveler, tilt_deg
 from rocklabel.live.motion import OrientationTracker, matrix_to_quat, quat_to_matrix
 from rocklabel.live.slam import SlamTracker
 from rocklabel.live.sources.base import PointSource
 from rocklabel.live.surfaces.base import SurfaceBuilder
 
 _IDENTITY_QUAT = np.array([1.0, 0.0, 0.0, 0.0])
+
+#: Warn above this much residual tilt between the levelled world frame and
+#: gravity. A good ground fit lands within ~1°; anything past a few degrees is
+#: a stale calibration, not measurement noise.
+_LEVEL_RESIDUAL_WARN_DEG = 4.0
 
 
 class RawPointBuffer:
@@ -268,6 +273,9 @@ class IngestEngine:
         #: Applied *after* IMU/SLAM, as a constant rotation, so the fused
         #: heightmap and the SLAM map never shift underneath themselves.
         self.leveler = GroundLeveler(config.level)
+        #: One-shot latch so the "world frame is still tilted" warning is
+        #: printed once per calibration rather than 240 times a second.
+        self._level_warned = False
         #: Scan-to-map odometry; engages per-batch once IMU orientation arrives.
         self.slam: SlamTracker | None = (
             SlamTracker(config.slam, config.motion) if config.slam.enabled else None
@@ -380,6 +388,12 @@ class IngestEngine:
         because the SLAM map lives in the *pre*-levelling frame and is
         unaffected by the rotation — re-anchoring it there would throw away a
         good pose (and re-zero the IMU reference the levelling was solved for).
+
+        A full reset *does* re-zero that IMU reference, which re-anchors the
+        world frame to whatever attitude the sensor happens to be in right now.
+        The locked levelling rotation was solved against the OLD reference, so
+        it is meaningless afterwards — keeping it leaves the world tilted by the
+        mount angle with no sign that anything is wrong. So re-measure it.
         """
         self.surface.reset()
         self.raw.clear()
@@ -388,6 +402,8 @@ class IngestEngine:
             self._recent.clear()
         if reset_slam and self.slam is not None:
             self.slam.reset()
+            self.leveler.recalibrate()  # no-op in "off"/"manual" modes
+            self._level_warned = False
 
     def raw_snapshot(self) -> tuple[np.ndarray, np.ndarray]:
         """Recent (cropped, fused) points + intensity for display."""
@@ -460,6 +476,63 @@ class IngestEngine:
     def recalibrate_level(self) -> None:
         """Re-measure the mount tilt from scratch (GUI / L key)."""
         self.leveler.recalibrate()
+        self._level_warned = False
+
+    def _imu_tracker(self) -> OrientationTracker:
+        """Whichever tracker owns the IMU reference that defines the world frame."""
+        if self._slam_active and self.slam is not None:
+            return self.slam.imu
+        return self.tracker
+
+    def level_residual_deg(self) -> float | None:
+        """How far the levelled world frame still is from true gravity, in degrees.
+
+        The IMU quaternion is gravity-referenced, so gravity-up expressed in the
+        levelled world frame is ``R_level · R(q_ref)ᵀ · ẑ`` — it does not depend
+        on where the sensor is pointing right now, only on the reference that
+        defines the world frame and the rotation levelling applied to it. On a
+        healthy run that vector is +z to within a degree or two. A large value
+        means the levelling in force does not belong to the reference in force
+        (the usual cause: the world frame was re-anchored after levelling
+        locked), and everything measured in that frame is on a ramp.
+
+        Returns None when there is nothing to compare against — no IMU yet, or
+        levelling turned off.
+        """
+        if not self.leveler.active or not self.leveler.locked:
+            return None
+        ref = self._imu_tracker().reference_rotation
+        if ref is None:
+            return None
+        return tilt_deg(self.leveler.rotation @ ref.T)
+
+    def level_status(self) -> str:
+        """Levelling summary for the UIs, with the gravity cross-check appended."""
+        text = self.leveler.status()
+        residual = self.level_residual_deg()
+        if residual is not None and residual >= _LEVEL_RESIDUAL_WARN_DEG:
+            text += f"  ⚠ world still {residual:.0f}° off gravity — re-measure"
+        return text
+
+    def _check_level_residual(self) -> None:
+        """Say so, once, when the frame in force is not actually levelled."""
+        if self._level_warned:
+            return
+        residual = self.level_residual_deg()
+        if residual is None or residual < _LEVEL_RESIDUAL_WARN_DEG:
+            return
+        self._level_warned = True
+        print(
+            f"[rocklabel] WARNING: the world frame is still {residual:.1f}° off "
+            f"gravity — the levelling in force was measured against a different "
+            f"sensor reference.\n"
+            f"[rocklabel]          Everything downstream sits on a ramp: the "
+            f"heightmap spans metres instead of centimetres, the z-crop cuts a "
+            f"diagonal wedge, and rocks vanish into the slope.\n"
+            f"[rocklabel]          Press L (or 'Re-measure tilt' in the web "
+            f"panel) before recording.",
+            flush=True,
+        )
 
     def _warn_if_band_misses_floor(self) -> None:
         """Say so, loudly, when the configured crop band excludes the ground.
@@ -542,6 +615,11 @@ class IngestEngine:
             #     scoring window, crop band, heightmap — sees levelled points.
             if self.leveler.active:
                 points = self._level(points, batch.timestamp)
+                # Cross-check the frame against gravity once it is locked: a
+                # levelling rotation that outlived its IMU reference silently
+                # leaves the whole world on a ramp.
+                if self.leveler.locked and not self._level_warned:
+                    self._check_level_residual()
             pos, quat = self.current_pose()
             # Record the RAW sensor-frame batch plus the pose just computed for
             # it, so a replay reproduces this exact world-frame reconstruction.

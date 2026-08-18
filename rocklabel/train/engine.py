@@ -28,7 +28,7 @@ from tqdm import tqdm
 from . import TRAIN_DEFAULTS
 from . import data as D
 from . import metrics as M
-from .models import FEATURES, build_model, resolve_features
+from .models import FEATURES, build_model, model_task, resolve_features
 
 VAL_METRIC = "val_pr_auc"
 
@@ -72,13 +72,20 @@ MIN_KEEP = 8
 
 
 def _thin(pts: torch.Tensor, counts: torch.Tensor, min_frac: float,
-          gen: torch.Generator) -> tuple[torch.Tensor, torch.Tensor]:
+          gen: torch.Generator,
+          extra: torch.Tensor | None = None) -> tuple[torch.Tensor, torch.Tensor,
+                                                      torch.Tensor | None]:
     """Randomly drop real points, keeping the 'real points first' contract.
 
     Neither model reads the padded tail — PointNet masks it and PointNet++
     exiles it to the sentinel — so the tail is refilled by cycling the
     survivors purely to preserve the stored tensor's shape and its
     duplicate-padding convention.
+
+    ``extra`` (per-point labels, for segmentation) is reordered by the exact
+    same indices. Thinning the points without carrying the labels along would
+    silently scramble the supervision, which is the one way this augmentation
+    could quietly poison a run rather than fail loudly.
     """
     b, n, _ = pts.shape
     dev = pts.device
@@ -92,11 +99,14 @@ def _thin(pts: torch.Tensor, counts: torch.Tensor, min_frac: float,
         torch.arange(n, device=dev)[None, :] >= real[:, None], 2.0).argsort(dim=1)
     pos = torch.arange(n, device=dev)[None, :].expand(b, n)
     idx = order.gather(1, torch.where(pos < keep, pos, pos % keep))
-    return pts.gather(1, idx[..., None].expand(-1, -1, pts.shape[-1])), keep.squeeze(1)
+    out = pts.gather(1, idx[..., None].expand(-1, -1, pts.shape[-1]))
+    return out, keep.squeeze(1), (None if extra is None else extra.gather(1, idx))
 
 
 def _augment(pts: torch.Tensor, counts: torch.Tensor, cfg: dict,
-             gen: torch.Generator) -> tuple[torch.Tensor, torch.Tensor]:
+             gen: torch.Generator,
+             labels: torch.Tensor | None = None
+             ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
     """Training-time augmentation, all on-device.
 
     *Heading*: random z-rotation + mirror of the center-relative dx/dy
@@ -131,13 +141,15 @@ def _augment(pts: torch.Tensor, counts: torch.Tensor, cfg: dict,
         out[..., 3] = (out[..., 3] * gain + shift).clamp(0.0, 1.0)
 
     if cfg["aug_thin_min"] < 1.0:
-        out, counts = _thin(out, counts, cfg["aug_thin_min"], gen)
-    return out, counts
+        out, counts, labels = _thin(out, counts, cfg["aug_thin_min"], gen, extra=labels)
+    return out, counts, labels
 
 
 @torch.no_grad()
 def predict(model: torch.nn.Module, split: Split, device: torch.device,
             batch: int = 512, progress: bool = False) -> np.ndarray:
+    """Probabilities for a whole split: [S] for a classifier, [F, N] for a
+    segmenter (one row per frame, one column per point)."""
     model.eval()
     probs = []
     rng = range(0, len(split), batch)
@@ -146,6 +158,26 @@ def predict(model: torch.nn.Module, split: Split, device: torch.device,
         cnt = split.counts[i:i + batch].to(device, non_blocking=True)
         probs.append(torch.sigmoid(model(pts, cnt)).float().cpu().numpy())
     return np.concatenate(probs)
+
+
+def seg_valid_mask(labels: np.ndarray, counts: np.ndarray) -> np.ndarray:
+    """[F, N] bool: real (unpadded) points carrying a real label.
+
+    Two things are excluded and both matter. Padded rows are duplicates of real
+    points and would double-count. Label -1 is the boundary shell - the fuzzy
+    centimeters at a rock's edge that the labeler refuses to call either way -
+    and scoring against it would punish the model for the one thing the ground
+    truth admits it does not know.
+    """
+    n = labels.shape[1]
+    return (np.arange(n)[None, :] < np.asarray(counts)[:, None]) & (labels >= 0)
+
+
+def seg_flatten(labels: np.ndarray, probs: np.ndarray,
+                counts: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Per-frame [F, N] arrays -> flat per-point arrays over scorable points."""
+    keep = seg_valid_mask(labels, counts)
+    return labels[keep].astype(np.int8), probs[keep]
 
 
 def _epoch_metrics(labels: np.ndarray, probs: np.ndarray) -> dict:
@@ -176,7 +208,8 @@ def train_fold(cfg: dict, run_dir: str, resume: bool = True) -> dict:
     device = _device(cfg.get("device"))
     meta = D.load_cache_meta(cfg["cache_dir"])
 
-    train_runs = [D.RunData(cfg["cache_dir"], r) for r in cfg["train_runs"]]
+    task = model_task(cfg["model"])
+    train_runs = [D.RunData(cfg["cache_dir"], r, task=task) for r in cfg["train_runs"]]
     # Early-stopping val: tail frame block of each training run, with a
     # temporal gap so no neighborhood pair straddles the boundary.
     tr_masks, va_masks = zip(*(
@@ -190,9 +223,19 @@ def train_fold(cfg: dict, run_dir: str, resume: bool = True) -> dict:
     tr = Split(train_runs, list(tr_masks))
     va = Split(train_runs, list(va_masks))
 
-    n_pos = float((tr.labels == 1).sum())
-    n_neg = float(len(tr) - n_pos)
-    print(f"[{os.path.basename(run_dir)}] train {len(tr)} ({n_pos / len(tr):.1%} rock), "
+    # Class balance is counted over whatever the loss actually sees: one label
+    # per sample for a classifier, one per scorable point for a segmenter
+    # (padding and boundary-shell points excluded, exactly as in the loss).
+    if task == "segment":
+        tr_keep = seg_valid_mask(tr.labels.numpy(), tr.counts.numpy())
+        n_pos = float((tr.labels.numpy()[tr_keep] == 1).sum())
+        n_scored = float(tr_keep.sum())
+        unit = "points"
+    else:
+        n_pos, n_scored, unit = float((tr.labels == 1).sum()), float(len(tr)), "samples"
+    n_neg = n_scored - n_pos
+    print(f"[{os.path.basename(run_dir)}] task {task}, train {len(tr)} "
+          f"({n_scored:.0f} scored {unit}, {n_pos / max(n_scored, 1):.2%} rock), "
           f"val {len(va)}, test run {cfg['test_run']}, device {device}")
 
     model = build_model(cfg["model"], tnet=cfg["tnet"], dropout=cfg.get("dropout"),
@@ -217,33 +260,58 @@ def train_fold(cfg: dict, run_dir: str, resume: bool = True) -> dict:
 
     gen = torch.Generator(device=device).manual_seed(cfg["seed"])
     labels_va = va.labels.numpy()
+    counts_va = va.counts.numpy()
+    # A segmenter's batch is whole frames (4096 points each), so the classifier's
+    # batch size would be ~16x the memory. Scale it down rather than making the
+    # user remember two different meanings for --batch.
+    step_batch = cfg["batch"] if task != "segment" else max(cfg["batch"] // 32, 2)
     for epoch in range(start_epoch, cfg["epochs"]):
         model.train()
         perm = torch.randperm(len(tr))
         losses = []
-        steps = range(0, len(tr) - cfg["batch"] + 1, cfg["batch"])  # drop last (BatchNorm)
+        steps = range(0, len(tr) - step_batch + 1, step_batch)  # drop last (BatchNorm)
         for i in tqdm(steps, desc=f"epoch {epoch}", leave=False):
-            idx = perm[i:i + cfg["batch"]]
+            idx = perm[i:i + step_batch]
             pts = tr.points[idx].to(device, non_blocking=True)
             cnt = tr.counts[idx].to(device, non_blocking=True)
             y = tr.labels[idx].to(device, non_blocking=True)
             if cfg["augment"]:
-                pts, cnt = _augment(pts, cnt, cfg, gen)
+                # Only a segmenter has per-point labels to carry through the
+                # thinning permutation; for a classifier _augment returns None
+                # here and must not be allowed to overwrite y.
+                pts, cnt, y_aug = _augment(pts, cnt, cfg, gen,
+                                           labels=y if task == "segment" else None)
+                if y_aug is not None:
+                    y = y_aug
             logits = model(pts, cnt)
-            loss = loss_fn(logits, y) + cfg["tnet_reg"] * model.pop_regularizer()
+            if task == "segment":
+                # Score only real, non-shell points. Doing this with a boolean
+                # select rather than a weight keeps the mean over exactly the
+                # points that count, so batches with more padding are not
+                # quietly down-weighted.
+                keep = (torch.arange(pts.shape[1], device=device)[None, :]
+                        < cnt[:, None]) & (y >= 0)
+                loss = loss_fn(logits[keep], y[keep])
+            else:
+                loss = loss_fn(logits, y)
+            loss = loss + cfg["tnet_reg"] * model.pop_regularizer()
             opt.zero_grad(set_to_none=True)
             loss.backward()
             opt.step()
             losses.append(float(loss.detach()))
         sched.step()
 
-        probs_va = predict(model, va, device, cfg["batch"])
+        probs_va = predict(model, va, device, step_batch)
+        if task == "segment":
+            y_va, p_va = seg_flatten(labels_va, probs_va, counts_va)
+        else:
+            y_va, p_va = labels_va, probs_va
         with torch.no_grad():
             val_loss = float(torch.nn.functional.binary_cross_entropy(
-                torch.from_numpy(probs_va).clamp(1e-6, 1 - 1e-6),
-                torch.from_numpy(labels_va)))
+                torch.from_numpy(p_va).clamp(1e-6, 1 - 1e-6),
+                torch.from_numpy(y_va.astype(np.float32))))
         row = {"epoch": epoch, "train_loss": float(np.mean(losses)), "val_loss": val_loss,
-               **{f"val_{k}": v for k, v in _epoch_metrics(labels_va, probs_va).items()},
+               **{f"val_{k}": v for k, v in _epoch_metrics(y_va, p_va).items()},
                "lr": sched.get_last_lr()[0]}
         history.append(row)
         print(f"  epoch {epoch}: train_loss {row['train_loss']:.4f}  "
@@ -269,26 +337,44 @@ def train_fold(cfg: dict, run_dir: str, resume: bool = True) -> dict:
     # Final: best weights, threshold picked on val, evaluated on the held-out run.
     ck = torch.load(best_path, map_location=device, weights_only=False)
     model.load_state_dict(ck["model"])
-    probs_va = predict(model, va, device, cfg["batch"])
-    threshold = M.best_f1_threshold(labels_va, probs_va)
+    probs_va = predict(model, va, device, step_batch)
+    if task == "segment":
+        y_va, p_va = seg_flatten(labels_va, probs_va, counts_va)
+    else:
+        y_va, p_va = labels_va, probs_va
+    threshold = M.best_f1_threshold(y_va, p_va)
     ck["threshold"] = threshold
     torch.save(ck, best_path)
-    return evaluate(model, cfg, run_dir, threshold, device)
+    return evaluate(model, cfg, run_dir, threshold, device, batch=step_batch)
 
 
 def evaluate(model: torch.nn.Module, cfg: dict, run_dir: str, threshold: float,
-             device: torch.device) -> dict:
-    te = Split([D.RunData(cfg["cache_dir"], cfg["test_run"])])
-    probs = predict(model, te, device, cfg["batch"], progress=True)
+             device: torch.device, batch: int | None = None) -> dict:
+    task = model_task(cfg["model"])
+    te = Split([D.RunData(cfg["cache_dir"], cfg["test_run"], task=task)])
+    probs = predict(model, te, device, batch or cfg["batch"], progress=True)
     labels = te.labels.numpy().astype(np.int8)
-    summary = M.summarize(labels, probs, threshold)
+    counts = te.counts.numpy()
+    if task == "segment":
+        # Headline metrics are per scorable point, which is the segmenter's own
+        # unit of prediction. The point-level numbers are NOT comparable to a
+        # classifier's sample-level ones (different populations, different
+        # prevalence) - report.py re-scores both at shared candidate centers
+        # for that.
+        flat_labels, flat_probs = seg_flatten(labels, probs, counts)
+        summary = M.summarize(flat_labels, flat_probs, threshold)
+        summary["scored_points"] = int(len(flat_labels))
+        summary["frames"] = int(len(labels))
+    else:
+        summary = M.summarize(labels, probs, threshold)
     summary.update({"test_run": cfg["test_run"], "model": cfg["model"],
-                    "val_threshold": threshold})
+                    "task": task, "val_threshold": threshold})
     with open(os.path.join(run_dir, "test_metrics.json"), "w") as f:
         json.dump(summary, f, indent=2)
     np.savez_compressed(os.path.join(run_dir, "predictions.npz"),
                         probs=probs, labels=labels, frame=te.frame,
-                        centers=te.centers, run_id=str(cfg["test_run"]),
+                        counts=counts, centers=te.centers,
+                        run_id=str(cfg["test_run"]), task=task,
                         threshold=threshold)
     print(f"  test [{cfg['test_run']}] pr_auc {summary['pr_auc']:.4f}  "
           f"roc_auc {summary['roc_auc']:.4f}  f1@{threshold:.2f} {summary['f1']:.4f}  "

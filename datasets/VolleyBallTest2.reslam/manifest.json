@@ -1,0 +1,107 @@
+{
+  "tool_version": "0.2.0",
+  "config": {
+    "topics": {
+      "pointcloud_topic": "/multiscan/lidar_scan",
+      "odom_frame": "odom",
+      "base_frame": "base_link",
+      "lidar_frame": "lidar_link",
+      "tf_topic": "/tf",
+      "tf_static_topic": "/tf_static",
+      "pose_tolerance_s": 0.15,
+      "static_lidar_to_base": null,
+      "min_range_m": 0.0
+    },
+    "level": {
+      "mode": "auto",
+      "mount_roll_deg": 0.0,
+      "mount_pitch_deg": 0.0,
+      "fit_scans": 0,
+      "range_min_m": 0.6,
+      "range_max_m": 6.0,
+      "fit_voxel_m": 0.05,
+      "plane_thresh_m": 0.05,
+      "ransac_iters": 512,
+      "max_tilt_deg": 50.0,
+      "min_inlier_frac": 0.15,
+      "ceiling_margin_m": 0.2
+    },
+    "labeler": {
+      "accumulator_voxel_m": 0.03,
+      "default_rock_radius_m": 0.15,
+      "stride": 1,
+      "z_min": null,
+      "z_max": null
+    },
+    "generator": {
+      "frame_stride": 5,
+      "frame_window_s": 0.0,
+      "crop_forward_m": 6.0,
+      "crop_backward_m": 2.0,
+      "crop_left_m": 4.0,
+      "crop_right_m": 4.0,
+      "crop_up_m": 1.5,
+      "crop_down_m": 1.0,
+      "boundary_shell_m": 0.05,
+      "centers_voxel_m": 0.05,
+      "neighborhood_radius_m": 0.5,
+      "min_neighbors": 20,
+      "neighborhood_points": 256,
+      "negative_keep_prob": 0.05,
+      "segmentation_points": 4096,
+      "segmentation_min_points": 512,
+      "bev_cell_m": 0.1,
+      "seed": 42
+    }
+  },
+  "config_hash": "a81b9c29b13284a5d09da6dc2812e2523af94e8426bfec7268730c46897786db",
+  "runs": {
+    "VolleyBallTest2.reslam": {
+      "run_id": "VolleyBallTest2.reslam",
+      "mcap_path": "/home/brandon/Documents/perception-2026-testing/rocklabel/recordings/VolleyBallTest2.reslam.mcap",
+      "labels_path": "/home/brandon/Documents/perception-2026-testing/rocklabel/labels/VolleyBallTest2.reslam.labels.json",
+      "rock_count": 5,
+      "arena_vertices": 4,
+      "z_band": [
+        -2.3658,
+        -0.463
+      ],
+      "level": {
+        "mode": "manual",
+        "roll_deg": 0.175,
+        "pitch_deg": 36.7498,
+        "floor_z": -0.7402
+      },
+      "intensity_available": true,
+      "generated": "2026-08-17T21:53:00Z",
+      "frames_kept": 1877,
+      "frames_skipped_pose": 0,
+      "frames_skipped_empty": 112,
+      "point_samples": 5165,
+      "bev_frames": 1877,
+      "seg_frames": 0,
+      "seg_points": 0,
+      "seg_point_labels": {
+        "rock": 0,
+        "clear": 0,
+        "ignore": 0
+      },
+      "sample_labels": {
+        "rock": 968,
+        "clear": 4197
+      },
+      "point_labels": {
+        "rock": 2035,
+        "clear": 202241,
+        "ignore": 1637
+      },
+      "bev_cells": {
+        "rock": 1332,
+        "clear": 120116,
+        "ignore": 11891352
+      },
+      "stamp_fallbacks": 0
+    }
+  },
+  "generated": "2026-08-17T21:53:00Z"
+}

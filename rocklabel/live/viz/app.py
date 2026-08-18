@@ -28,7 +28,11 @@ update onto the GUI (main) thread via ``Application.post_to_main_thread``.
 Color modes (``V`` key or the panel combobox):
 
 * **height** — z colormap,
-* **reflectivity** — multiScan RSSI per point,
+* **reflectivity** — multiScan RSSI per point, over a contrast window the View
+  panel's "Refl. min/max" sliders set (fractions of the sensor's full scale,
+  hard-clamped at both ends; A auto-fits them to what is on screen). The window
+  is absolute, so narrowing it separates ground from rock without giving up the
+  frame-to-frame comparability "Reflectivity (contrast)" trades away,
 * **model** — with ``--model``: each point takes its nearest scored center's
   rock probability (turbo blue→red), or a binary detections view at the
   decision threshold; points the model has no prediction for (outside the
@@ -38,8 +42,9 @@ Camera controls are the labeler's (:mod:`rocklabel.camera`): left-drag orbits
 around a pivot, and a double-click moves that pivot onto the clicked point.
 
 Keyboard shortcuts: P points · M mesh · C accumulated cloud · B sensor box ·
-V cycle colors · S record on/off · L re-measure mount tilt · R reset (replay:
-restart) · space pause/play · ←/→ seek ±5 s (replay) · Q/esc quit.
+V cycle colors · A auto-fit reflectivity range · S record on/off · L re-measure
+mount tilt · R reset (replay: restart) · space pause/play · ←/→ seek ±5 s
+(replay) · Q/esc quit.
 """
 
 from __future__ import annotations
@@ -56,7 +61,15 @@ import open3d.visualization.gui as gui
 import open3d.visualization.rendering as rendering
 
 from rocklabel.camera import CAMERA_HELP, CAMERA_HINT, PivotCamera
-from rocklabel.live.colormap import apply_colormap, normalize, reflectivity_values
+from rocklabel.live.colormap import (
+    RSSI_FULL_SCALE,
+    apply_colormap,
+    clamp_range,
+    move_range_end,
+    normalize,
+    percentile_range,
+    reflectivity_values,
+)
 from rocklabel.live.config import AppConfig
 from rocklabel.live.motion import quat_to_matrix
 from rocklabel.live.pipeline import IngestEngine
@@ -97,6 +110,23 @@ _DET_CLEAR = (0.30, 0.35, 0.42)
 #: Brightness of height colors on points the model has no prediction for.
 _UNSCORED_DIM = 0.35
 
+# Reflectivity contrast window help — the same prose the web panel carries.
+_REFL_MIN_TIP = (
+    "Low end of the reflectivity color ramp, as a fraction of the sensor's "
+    "full scale. Everything at or below it takes the bottom color instead of "
+    "being squeezed into the ramp. Absolute, so unlike 'Reflectivity "
+    "(contrast)' the colors still mean the same thing frame to frame.")
+_REFL_MAX_TIP = (
+    "High end of the ramp. Everything at or above it takes the top color. "
+    "Bring the two ends in around the band the arena actually returns "
+    "(try Auto-fit, then nudge) and ground/rock separate instead of "
+    "rendering as one flat blob.")
+_REFL_FIT_TIP = (
+    "Set both ends from what is on screen now — the 5th and 95th percentile "
+    "of the current returns. That is the same window 'Reflectivity "
+    "(contrast)' picks per frame, except it stops moving, so from here you "
+    "can nudge it by hand and compare frames.")
+
 #: (key, action) pairs — laid out as an aligned two-column grid, not one blob.
 SHORTCUTS = [
     ("dbl-click", "set orbit pivot"),
@@ -105,6 +135,7 @@ SHORTCUTS = [
     ("C", "accumulated cloud"),
     ("B", "sensor pose box"),
     ("V", "cycle color mode"),
+    ("A", "auto-fit reflectivity range"),
     ("S", "start / stop recording"),
     ("L", "re-measure mount tilt"),
     ("R", "reset surface (replay: restart)"),
@@ -158,6 +189,10 @@ class VizApp(PivotCamera):
             else "height"
         )
         self._model_display = 0  # 0 = confidence colormap, 1 = detections @ thr
+        #: Contrast window for the fixed reflectivity mode, (low, high) as
+        #: fractions of full scale. Absolute, hard-clamped at both ends, and
+        #: shared by the raw points, the accumulated cloud and the mesh.
+        self._refl_range = clamp_range(*config.display.reflectivity_range)
         #: Display-only crop: hide points outside the scoring region (walls /
         #: ceiling) from the raw + accumulated clouds. Defaults on with a
         #: model; without one it uses the fusion crop's z band when enabled.
@@ -179,6 +214,9 @@ class VizApp(PivotCamera):
         # the control API and _refresh_stats both have to tolerate their absence.
         self._panel: gui.ScrollableVert | None = None
         self._color_combo: gui.Combobox | None = None
+        self._refl_lo_slider: gui.Slider | None = None
+        self._refl_hi_slider: gui.Slider | None = None
+        self._refl_label: gui.Label | None = None
         self._layer_checks: dict[str, gui.Checkbox] = {}
         self._rec_btn: gui.Button | None = None
         self._level_label: gui.Label | None = None
@@ -497,7 +535,24 @@ class VizApp(PivotCamera):
         self._pair(grid, "Point size", size_slider,
                    "Screen size of each drawn point. Larger reads better on a "
                    "sparse cloud; smaller shows fine surface detail.")
+
+        self._refl_lo_slider = self._make_slider(
+            gui.Slider.DOUBLE, 0.0, 1.0, self._refl_range[0], self._on_refl_lo)
+        self._pair(grid, "Refl. min", self._refl_lo_slider, _REFL_MIN_TIP)
+        self._refl_hi_slider = self._make_slider(
+            gui.Slider.DOUBLE, 0.0, 1.0, self._refl_range[1], self._on_refl_hi)
+        self._pair(grid, "Refl. max", self._refl_hi_slider, _REFL_MAX_TIP)
         sec.add_child(grid)
+
+        self._refl_label = gui.Label("")
+        self._refl_label.text_color = DIM
+        self._refl_label.tooltip = _REFL_MIN_TIP
+        sec.add_child(self._refl_label)
+        fit_btn = gui.Button("Auto-fit reflectivity range")
+        fit_btn.tooltip = _REFL_FIT_TIP
+        fit_btn.set_on_clicked(self.autofit_reflectivity)
+        sec.add_child(fit_btn)
+        self._refresh_refl_label()
 
         sec.add_child(self._heading("Layers"))
         self._layer_checks = {}
@@ -774,6 +829,73 @@ class VizApp(PivotCamera):
                 self._color_combo.selected_index = idx
         self._post_update()
 
+    @property
+    def reflectivity_range(self) -> tuple[float, float]:
+        """The fixed-mode contrast window, (low, high) fractions of full scale."""
+        return self._refl_range
+
+    def _on_refl_lo(self, value: float) -> None:
+        self.set_reflectivity_range(*move_range_end(self._refl_range, "lo", value))
+
+    def _on_refl_hi(self, value: float) -> None:
+        self.set_reflectivity_range(*move_range_end(self._refl_range, "hi", value))
+
+    def set_reflectivity_range(self, lo: float, hi: float) -> None:
+        """Set the reflectivity color window (fractions of full scale).
+
+        Applies to the raw points, the accumulated cloud and the surface mesh
+        at once — three geometries that must not disagree about what a color
+        means. All three are cached, so every one of them is invalidated here.
+        """
+        window = clamp_range(lo, hi)
+        if window == self._refl_range:
+            return
+        self._refl_range = window
+        set_range = getattr(self._engine.surface, "set_reflectivity_range", None)
+        if callable(set_range):
+            set_range(*window)
+        self._last_mesh_data = None   # the mesh recolors too
+        self._accum_model_key = None  # force an accum recolor
+        self._tick_count = -1
+        self._sync_refl_widgets()
+        self._post_update()
+
+    def autofit_reflectivity(self) -> None:
+        """Fit the window to the returns currently in the raw buffer.
+
+        The percentiles come from the raw points rather than the accumulated
+        cloud: they are the freshest thing on screen, and the accumulated cloud
+        spans minutes of sweeping whose spread is wider than what you are
+        looking at.
+        """
+        _pts, inten = self._engine.raw_snapshot()
+        window = percentile_range(
+            inten, tuple(self._cfg.display.reflectivity_percentiles))
+        if window is None:
+            print("[rocklabel] no reflectivity to fit a range to", flush=True)
+            return
+        self.set_reflectivity_range(*window)
+
+    def _sync_refl_widgets(self) -> None:
+        """Mirror the window onto the panel (a web-panel edit moves it too)."""
+        lo, hi = self._refl_range
+        if self._refl_lo_slider is not None:
+            self._refl_lo_slider.double_value = lo
+        if self._refl_hi_slider is not None:
+            self._refl_hi_slider.double_value = hi
+        self._refresh_refl_label()
+
+    def _refresh_refl_label(self) -> None:
+        """Spell the window out in RSSI counts as well as fractions — the
+        fraction is what the sliders speak, the counts are what the sensor
+        does."""
+        if self._refl_label is None:
+            return
+        lo, hi = self._refl_range
+        self._refl_label.text = (
+            f"ramp {lo:.3f}–{hi:.3f} of full scale "
+            f"({lo * RSSI_FULL_SCALE:,.0f}–{hi * RSSI_FULL_SCALE:,.0f} RSSI)")
+
     def set_layer(self, attr: str, value: bool) -> None:
         """Show/hide one scene layer, keeping the panel checkbox in step."""
         setattr(self, attr, bool(value))
@@ -830,6 +952,20 @@ class VizApp(PivotCamera):
         if name in ("z_min", "z_max", "range_max"):
             self._accum_model_key = None  # region moved: recolor/crop the cloud
             self._post_update()
+
+    def set_crop_setting(self, name: str, value) -> None:
+        """Move the ingest crop band (web panel's Crop card).
+
+        The engine holds this same CropConfig and reads it per batch, so new
+        scans obey it immediately. What needs saying here is the *display*:
+        without a model the view crop follows this band, and the accumulated
+        cloud on screen was built under the old one — so drop the cache and
+        force a rebuild, exactly as toggling the crop does.
+        """
+        setattr(self._cfg.crop, name, value)
+        self._accum_model_key = None
+        self._tick_count = -1
+        self._post_update()
 
     def recalibrate_level(self) -> None:
         """Re-measure the mount tilt and re-fuse from scratch."""
@@ -1029,7 +1165,8 @@ class VizApp(PivotCamera):
                 return None  # no RSSI available: fall back to uniform
             v = reflectivity_values(
                 inten, finite, stretch=self._color_mode == "reflectivity_stretch",
-                pct=self._cfg.display.reflectivity_percentiles)
+                pct=self._cfg.display.reflectivity_percentiles,
+                limits=self._refl_range)
             return apply_colormap(v, self._cfg.display.reflectivity_colormap)
         return apply_colormap(normalize(pts[:, 2]), self._cfg.display.colormap)
 
@@ -1235,7 +1372,7 @@ class VizApp(PivotCamera):
 
         if self._level_label is not None:
             self._put(self._level_label,
-                      self._engine.leveler.status().replace("level: ", ""))
+                      self._engine.level_status().replace("level: ", ""))
 
         if not self._replay and self._rec_state is not None:
             rec = self._engine.recorder
@@ -1319,6 +1456,9 @@ class VizApp(PivotCamera):
         elif key == gui.KeyName.V:
             i = self._color_modes.index(self._color_mode)
             self.set_color_mode(self._color_modes[(i + 1) % len(self._color_modes)])
+            return gui.Widget.EventCallbackResult.HANDLED
+        elif key == gui.KeyName.A:
+            self.autofit_reflectivity()
             return gui.Widget.EventCallbackResult.HANDLED
         elif key == gui.KeyName.S and not self._replay:
             self.toggle_recording()

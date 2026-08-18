@@ -112,6 +112,60 @@ def build_neighborhood_samples(
     }
 
 
+def build_segmentation_frame(
+    xyz: np.ndarray,
+    intensity: np.ndarray,
+    point_labels: np.ndarray,
+    base: np.ndarray,
+    gcfg: dict,
+    rng: np.random.Generator,
+    arena: np.ndarray | None = None,
+) -> dict | None:
+    """Dataset format C: one whole cropped frame, labeled per point.
+
+    Formats A and C answer the same question from opposite directions. A cuts
+    the frame into thousands of overlapping 0.5 m balls and asks "is this ball's
+    *center* on a rock", so the canonicalization hands the model a pre-centered,
+    pre-levelled patch and every ball costs a separate forward pass. C hands
+    over the whole frame once and asks for a label on every point, so one pass
+    labels everything - but the model has to learn the position invariance that
+    A gets for free from its preprocessing.
+
+    Canonicalization mirrors A where it can: dx/dy/dz are relative to the robot
+    base (which is exactly what the crop box is defined against, so the values
+    are bounded by crop_down_m..crop_up_m), intensity is passed through, real
+    points come first and padding repeats them. ``true_count`` is the number of
+    real rows, so the same ``arange(N) < count`` mask works for both formats.
+
+    Points outside ``arena`` are dropped outright here, unlike format A which
+    only drops *centers*: a per-point model is scored on every point it is
+    given, so an out-of-arena point is not context, it is a labeled example.
+    """
+    n = int(gcfg["segmentation_points"])
+    if arena is not None:
+        keep = inside_arena(xyz, arena)
+        xyz, intensity, point_labels = xyz[keep], intensity[keep], point_labels[keep]
+    k = len(xyz)
+    if k < int(gcfg["segmentation_min_points"]):
+        return None
+    if k > n:
+        idx = rng.choice(k, n, replace=False)
+    else:
+        idx = np.concatenate([np.arange(k), rng.choice(k, n - k, replace=True)])
+    pts = xyz[idx]
+    local = np.empty((n, 4), np.float32)
+    local[:, 0] = pts[:, 0] - base[0]
+    local[:, 1] = pts[:, 1] - base[1]
+    local[:, 2] = pts[:, 2] - base[2]
+    local[:, 3] = intensity[idx]
+    return {
+        "points": local,
+        "labels": point_labels[idx].astype(np.int8),
+        "true_count": np.int32(min(k, n)),
+        "base_odom": np.asarray(base, np.float32),
+    }
+
+
 def build_inference_samples(
     xyz: np.ndarray,
     intensity: np.ndarray,

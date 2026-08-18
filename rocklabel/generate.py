@@ -15,7 +15,8 @@ from .bev import rasterize_bev
 from .config import config_hash
 from .labeling import LABEL_CLEAR, LABEL_IGNORE, LABEL_ROCK, label_rocks
 from .labels import load_labels
-from .neighborhoods import build_neighborhood_samples
+from .leveling import check_level_match, level_record, pin_level_to_labels
+from .neighborhoods import build_neighborhood_samples, build_segmentation_frame
 from .pipeline import ScanStream, WindowedScanStream
 
 MANIFEST_NAME = "manifest.json"
@@ -64,7 +65,8 @@ def run_generate(mcap_path: str, labels_path: str, out_dir: str, cfg: dict) -> d
 
     points_dir = os.path.join(out_dir, "points", run_id)
     bev_dir = os.path.join(out_dir, "bev", run_id)
-    for d in (points_dir, bev_dir):  # re-generating a run_id replaces its files
+    seg_dir = os.path.join(out_dir, "seg", run_id)
+    for d in (points_dir, bev_dir, seg_dir):  # re-generating a run_id replaces its files
         if os.path.isdir(d):
             shutil.rmtree(d)
         os.makedirs(d)
@@ -73,18 +75,35 @@ def run_generate(mcap_path: str, labels_path: str, out_dir: str, cfg: dict) -> d
     # frames first, then frame_stride keeps every Nth *window*. Without it,
     # ScanStream's stride skips scans before decoding, avoiding the
     # decode/transform cost of dropped frames.
+    # Replay in the exact frame the centers were picked in, not a fresh fit of
+    # it. Deliberately not fed to check_manifest above: the pinned angle is
+    # per-recording, so hashing it would split one dataset into a directory
+    # per run.
+    stream_cfg = pin_level_to_labels(cfg, labelset.level)
+
     window_s = gcfg.get("frame_window_s") or 0.0
     if window_s > 0.0:
-        stream = WindowedScanStream(
-            ScanStream(mcap_path, cfg, stride=1, progress=True, desc=f"generate {run_id}"),
-            window_s,
-        )
+        base_stream = ScanStream(mcap_path, stream_cfg, stride=1, progress=True,
+                                 desc=f"generate {run_id}")
+        stream = WindowedScanStream(base_stream, window_s)
         frames = (s for k, s in enumerate(stream) if k % gcfg["frame_stride"] == 0)
     else:
-        stream = ScanStream(
-            mcap_path, cfg, stride=gcfg["frame_stride"], progress=True, desc=f"generate {run_id}"
-        )
+        base_stream = ScanStream(mcap_path, stream_cfg, stride=gcfg["frame_stride"],
+                                 progress=True, desc=f"generate {run_id}")
+        stream = base_stream
         frames = stream
+
+    # Both sides must be the same way up before a single center is projected.
+    check_level_match(labelset.level, level_record(base_stream), labels_path)
+
+    # The z clip the labeler was left at, or None for "no height restriction".
+    z_band = labelset.z_band
+    if z_band is None:
+        print(f"  height band:           none - vertical extent is the crop box "
+              f"({gcfg['crop_down_m']:.2f} m below to {gcfg['crop_up_m']:.2f} m above the sensor)")
+    else:
+        print(f"  height band:           z {z_band[0]:.2f} to {z_band[1]:.2f} m "
+              f"(from the labeler's z clip; replaces the crop box's vertical limits)")
 
     stats = {
         "frames_kept": 0,
@@ -92,6 +111,9 @@ def run_generate(mcap_path: str, labels_path: str, out_dir: str, cfg: dict) -> d
         "frames_skipped_empty": 0,
         "point_samples": 0,
         "bev_frames": 0,
+        "seg_frames": 0,
+        "seg_points": 0,
+        "seg_point_labels": {"rock": 0, "clear": 0, "ignore": 0},
         "sample_labels": {"rock": 0, "clear": 0},
         "point_labels": {"rock": 0, "clear": 0, "ignore": 0},
         "bev_cells": {"rock": 0, "clear": 0, "ignore": 0},
@@ -105,6 +127,13 @@ def run_generate(mcap_path: str, labels_path: str, out_dir: str, cfg: dict) -> d
         # Deliberately not rotated with heading (see README).
         lo = np.array([base[0] - gcfg["crop_backward_m"], base[1] - gcfg["crop_right_m"], base[2] - gcfg["crop_down_m"]], np.float32)
         hi = np.array([base[0] + gcfg["crop_forward_m"], base[1] + gcfg["crop_left_m"], base[2] + gcfg["crop_up_m"]], np.float32)
+        # A labeled height band replaces the crop's vertical limits outright
+        # rather than intersecting with them. The band is a world-frame slab
+        # picked by eye on the fused cloud; the crop's is a slab that rides up
+        # and down with the sensor. Intersecting would let crop_up_m silently
+        # eat the top of a band the user could see themselves setting.
+        if z_band is not None:
+            lo[2], hi[2] = z_band
         inside = ((xyz >= lo) & (xyz <= hi)).all(axis=1)
         if not inside.any():
             stats["frames_skipped_empty"] += 1
@@ -133,6 +162,19 @@ def run_generate(mcap_path: str, labels_path: str, out_dir: str, cfg: dict) -> d
             stats["sample_labels"]["rock"] += int((samples["labels"] == LABEL_ROCK).sum())
             stats["sample_labels"]["clear"] += int((samples["labels"] == LABEL_CLEAR).sum())
 
+        seg = build_segmentation_frame(xyz, inten, pt_labels, base, gcfg, rng,
+                                       arena=labelset.arena)
+        if seg is not None:
+            np.savez_compressed(
+                os.path.join(seg_dir, f"frame_{scan.index:06d}.npz"), **seg, **common_meta
+            )
+            stats["seg_frames"] += 1
+            stats["seg_points"] += int(seg["true_count"])
+            real = seg["labels"][:int(seg["true_count"])]
+            stats["seg_point_labels"]["rock"] += int((real == LABEL_ROCK).sum())
+            stats["seg_point_labels"]["clear"] += int((real == LABEL_CLEAR).sum())
+            stats["seg_point_labels"]["ignore"] += int((real == LABEL_IGNORE).sum())
+
         channels, mask = rasterize_bev(xyz, inten, pt_labels, base, gcfg)
         np.savez_compressed(
             os.path.join(bev_dir, f"frame_{scan.index:06d}.npz"),
@@ -157,6 +199,15 @@ def run_generate(mcap_path: str, labels_path: str, out_dir: str, cfg: dict) -> d
         # definitions of "clear" and the manifest is the only place that shows.
         "arena_vertices": (None if labelset.arena is None
                            else int(len(labelset.arena))),
+        # Same reason as arena_vertices, for the vertical half of the bound:
+        # pooling a height-banded run with an unbanded one mixes two different
+        # definitions of "clear", and the manifest is where that shows.
+        "z_band": (None if z_band is None
+                   else [float(z_band[0]), float(z_band[1])]),
+        # The mount rotation this run's geometry was produced under, for the
+        # same reason as arena_vertices: the manifest is where a dataset's
+        # provenance shows.
+        "level": level_record(base_stream),
         "intensity_available": bool(stream.counters.intensity_available),
         "generated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         **stats,

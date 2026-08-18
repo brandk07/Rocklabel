@@ -213,6 +213,32 @@ def test_presets_only_reference_real_params():
             assert set(preset.values) <= names, f"{cmd.id}: {preset.name}"
 
 
+def test_every_command_that_replays_a_recording_offers_levelling():
+    """All three must be givable the same answer.
+
+    Rock centers are stored in world coordinates, so a form that let you level
+    while labelling but not while generating would misplace every one of them.
+    """
+    for cid in ("label", "driftcheck", "generate"):
+        names = {p.name for p in spec.COMMANDS_BY_ID[cid].params}
+        assert {"level", "mount_roll", "mount_pitch"} <= names, cid
+
+
+def test_levelling_is_left_to_the_config_when_the_form_is_blank():
+    argv = spec.build_argv(spec.COMMANDS_BY_ID["label"], {"mcap": "a.mcap"})
+    assert "--level" not in argv
+
+
+def test_a_manual_mount_angle_reaches_the_cli_intact():
+    argv = spec.build_argv(spec.COMMANDS_BY_ID["label"], {
+        "mcap": "a.mcap", "level": "manual", "mount_roll": -0.64, "mount_pitch": 39.25,
+    })
+    from rocklabel.cli import build_parser
+
+    args = build_parser().parse_args(argv[1:])
+    assert (args.level, args.mount_roll, args.mount_pitch) == ("manual", -0.64, 39.25)
+
+
 # --------------------------------------------------------------------------- #
 # inventory
 # --------------------------------------------------------------------------- #
@@ -677,6 +703,117 @@ def test_figure_endpoint_refuses_paths_outside_the_project(client):
 
 def test_figure_endpoint_refuses_non_png(client, project):
     assert client.get("/api/figure?path=config.yaml").status_code in (403, 404)
+
+
+# --------------------------------------------------------------------------- #
+# ablation sweeps
+# --------------------------------------------------------------------------- #
+def _ablate_fold(root, suite, arm, fold, pr_auc=None):
+    d = root / "training" / "ablate" / suite / arm / f"loro_{fold}"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "arm.json").write_text(json.dumps({"arm": arm, "label": arm, "model": "pointnet",
+                                            "features": ["dx", "dy", "dz"]}))
+    (d / "best.pt").write_bytes(b"weights")
+    if pr_auc is not None:
+        (d / "test_metrics.json").write_text(json.dumps(
+            {"test_run": fold, "pr_auc": pr_auc, "f1": 0.5}))
+    return d
+
+
+def test_ablation_progress_counts_the_whole_declared_matrix(project):
+    """Half an hour into an overnight sweep the denominator must be the full
+    matrix, not the two arms that happen to have folders yet."""
+    from rocklabel.train.ablate import SUITES
+
+    _ablate_fold(project, "reflectivity", "pointnet-geom", "run1", 0.8)
+    _ablate_fold(project, "reflectivity", "pointnet-geom", "run2")  # started, unfinished
+
+    suites = inventory.ablations(str(project))
+    assert len(suites) == 1
+    s = suites[0]
+    n_arms = len(SUITES["reflectivity"]["arms"])
+    assert len(s["arms"]) == n_arms, "arms that have not started must still be listed"
+    assert s["folds"] == 2                     # from the cache, not from disk
+    assert s["runs_total"] == n_arms * 2
+    assert s["runs_done"] == 1                 # only the evaluated fold counts
+    done = {a["name"]: a["folds_done"] for a in s["arms"]}
+    assert done["pointnet-geom"] == 1 and done["pointnet2-refl"] == 0
+
+
+def test_ablation_arms_report_their_average_score(project):
+    _ablate_fold(project, "reflectivity", "pointnet-refl", "run1", 0.60)
+    _ablate_fold(project, "reflectivity", "pointnet-refl", "run2", 0.80)
+    arms = {a["name"]: a for a in inventory.ablations(str(project))[0]["arms"]}
+    assert arms["pointnet-refl"]["pr_auc"] == pytest.approx(0.70)
+    assert arms["pointnet-geom"]["pr_auc"] is None
+
+
+def test_ablation_checkpoints_join_the_picker_under_their_arm(project):
+    _ablate_fold(project, "reflectivity", "pointnet-geom", "run1", 0.8)
+    names = [c["name"] for c in inventory.checkpoints(str(project))]
+    assert "reflectivity/pointnet-geom/loro_run1/best.pt" in names
+    # the plain training/runs checkpoint is still there
+    assert "pointnet_loro_run1/best.pt" in names
+
+
+def test_snapshot_exposes_ablation_totals(project):
+    _ablate_fold(project, "reflectivity", "pointnet-geom", "run1", 0.8)
+    t = inventory.snapshot(str(project))["totals"]
+    assert t["ablation_runs_done"] == 1
+    assert t["ablation_runs_total"] > 1
+
+
+def test_figures_are_tagged_with_the_report_that_wrote_them(project):
+    for rel, name in [("training/results", "comparison.png"),
+                      ("training/results_reflect", "brightness_drift.png"),
+                      ("training/results_ablate/reflectivity", "paired_deltas.png")]:
+        d = project / rel
+        d.mkdir(parents=True, exist_ok=True)
+        (d / name).write_bytes(b"\x89PNG")
+    groups = {f["name"]: f["group"] for f in inventory.result_figures(str(project))}
+    assert groups["comparison.png"] == "Model comparison"
+    assert groups["brightness_drift.png"] == "Reflectivity check"
+    assert groups["paired_deltas.png"] == "Ablation · reflectivity"
+    assert all(f["blurb"] for f in inventory.result_figures(str(project)))
+
+
+def test_a_project_with_no_sweep_reports_no_suites(project):
+    assert inventory.ablations(str(project)) == []
+    assert inventory.snapshot(str(project))["totals"]["ablation_runs_done"] == 0
+
+
+def test_ablate_and_reflect_are_in_the_catalog():
+    for cid in ("train-ablate", "train-reflect"):
+        assert cid in spec.COMMANDS_BY_ID, f"{cid} missing from the dashboard catalog"
+    ablate = spec.COMMANDS_BY_ID["train-ablate"]
+    assert ablate.long_running, "a 100-training sweep is not an instant command"
+    suite = next(p for p in ablate.params if p.name == "suite")
+    from rocklabel.train.ablate import SUITES
+    assert set(suite.choices) == set(SUITES), "the suite picker drifted from the real suites"
+
+
+def test_ablate_form_builds_the_argv_the_cli_expects():
+    argv = spec.build_argv(spec.COMMANDS_BY_ID["train-ablate"],
+                           {"suite": "reflectivity", "arms": "pointnet-geom, pointnet-refl",
+                            "report_only": True})
+    assert argv[:2] == ["rocklabel-train", "ablate"]
+    i = argv.index("--arms")
+    assert argv[i + 1:i + 3] == ["pointnet-geom", "pointnet-refl"]
+    assert "--report-only" in argv
+    # It must parse for real, not just look right.
+    from rocklabel.train.cli import build_parser
+    build_parser().parse_args(argv[1:])
+
+
+def test_the_patience_default_shown_matches_the_training_default():
+    """It drifted once already: the form offered 6 long after the real default
+    moved to 10, so every sweep launched from the dashboard stopped early."""
+    from rocklabel.train import TRAIN_DEFAULTS
+
+    for cid in ("train-train", "train-compare", "train-ablate"):
+        p = next((p for p in spec.COMMANDS_BY_ID[cid].params if p.name == "patience"), None)
+        if p is not None:
+            assert p.default == TRAIN_DEFAULTS["patience"], cid
 
 
 # --------------------------------------------------------------------------- #

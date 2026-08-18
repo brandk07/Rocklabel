@@ -31,6 +31,49 @@ DEFAULTS: dict = {
         # often include them). 0 disables.
         "min_range_m": 0.0,
     },
+    "level": {
+        # Undo a tilted sensor mount. A recording's odom/world frame is only as
+        # level as the rig that made it - a native lidarrig frame is the sensor
+        # frame at startup - so a LiDAR on a slanted mast tilts the entire
+        # cloud. A z clip then slices a diagonal wedge out of the floor instead
+        # of a horizontal slab, and the model's neighborhoods see the mount
+        # angle as relief. Levelling measures the angle once and rotates it out
+        # of every scan, before the labeler, the generator, or driftcheck sees
+        # a point, so all three share one geometry.
+        #   "off"    - no rotation (what every pre-levelling dataset used)
+        #   "ground" - RANSAC ground-plane fit over the recording
+        #   "manual" - use mount_roll_deg / mount_pitch_deg verbatim
+        "mode": "auto",
+        # Mount angles (deg) for mode "manual", in the same convention the live
+        # rig's IMU and `rocklabel label` report: a sensor pitched nose-up by
+        # theta about its own +y axis is mount_pitch_deg = theta.
+        "mount_roll_deg": 0.0,
+        "mount_pitch_deg": 0.0,
+        # Pool floor candidates from the first N scans (0 = whole recording).
+        "fit_scans": 0,
+        # 3D range band (m) around the sensor for pooled points: the inner
+        # radius skips the rig's own frame, the outer keeps the floor dense
+        # and flat. Measured per scan, so it follows a rig that walks.
+        "range_min_m": 0.6,
+        "range_max_m": 6.0,
+        # Voxel size the pooled cloud is downsampled to before fitting; bounds
+        # memory over a long recording and evens out dwell-time density bias.
+        "fit_voxel_m": 0.05,
+        # RANSAC inlier distance (m) and hypothesis count.
+        "plane_thresh_m": 0.05,
+        "ransac_iters": 512,
+        # Reject planes tilted more than this from +z. This is what keeps the
+        # fit off walls: indoors a wall often has more coplanar points than the
+        # floor, so an unconstrained "largest plane" fit locks onto one.
+        "max_tilt_deg": 50.0,
+        # Acceptance gate. Deliberately loose: in a still-tilted frame the
+        # pooled set is mostly walls, so the floor is a minority of it - the
+        # tilt gate and the below-the-sensor check are the honest guards.
+        "min_inlier_frac": 0.15,
+        # A fitted plane this far above the sensor is the ceiling, not the
+        # floor: a ceiling is just as planar and just as level.
+        "ceiling_margin_m": 0.2,
+    },
     "labeler": {
         "accumulator_voxel_m": 0.03,
         "default_rock_radius_m": 0.15,
@@ -59,6 +102,9 @@ DEFAULTS: dict = {
         "min_neighbors": 20,
         "neighborhood_points": 256,
         "negative_keep_prob": 0.05,
+        # Format C: whole-frame per-point segmentation
+        "segmentation_points": 4096,
+        "segmentation_min_points": 512,
         # Format B: BEV rasters
         "bev_cell_m": 0.10,
         "seed": 42,

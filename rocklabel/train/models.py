@@ -40,6 +40,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from ..neighborhoods import FEATURES, GEOMETRY, resolve_features  # noqa: F401  (re-exported)
+from .models_meta import MODELS, model_task  # noqa: F401  (re-exported)
 
 SENTINEL = 1.0e3  # farther than any real neighborhood coordinate (meters)
 
@@ -268,6 +269,144 @@ class PointNetPP(nn.Module):
         return torch.zeros((), device=next(self.parameters()).device)
 
 
+# ===========================================================================
+# PointNet++ semantic segmentation (whole frame in, a label per point out)
+# ===========================================================================
+
+def _knn_group(xyz: torch.Tensor, centroids: torch.Tensor, radius: float,
+               nsample: int) -> torch.Tensor:
+    """Indices [B, S, nsample] of the nsample NEAREST points to each centroid,
+    with anything beyond ``radius`` replaced by the centroid's nearest neighbor.
+
+    The classifier's :func:`_ball_group` sorts the full [B, S, N] index tensor,
+    which is fine at N=256 and ruinous at N=4096. topk is O(N) per centroid
+    instead of O(N log N) and returns nearest-first rather than
+    lowest-index-first, which is also the better grouping - but it is a
+    different rule, so it lives here rather than replacing the classifier's and
+    silently changing those results.
+    """
+    d = torch.cdist(centroids, xyz)                       # [B, S, N]
+    val, idx = torch.topk(d, nsample, dim=-1, largest=False)
+    return torch.where(val > radius, idx[..., :1], idx)
+
+
+class SegSetAbstraction(nn.Module):
+    """Downsampling level: FPS centroids, kNN-in-ball grouping, max pool."""
+
+    def __init__(self, npoint: int, radius: float, nsample: int,
+                 in_channel: int, mlp: list[int]):
+        super().__init__()
+        self.npoint, self.radius, self.nsample = npoint, radius, nsample
+        layers: list[nn.Module] = []
+        last = in_channel + 6  # relative offset + absolute position, as above
+        for out in mlp:
+            layers += [nn.Conv2d(last, out, 1), nn.BatchNorm2d(out), nn.ReLU(inplace=True)]
+            last = out
+        self.mlp = nn.Sequential(*layers)
+
+    def forward(self, xyz: torch.Tensor, feats: torch.Tensor,
+                mask: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        ctr_idx = _fps(xyz, mask, self.npoint)
+        new_xyz = _gather(xyz, ctr_idx)
+        grp_idx = _knn_group(xyz, new_xyz, self.radius, self.nsample)
+        grouped_xyz = _gather(xyz, grp_idx)
+        local = grouped_xyz - new_xyz[:, :, None]
+        grouped = torch.cat([local, grouped_xyz, _gather(feats, grp_idx)], -1)
+        x = self.mlp(grouped.permute(0, 3, 1, 2))
+        return new_xyz, x.max(dim=3).values.transpose(1, 2)
+
+
+class FeaturePropagation(nn.Module):
+    """Upsampling level: interpolate coarse features onto the finer point set,
+    concatenate the skip connection, then a shared per-point MLP.
+
+    This is the half a classifier does not have, and the reason segmentation
+    needs one pass instead of one per candidate: features computed once on a
+    coarse set are carried back out to every original point by inverse-distance
+    weighting of its three nearest coarse neighbors.
+    """
+
+    def __init__(self, in_channel: int, mlp: list[int]):
+        super().__init__()
+        layers: list[nn.Module] = []
+        last = in_channel
+        for out in mlp:
+            layers += [nn.Conv1d(last, out, 1), nn.BatchNorm1d(out), nn.ReLU(inplace=True)]
+            last = out
+        self.mlp = nn.Sequential(*layers)
+
+    def forward(self, xyz_fine: torch.Tensor, xyz_coarse: torch.Tensor,
+                feats_fine: torch.Tensor | None,
+                feats_coarse: torch.Tensor) -> torch.Tensor:
+        d = torch.cdist(xyz_fine, xyz_coarse)                       # [B, N, S]
+        k = min(3, xyz_coarse.shape[1])
+        dist, idx = torch.topk(d, k, dim=-1, largest=False)
+        w = 1.0 / dist.clamp_min(1e-8)
+        w = w / w.sum(dim=-1, keepdim=True)                         # [B, N, k]
+        gathered = _gather(feats_coarse, idx)                       # [B, N, k, C]
+        interp = (gathered * w[..., None]).sum(dim=2)               # [B, N, C]
+        if feats_fine is not None:
+            interp = torch.cat([interp, feats_fine], dim=-1)
+        return self.mlp(interp.transpose(1, 2)).transpose(1, 2)
+
+
+class PointNetPPSeg(nn.Module):
+    """Per-point rock/clear segmentation over a whole cropped frame.
+
+    Input is the same [B, N, 4] contract as the classifiers, but N is a whole
+    frame (4096 points spanning the crop box) instead of one 0.5 m ball, and
+    the output is [B, N] logits instead of [B].
+
+    The radii are scene-scale rather than neighborhood-scale: the classifier
+    sees a 1 m sphere and works in centimeters, this sees an 8 x 8 m crop and
+    has to find 20-30 cm rocks in it, which is the hard part. Rocks are ~2.6%
+    of points, so the loss is prevalence-weighted.
+    """
+
+    def __init__(self, dropout: float = 0.3, features: list[str] | None = None,
+                 npoints: tuple[int, int, int] = (512, 128, 32),
+                 radii: tuple[float, float, float] = (0.25, 0.6, 1.4)):
+        super().__init__()
+        self.features = resolve_features(features)
+        if self.features[:3] != list(GEOMETRY):
+            raise ValueError("segmentation samples and groups by position, so it needs "
+                             f"all of {list(GEOMETRY)} selected; got {self.features}")
+        extra = self.features[3:]
+        self.register_buffer("extra_idx", _feature_buffer(extra), persistent=False)
+        c0 = len(extra)
+        self.sa1 = SegSetAbstraction(npoints[0], radii[0], 32, c0, [32, 32, 64])
+        self.sa2 = SegSetAbstraction(npoints[1], radii[1], 32, 64, [64, 64, 128])
+        self.sa3 = SegSetAbstraction(npoints[2], radii[2], 32, 128, [128, 128, 256])
+        self.fp3 = FeaturePropagation(256 + 128, [128, 128])
+        self.fp2 = FeaturePropagation(128 + 64, [128, 64])
+        self.fp1 = FeaturePropagation(64 + c0, [64, 64])
+        self.head = nn.Sequential(
+            nn.Conv1d(64, 64, 1), nn.BatchNorm1d(64), nn.ReLU(inplace=True),
+            nn.Dropout(dropout),
+            nn.Conv1d(64, 1, 1),
+        )
+
+    def forward(self, points: torch.Tensor, counts: torch.Tensor) -> torch.Tensor:
+        mask = valid_mask(counts, points.shape[1])
+        xyz0 = torch.where(mask[..., None], points[..., :3],
+                           torch.full_like(points[..., :3], SENTINEL))
+        f0 = points.index_select(-1, self.extra_idx)
+        xyz1, f1 = self.sa1(xyz0, f0, mask)
+        full1 = torch.ones(xyz1.shape[:2], dtype=torch.bool, device=xyz1.device)
+        xyz2, f2 = self.sa2(xyz1, f1, full1)
+        full2 = torch.ones(xyz2.shape[:2], dtype=torch.bool, device=xyz2.device)
+        xyz3, f3 = self.sa3(xyz2, f2, full2)
+        f2 = self.fp3(xyz2, xyz3, f2, f3)
+        f1 = self.fp2(xyz1, xyz2, f1, f2)
+        # Padded rows sit at the sentinel; their interpolated features are
+        # meaningless but the training loss and every metric mask them out.
+        f0 = self.fp1(xyz0, xyz1, f0 if f0.shape[-1] else None, f1)
+        return self.head(f0.transpose(1, 2)).squeeze(1)
+
+    def pop_regularizer(self) -> torch.Tensor:
+        return torch.zeros((), device=next(self.parameters()).device)
+
+
 def build_model(name: str, tnet: bool = False, dropout: float | None = None,
                 features: list[str] | None = None) -> nn.Module:
     """``features=None`` means all of :data:`FEATURES` — the historical
@@ -278,4 +417,7 @@ def build_model(name: str, tnet: bool = False, dropout: float | None = None,
     if name == "pointnet2":
         return PointNetPP(dropout=0.4 if dropout is None else dropout,
                           features=features)
-    raise ValueError(f"unknown model {name!r} (pointnet | pointnet2)")
+    if name == "pointnet2_seg":
+        return PointNetPPSeg(dropout=0.3 if dropout is None else dropout,
+                             features=features)
+    raise ValueError(f"unknown model {name!r} (pick from {sorted(MODELS)})")

@@ -31,6 +31,10 @@ DEFAULT_DATASETS = [
 ]
 
 CACHE_ARRAYS = ("points", "labels", "counts", "centers", "frame")
+#: Format C (whole-frame segmentation). Cached beside format A from the same
+#: dataset, so one `cache` call serves both training tasks and a fold's
+#: train/test split means the same thing for either.
+SEG_ARRAYS = ("seg_points", "seg_labels", "seg_counts", "seg_frame", "seg_base")
 
 
 class DataError(SystemExit):
@@ -98,9 +102,32 @@ def build_cache(dataset_dirs: list[str], cache_dir: str) -> dict:
                 f"run {run_id}: cached counts (rock {got_rock}, clear {got_clear}) "
                 f"disagree with manifest sample_labels {want} - regenerate the dataset"
             )
+        # Format C, when the dataset has it (datasets generated before the
+        # segmentation format existed simply have no seg/ directory).
+        seg_src = os.path.join(d, "seg", run_id)
+        seg_arrays: dict[str, np.ndarray] = {}
+        if os.path.isdir(seg_src):
+            sp, sl, sc, sf, sb = [], [], [], [], []
+            for name in sorted(f for f in os.listdir(seg_src)
+                               if f.startswith("frame_") and f.endswith(".npz")):
+                with np.load(os.path.join(seg_src, name)) as z:
+                    sp.append(z["points"])
+                    sl.append(z["labels"])
+                    sc.append(z["true_count"])
+                    sb.append(z["base_odom"])
+                    sf.append(int(name[6:12]))
+            if sp:
+                seg_arrays = {
+                    "seg_points": np.stack(sp).astype(np.float32),
+                    "seg_labels": np.stack(sl).astype(np.int8),
+                    "seg_counts": np.asarray(sc, np.int32),
+                    "seg_frame": np.asarray(sf, np.int32),
+                    "seg_base": np.stack(sb).astype(np.float32),
+                }
+
         run_dir = os.path.join(cache_dir, run_id)
         os.makedirs(run_dir, exist_ok=True)
-        for key, arr in arrays.items():
+        for key, arr in {**arrays, **seg_arrays}.items():
             np.save(os.path.join(run_dir, f"{key}.npy"), arr)
         runs_meta[run_id] = {
             "dataset_dir": os.path.abspath(d),
@@ -109,6 +136,7 @@ def build_cache(dataset_dirs: list[str], cache_dir: str) -> dict:
             "clear": got_clear,
             "frames": len(files),
             "frame_times": times,
+            "seg_frames": int(len(seg_arrays["seg_counts"])) if seg_arrays else 0,
         }
         print(f"cached {run_id}: {len(arrays['labels'])} samples "
               f"({got_rock} rock / {got_clear} clear) from {len(files)} frames "
@@ -124,15 +152,36 @@ def build_cache(dataset_dirs: list[str], cache_dir: str) -> dict:
 
 
 class RunData:
-    """One cached run, loaded into RAM (a run is ~100 MB)."""
+    """One cached run, loaded into RAM (a run is ~100 MB).
 
-    def __init__(self, cache_dir: str, run_id: str):
+    ``task="segment"`` loads format C instead and re-exposes it under the
+    task-neutral names the training engine uses (points / labels / counts /
+    frame), so one Split implementation serves both.
+    """
+
+    def __init__(self, cache_dir: str, run_id: str, task: str = "classify"):
         d = os.path.join(cache_dir, run_id)
         if not os.path.isdir(d):
             raise DataError(f"no cache for run {run_id!r} - run 'rocklabel-train cache' first")
         self.run_id = run_id
-        for key in CACHE_ARRAYS:
-            setattr(self, key, np.load(os.path.join(d, f"{key}.npy")))
+        self.task = task
+        if task == "segment":
+            missing = [k for k in SEG_ARRAYS
+                       if not os.path.exists(os.path.join(d, f"{k}.npy"))]
+            if missing:
+                raise DataError(
+                    f"run {run_id!r} has no segmentation data in {cache_dir!r}. It was "
+                    "cached from a dataset generated before format C existed - "
+                    "regenerate with 'rocklabel generate' and re-run "
+                    "'rocklabel-train cache'.")
+            for key in SEG_ARRAYS:
+                setattr(self, key, np.load(os.path.join(d, f"{key}.npy")))
+            self.points, self.labels = self.seg_points, self.seg_labels
+            self.counts, self.frame = self.seg_counts, self.seg_frame
+            self.centers = self.seg_base
+        else:
+            for key in CACHE_ARRAYS:
+                setattr(self, key, np.load(os.path.join(d, f"{key}.npy")))
 
     def __len__(self) -> int:
         return len(self.labels)

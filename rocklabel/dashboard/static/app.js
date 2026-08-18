@@ -740,6 +740,7 @@ function renderLabels() {
 
   const { wrap, tbody } = table([
     { label: 'Run' }, { label: 'Rocks', num: true }, { label: 'Shapes' },
+    { label: 'Training bounds' },
     { label: 'Recording' }, { label: 'Modified', num: true }, { label: 'Actions' },
   ]);
   labs.forEach((l) => {
@@ -757,6 +758,16 @@ function renderLabels() {
       shapes.appendChild(document.createTextNode(' '));
     });
     tr.appendChild(shapes);
+    // Which volume Generate is allowed to train on: the arena ring bounds the
+    // floor plan, the labeler's z clip bounds the height. Missing either one
+    // means that direction is left to the crop box, which is worth seeing.
+    const bounds = h('td');
+    bounds.appendChild(h('span', l.arena_vertices ? 'pill ok' : 'pill warn',
+      l.arena_vertices ? `arena ${l.arena_vertices} pts` : 'no arena'));
+    bounds.appendChild(document.createTextNode(' '));
+    bounds.appendChild(h('span', l.z_band ? 'pill ok' : 'pill warn',
+      l.z_band ? `z ${l.z_band[0].toFixed(2)}…${l.z_band[1].toFixed(2)} m` : 'full height'));
+    tr.appendChild(bounds);
     tr.appendChild(h('td', 'mono muted', l.mcap_file || '—'));
     tr.appendChild(h('td', 'num nowrap', fmtAgo(l.mtime)));
     const act = h('td');
@@ -998,13 +1009,15 @@ function renderModels() {
   const box = $('#modelsBody');
   box.innerHTML = '';
   const runs = S.inv.runs;
-  if (!runs.length) {
+  if (!runs.length && !(S.inv.ablations || []).length) {
     box.appendChild(emptyState('No training runs yet',
       'Build the cache, then run Train one fold or Compare models.'));
     const q = h('div', 'quick');
     q.style.marginTop = '16px';
     q.appendChild(quickButton('train-cache', 'Build cache', 'Pool datasets for training.'));
     q.appendChild(quickButton('train-compare', 'Compare models', 'Both models, every fold.'));
+    q.appendChild(quickButton('train-reflect', 'Reflectivity check',
+      'Is the brightness channel worth anything? Answers in under a minute.'));
     box.appendChild(q);
     return;
   }
@@ -1134,30 +1147,90 @@ function renderModels() {
     nameTd.onclick = toggle;
   });
   card.appendChild(wrap);
-  box.appendChild(card);
+  // An ablation-only project has no plain runs; an empty "0 runs" table is
+  // noise, so it only appears once there is something in it.
+  if (runs.length) box.appendChild(card);
 
-  // ---- generated figures
+  // ---- ablation sweeps
+  (S.inv.ablations || []).forEach((suite) => box.appendChild(ablationCard(suite)));
+
+  // ---- generated figures, sectioned by which report wrote them
   if (S.inv.figures.length) {
-    const fc = h('div', 'card');
-    const fh = h('div', 'card-head');
-    fh.appendChild(h('h2', null, 'Report figures'));
-    fh.appendChild(h('p', 'card-sub',
-      'Written by Compare / Regenerate report into training/results/.'));
-    fc.appendChild(fh);
-    const grid = h('div', 'figures');
+    const groups = new Map();
     S.inv.figures.forEach((f) => {
-      const fig = h('figure', 'figure-card');
-      const img = h('img');
-      img.src = `/api/figure?path=${encodeURIComponent(f.path)}`;
-      img.alt = f.name;
-      img.loading = 'lazy';
-      fig.appendChild(img);
-      fig.appendChild(h('figcaption', null, f.name));
-      grid.appendChild(fig);
+      const key = f.group || 'Report figures';
+      if (!groups.has(key)) groups.set(key, { blurb: f.blurb || '', items: [] });
+      groups.get(key).items.push(f);
     });
-    fc.appendChild(grid);
-    box.appendChild(fc);
+    groups.forEach((g, name) => {
+      const fc = h('div', 'card');
+      const fh = h('div', 'card-head');
+      fh.appendChild(h('h2', null, name));
+      if (g.blurb) fh.appendChild(h('p', 'card-sub', g.blurb));
+      fc.appendChild(fh);
+      const grid = h('div', 'figures');
+      g.items.forEach((f) => {
+        const fig = h('figure', 'figure-card');
+        const img = h('img');
+        img.src = `/api/figure?path=${encodeURIComponent(f.path)}`;
+        img.alt = f.name;
+        img.loading = 'lazy';
+        fig.appendChild(img);
+        fig.appendChild(h('figcaption', null, f.name));
+        grid.appendChild(fig);
+      });
+      fc.appendChild(grid);
+      box.appendChild(fc);
+    });
   }
+}
+
+/* One ablation suite: how much of the matrix is filled in, and how the
+ * settings currently rank. Deliberately shows progress rather than hiding an
+ * unfinished sweep — a 121-run matrix is an overnight job, and "34 of 121" is
+ * the single most useful thing to know while it runs. */
+function ablationCard(suite) {
+  const card = h('div', 'card');
+  const head = h('div', 'card-head');
+  head.appendChild(h('h2', null, `Ablation · ${suite.title}`));
+  const pct = suite.runs_total ? Math.round((100 * suite.runs_done) / suite.runs_total) : 0;
+  head.appendChild(h('p', 'card-sub',
+    `${suite.runs_done} of ${suite.runs_total} trainings finished (${pct}%) across `
+    + `${suite.arms.length} settings and ${suite.folds} folds. `
+    + (suite.reported
+      ? 'Figures and tables are below and in training/results_ablate/.'
+      : 'Run Ablation sweep with "Report only" ticked to build the tables from '
+        + 'what has finished so far.')));
+  card.appendChild(head);
+
+  if (suite.noise_floor != null) {
+    card.appendChild(h('p', 'card-sub',
+      `A difference of nothing looks like ${suite.noise_floor.toFixed(4)} PR-AUC here — `
+      + 'that is the gap between two runs of the same setting with only the seed changed. '
+      + 'Anything smaller than that is noise.'));
+  }
+
+  const ranked = suite.arms.filter((a) => a.pr_auc != null)
+    .sort((a, b) => b.pr_auc - a.pr_auc);
+  const pending = suite.arms.filter((a) => a.pr_auc == null);
+  const tbl = h('table', 'table');
+  const thead = h('thead');
+  const hr = h('tr');
+  ['Setting', 'Channels', 'Folds done', 'PR-AUC'].forEach((c) => hr.appendChild(h('th', null, c)));
+  thead.appendChild(hr);
+  tbl.appendChild(thead);
+  const tb = h('tbody');
+  ranked.concat(pending).forEach((a) => {
+    const tr = h('tr');
+    tr.appendChild(h('td', null, a.label));
+    tr.appendChild(h('td', 'muted', (a.features || []).join(' ') || '—'));
+    tr.appendChild(h('td', 'muted', `${a.folds_done} / ${suite.folds}`));
+    tr.appendChild(h('td', null, a.pr_auc == null ? '—' : a.pr_auc.toFixed(3)));
+    tb.appendChild(tr);
+  });
+  tbl.appendChild(tb);
+  card.appendChild(tbl);
+  return card;
 }
 
 /* ================================================================== JOBS */
@@ -1599,6 +1672,9 @@ function invSignature(inv) {
     t.runs, t.runs_complete, t.best_f1,
     inv.recordings.length && inv.recordings[0].mtime,
     inv.figures.length,
+    // A running sweep finishes a fold every few minutes and changes nothing
+    // else on the page, so without this the progress line never moves.
+    t.ablation_runs_done, t.ablation_runs_total,
   ].join('|');
 }
 

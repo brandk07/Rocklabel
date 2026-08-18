@@ -17,10 +17,19 @@ import json
 import os
 
 from ..neighborhoods import FEATURES
+from .models_meta import MODELS
 from . import TRAIN_DEFAULTS
+from .ablate import DEFAULT_ROOT as ABLATE_ROOT, SUITES
 from .data import DEFAULT_DATASETS, run_dir_name, run_suffix
 
 DEFAULT_ROOT = "training"
+
+#: Training settings the ablation sweep passes through to every arm. An arm's
+#: own overrides win over these - the arm's overrides are the thing under test.
+ABLATE_PASSTHROUGH = ("epochs", "batch", "lr", "weight_decay", "patience",
+                      "val_frac", "gap_frames", "gap_seconds", "augment",
+                      "aug_intensity_gain", "aug_intensity_shift", "aug_thin_min",
+                      "dropout", "tnet", "seed", "device")
 
 
 def _settings_match(run_dir: str, cfg: dict) -> bool:
@@ -157,19 +166,55 @@ def build_parser() -> argparse.ArgumentParser:
     _add_common(p)
 
     p = sub.add_parser("train", help="train one model on one leave-one-run-out fold")
-    p.add_argument("--model", choices=["pointnet", "pointnet2"], required=True)
+    p.add_argument("--model", choices=sorted(MODELS), required=True,
+                   help="; ".join(f"{k} = {v[1]}" for k, v in MODELS.items()))
     p.add_argument("--test-run", required=True, help="run held out for testing")
     _add_common(p)
     _add_train_args(p)
 
     p = sub.add_parser("compare", help="train both models on every LORO fold, "
                                        "then render all comparison figures")
-    p.add_argument("--models", nargs="+", default=["pointnet", "pointnet2"])
+    p.add_argument("--models", nargs="+", default=["pointnet", "pointnet2"],
+                   choices=sorted(MODELS), metavar="MODEL",
+                   help="models to train/report on; " +
+                        "; ".join(f"{k} = {v[1]}" for k, v in MODELS.items()))
     _add_common(p)
     _add_train_args(p)
 
+    p = sub.add_parser("ablate", help="controlled A/B sweep: train every arm of a "
+                                      "suite on every fold, then report paired "
+                                      "per-fold differences")
+    p.add_argument("--suite", default="reflectivity", choices=sorted(SUITES),
+                   help="which set of arms to run; " +
+                        "; ".join(f"{k} = {v['title']}" for k, v in SUITES.items()))
+    p.add_argument("--arms", nargs="+", default=None, metavar="ARM",
+                   help="run only these arms of the suite (default: all of them, "
+                        "in the order they are declared - which is priority "
+                        "order, so stopping early still leaves the headline "
+                        "comparison finished)")
+    p.add_argument("--ablate-root", default=ABLATE_ROOT,
+                   help=f"where each arm's runs live (default: {ABLATE_ROOT}). "
+                        "One directory per arm, which is what lets two arms "
+                        "differing only in an augmentation setting coexist.")
+    p.add_argument("--report-only", action="store_true",
+                   help="skip training; rebuild the tables and figures from "
+                        "whatever folds have already finished")
+    _add_common(p)
+    _add_train_args(p)
+
+    p = sub.add_parser("reflect", help="measure what the reflectivity channel "
+                                       "actually carries, straight off the cache "
+                                       "(no training)")
+    p.add_argument("--cache-dir", default=os.path.join(DEFAULT_ROOT, "cache"))
+    p.add_argument("--out", default=os.path.join(DEFAULT_ROOT, "results_reflect"),
+                   help="directory for the figures and tables "
+                        f"(default: {DEFAULT_ROOT}/results_reflect)")
+
     p = sub.add_parser("report", help="regenerate figures/tables from existing runs")
-    p.add_argument("--models", nargs="+", default=["pointnet", "pointnet2"])
+    p.add_argument("--models", nargs="+", default=["pointnet", "pointnet2"],
+                   choices=sorted(MODELS), metavar="MODEL",
+                   help="models to train/report on; " +
+                        "; ".join(f"{k} = {v[1]}" for k, v in MODELS.items()))
     _add_common(p)
     _features_arg(p)  # names which channel selection's runs to report on
 
@@ -254,6 +299,23 @@ def main(argv: list[str] | None = None) -> int:
                 train_fold(cfg, run_dir, resume=not args.fresh)
         render_all(args.runs_root, _results_dir(args), args.models,
                    [f["name"] for f in folds], features=args.features)
+        return 0
+
+    if args.command == "ablate":
+        from .ablate import run_suite
+        from .ablate_report import render_ablation
+        if not args.report_only:
+            extra = {k: getattr(args, k) for k in ABLATE_PASSTHROUGH}
+            run_suite(args.suite, args.cache_dir, args.ablate_root, args.arms,
+                      extra, fresh=args.fresh)
+        out = args.results_dir or os.path.join(DEFAULT_ROOT, "results_ablate",
+                                               args.suite)
+        render_ablation(args.ablate_root, args.suite, out)
+        return 0
+
+    if args.command == "reflect":
+        from .reflect import render_reflectivity
+        render_reflectivity(args.cache_dir, args.out)
         return 0
 
     if args.command == "report":

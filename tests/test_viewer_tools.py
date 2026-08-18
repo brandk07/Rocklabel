@@ -6,6 +6,8 @@ unbound functions against a fake host that stands in for the widgets.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import numpy as np
 import open3d.visualization.gui as gui
 import pytest
@@ -60,6 +62,89 @@ class _FakeApp:
 
     def camera_key_result(self, event):
         return None  # orbit mode: keys belong to the app
+
+
+class _ShadingApp:
+    """Only the pieces the arena shading helpers touch."""
+
+    def __init__(self, arena=None, tool="navigate", lasso=()):
+        self.tool = tool
+        self._lasso = [np.asarray(p, float) for p in lasso]
+        self.labelset = SimpleNamespace(arena=arena)
+        self._shaded_arena = None
+        self._inside_count = None
+        self.rebuilds = 0
+
+    _shading_arena = _LabelerApp._shading_arena
+
+    def _rebuild_cloud(self):
+        self.rebuilds += 1
+        self._shaded_arena = self._shading_arena()
+
+
+_SQUARE = np.array([[0.0, 0.0], [2.0, 0.0], [2.0, 2.0], [0.0, 2.0]])
+
+
+def test_points_outside_the_arena_lose_their_color():
+    app = _ShadingApp(arena=_SQUARE)
+    pts = np.array([[1.0, 1.0, 0.0], [9.0, 9.0, 0.0]])
+    colors = np.array([[1.0, 0.0, 0.0], [1.0, 0.0, 0.0]])
+    out = _LabelerApp._gray_outside_arena(app, pts, colors)
+    assert np.allclose(out[0], [1.0, 0.0, 0.0])       # inside: untouched
+    assert out[1][0] == out[1][1] == out[1][2]        # outside: gray
+    assert 0.0 < out[1][0] < 1.0
+    assert app._inside_count == 1
+
+
+def test_no_arena_leaves_every_color_alone():
+    app = _ShadingApp(arena=None)
+    colors = np.array([[1.0, 0.0, 0.0], [0.0, 0.5, 1.0]])
+    out = _LabelerApp._gray_outside_arena(app, np.zeros((2, 3)), colors)
+    assert out is colors and app._inside_count is None
+
+
+def test_an_outline_in_progress_shades_before_it_is_committed():
+    """The draft ring wins over the committed arena - that live feedback is
+    the only thing on screen that says which points are being roped in."""
+    draft = [(0.0, 0.0, 0.0), (5.0, 0.0, 0.0), (5.0, 5.0, 0.0), (0.0, 5.0, 0.0)]
+    app = _ShadingApp(arena=_SQUARE, tool="arena", lasso=draft)
+    assert np.allclose(_LabelerApp._shading_arena(app), np.asarray(draft)[:, :2])
+    # a point outside the small committed arena but inside the draft stays lit
+    colors = np.array([[1.0, 0.0, 0.0]])
+    out = _LabelerApp._gray_outside_arena(app, np.array([[4.0, 4.0, 0.0]]), colors)
+    assert np.allclose(out[0], [1.0, 0.0, 0.0])
+
+
+def test_two_clicks_are_not_a_footprint_yet():
+    app = _ShadingApp(arena=None, tool="arena", lasso=[(0, 0, 0), (1, 0, 0)])
+    assert _LabelerApp._shading_arena(app) is None
+
+
+def test_shading_refresh_skips_the_rebuild_when_nothing_changed():
+    """Every outline click routes through here; recoloring the whole cloud for
+    an unchanged polygon is a stall the user feels."""
+    app = _ShadingApp(arena=_SQUARE)
+    _LabelerApp._refresh_arena_shading(app)
+    assert app.rebuilds == 1              # first pass: shading not applied yet
+    _LabelerApp._refresh_arena_shading(app)
+    assert app.rebuilds == 1              # same polygon: no second rebuild
+    app._lasso = [np.array([0.0, 0.0, 0.0]), np.array([3.0, 0.0, 0.0]),
+                  np.array([3.0, 3.0, 0.0])]
+    app.tool = "arena"
+    _LabelerApp._refresh_arena_shading(app)
+    assert app.rebuilds == 2              # a draft ring is a different polygon
+
+
+def test_committing_the_draft_does_not_change_the_shading():
+    """Enter turns the draft into the arena; the colors were already right, so
+    they must not flicker back and forth as it is saved."""
+    draft = [(0.0, 0.0, 0.0), (3.0, 0.0, 0.0), (3.0, 3.0, 0.0)]
+    app = _ShadingApp(tool="arena", lasso=draft)
+    _LabelerApp._refresh_arena_shading(app)
+    app.labelset.arena = np.asarray(draft)[:, :2]
+    app._lasso = []
+    _LabelerApp._refresh_arena_shading(app)
+    assert app.rebuilds == 1
 
 
 class _Mouse:

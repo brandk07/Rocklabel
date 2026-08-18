@@ -83,6 +83,54 @@ def test_bev_rock_cells_at_expected_positions(generated):
     assert 0 < (mask == 1).sum() < 200
 
 
+def test_z_band_from_the_labeler_cuts_points_out_of_the_dataset(synthetic_recording, tmp_path):
+    """The labeler's z clip is saved as a height band, and generate has to
+    honour it instead of the crop box's sensor-relative up/down limits."""
+    from rocklabel.labels import load_labels
+
+    mcap_path, labels_path = synthetic_recording
+    cfg = load_config(None)
+
+    banded_labels = str(tmp_path / "banded.labels.json")
+    ls = load_labels(labels_path)
+    # A slab far above every synthetic return: nothing should survive it.
+    ls.set_z_band(50.0, 60.0)
+    ls.save(banded_labels)
+
+    wide = run_generate(mcap_path, labels_path, str(tmp_path / "wide"), cfg)
+    narrow = run_generate(mcap_path, banded_labels, str(tmp_path / "narrow"), cfg)
+
+    assert wide["frames_kept"] > 0
+    assert narrow["frames_kept"] == 0
+    assert narrow["frames_skipped_empty"] == wide["frames_kept"] + wide["frames_skipped_empty"]
+    # The manifest records which band a dataset was built under, so two
+    # differently-bounded runs can never be pooled by accident unnoticed.
+    assert wide["z_band"] is None
+    assert narrow["z_band"] == [50.0, 60.0]
+
+
+def test_z_band_keeps_the_horizontal_crop_limits(synthetic_recording, tmp_path):
+    """The band replaces only the vertical crop; forward/back/left/right still
+    come from the config, so a generous band cannot pull in the whole room."""
+    from rocklabel.labels import load_labels
+
+    mcap_path, labels_path = synthetic_recording
+    cfg = load_config(None)
+    narrow_cfg = copy.deepcopy(cfg)
+    narrow_cfg["generator"]["crop_forward_m"] = 0.5
+    narrow_cfg["generator"]["crop_left_m"] = 0.5
+    narrow_cfg["generator"]["crop_right_m"] = 0.5
+
+    banded_labels = str(tmp_path / "tall.labels.json")
+    ls = load_labels(labels_path)
+    ls.set_z_band(-100.0, 100.0)   # vertically unbounded
+    ls.save(banded_labels)
+
+    tight = run_generate(mcap_path, banded_labels, str(tmp_path / "tight"), narrow_cfg)
+    loose = run_generate(mcap_path, banded_labels, str(tmp_path / "loose"), cfg)
+    assert tight["point_labels"]["clear"] < loose["point_labels"]["clear"]
+
+
 def test_manifest_guard_rejects_changed_config(generated):
     mcap_path, labels_path, out_dir, cfg, _ = generated
     changed = copy.deepcopy(cfg)
@@ -118,9 +166,10 @@ def test_unreachable_odom_frame_fails_loudly(synthetic_recording):
     mcap_path, _ = synthetic_recording
     cfg = load_config(None)
     cfg["topics"]["odom_frame"] = "map"  # not present in the synthetic TF tree
-    stream = ScanStream(mcap_path, cfg, progress=False)
+    # Levelling makes its own pass first, so the failure surfaces while the
+    # stream is being opened rather than on the first scan out of it.
     with pytest.raises(SystemExit, match="no transform chain"):
-        next(iter(stream))
+        next(iter(ScanStream(mcap_path, cfg, progress=False)))
 
 
 def test_scan_frame_taken_from_message_header(synthetic_recording):

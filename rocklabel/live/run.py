@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import time
 
+from rocklabel.live.colormap import clamp_range
 from rocklabel.live.config import AppConfig
 from rocklabel.live.pipeline import IngestEngine
 from rocklabel.live.sources import make_source
@@ -84,6 +85,14 @@ def add_live_args(p: argparse.ArgumentParser, record_cmd: bool) -> None:
                         "compare across frames; 'reflectivity_stretch' spreads each "
                         "frame's own percentile range across the ramp, which is what "
                         "makes rock/ground contrast visible inside an arena")
+    p.add_argument("--refl-range", type=float, nargs=2, metavar=("LOW", "HIGH"),
+                   help="contrast window for 'reflectivity', as fractions of the "
+                        "sensor's full scale (default 0 1 = the whole scale). "
+                        "Returns at or above HIGH take the top color, at or below "
+                        "LOW the bottom, hard-clamped — narrow it (arena data lives "
+                        "around 0.3-0.8) to separate ground from rock while keeping "
+                        "colors comparable across frames. Adjustable live with the "
+                        "View panel sliders, or A to fit it to what is on screen")
     p.add_argument("--model", metavar="CHECKPOINT.pt",
                    help="trained rocklabel-train checkpoint (best.pt): score the live "
                         "cloud continuously and add the 'model' color mode")
@@ -162,6 +171,8 @@ def _build_config(args: argparse.Namespace, record_cmd: bool) -> AppConfig:
         cfg.slam.enabled = False
     if args.color_mode:
         cfg.display.color_mode = args.color_mode
+    if getattr(args, "refl_range", None):
+        cfg.display.reflectivity_range = clamp_range(*args.refl_range)
 
     if record_cmd:
         cfg.record.autostart = True

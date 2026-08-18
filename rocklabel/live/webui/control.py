@@ -29,6 +29,7 @@ import threading
 
 import numpy as np
 
+from ..colormap import move_range_end
 from . import scene, spec
 
 #: How long a write waits for the GUI thread to apply it before answering
@@ -123,8 +124,18 @@ class LiveController:
         e, z, s = self._engine, self._viz, self._scorer
         v["view.accum_frames"] = int(e.accum_frames)
         v["view.accum_max_points"] = int(e.accum_max_points)
+        crop = self._cfg.crop
+        v["crop.enabled"] = bool(crop.enabled)
+        v["crop.z_min"] = float(crop.z_min)
+        v["crop.z_max"] = float(crop.z_max)
+        v["crop.floor_relative"] = bool(crop.floor_relative)
+        v["crop.range_max"] = float(crop.range_max)
+        v["crop.range_min"] = float(crop.range_min)
         if z is not None:
             v["view.color_mode"] = z.color_mode
+            lo, hi = z.reflectivity_range
+            v["view.refl_min"] = float(lo)
+            v["view.refl_max"] = float(hi)
             v["view.nav_mode"] = getattr(z, "nav_mode", "orbit")
             v["view.point_size"] = float(z.point_size)
             v["view.show_points"] = bool(z._show_points)
@@ -185,7 +196,7 @@ class LiveController:
             flags["paused"] = bool(e.paused)
 
         if "leveler" in self.capabilities:
-            text["level.tilt"] = e.leveler.status().replace("level: ", "")
+            text["level.tilt"] = e.level_status().replace("level: ", "")
 
         if not self._replay:
             rec = e.recorder
@@ -276,11 +287,14 @@ class LiveController:
             "history": self._history.payload(),
             "histogram": scene.confidence_histogram(self._scorer),
         }
-        if self._scorer is not None:
-            s = self._scorer.settings
-            out["region"] = {"range_max": float(s.range_max),
-                             "z_min": float(s.z_min), "z_max": float(s.z_max),
-                             "floor_relative": bool(s.floor_relative)}
+        # The ring on the overhead map is whichever region is actually in
+        # force: the scoring band with a model, the ingest crop without one.
+        band = self._scorer.settings if self._scorer is not None else (
+            self._cfg.crop if self._cfg.crop.enabled else None)
+        if band is not None:
+            out["region"] = {"range_max": float(band.range_max),
+                             "z_min": float(band.z_min), "z_max": float(band.z_max),
+                             "floor_relative": bool(band.floor_relative)}
         return out
 
     # ------------------------------------------------------------------ #
@@ -292,6 +306,17 @@ class LiveController:
         "view.show_mesh": "_show_mesh",
         "view.show_accum": "_show_accum",
         "view.show_box": "_show_box",
+    }
+    #: Ingest-crop ids -> the CropConfig field they own. The engine holds the
+    #: same CropConfig object, and reads it per batch, so a write here lands on
+    #: the next scan without restarting anything.
+    _CROP = {
+        "crop.enabled": "enabled",
+        "crop.z_min": "z_min",
+        "crop.z_max": "z_max",
+        "crop.floor_relative": "floor_relative",
+        "crop.range_max": "range_max",
+        "crop.range_min": "range_min",
     }
     #: Scoring-region ids -> the ScoreSettings field they own.
     _REGION = {
@@ -314,12 +339,23 @@ class LiveController:
 
         if key in self._LAYERS:
             self.post(lambda: self._viz.set_layer(self._LAYERS[key], value))
+        elif key in self._CROP:
+            # Same story as the region below: the crop band is what the display
+            # crop follows when there is no model, so the viewer has to hear
+            # about it rather than being left with a stale accumulated cloud.
+            self._crop_setting(self._CROP[key], value)
         elif key in self._REGION:
             # Region bounds also drive the display crop, so the viewer has to
             # invalidate its recolor cache — _on_setting does both.
             self._scorer_setting(self._REGION[key], value)
         elif key == "view.color_mode":
             self.post(lambda: self._viz.set_color_mode(value))
+        elif key in ("view.refl_min", "view.refl_max"):
+            # One window, two sliders: resolve them into a pair here, with the
+            # end the page just moved winning and the other yielding.
+            end = "lo" if key == "view.refl_min" else "hi"
+            lo, hi = move_range_end(self._viz.reflectivity_range, end, value)
+            self.post(lambda: self._viz.set_reflectivity_range(lo, hi))
         elif key == "view.nav_mode":
             self.post(lambda: self._viz.set_nav_mode(value))
         elif key == "view.point_size":
@@ -361,6 +397,8 @@ class LiveController:
 
         if name == "view.reset_camera":
             self.post(self._viz.reset_camera)
+        elif name == "view.refl_autofit":
+            self.post(self._viz.autofit_reflectivity)
         elif name == "view.reset_surface":
             self._engine.reset_surface()
             self._history.clear()   # the trend described a map that is now gone
@@ -416,6 +454,14 @@ class LiveController:
             num = min(max(num, lo), hi)
             return int(round(num)) if control.kind == "int" else num
         raise ValueError(f"{control.id}: unsettable kind {control.kind}")
+
+    def _crop_setting(self, field: str, value) -> None:
+        """Write a CropConfig field, via the viewer when there is one so the
+        display crop and the accumulated cloud pick the new band up at once."""
+        if self._viz is not None:
+            self.post(lambda: self._viz.set_crop_setting(field, value))
+        else:
+            setattr(self._cfg.crop, field, value)
 
     def _scorer_setting(self, field: str, value) -> None:
         """Write a ScoreSettings field, via the viewer when there is one so its

@@ -1,0 +1,31 @@
+{
+  "schema_version": 4,
+  "mcap_file": "VolleyBallTest1.mcap",
+  "run_id": "VolleyBallTest1",
+  "odom_frame": "world",
+  "created": "2026-08-16T21:40:48Z",
+  "tool_version": "0.2.0",
+  "intensity_available": true,
+  "accumulator_voxel_m": 0.03,
+  "rocks": [],
+  "arena": {
+    "vertices": [
+      [
+        6.8707,
+        -5.7467
+      ],
+      [
+        7.5732,
+        6.6588
+      ],
+      [
+        -0.373,
+        8.3092
+      ],
+      [
+        -1.7125,
+        -5.5354
+      ]
+    ]
+  }
+}
