@@ -511,3 +511,76 @@ def test_revisit_diagnostics_need_an_up_vector():
         revisit_error(_flat_visits([0.0, 0.01]))
     with pytest.raises(ValueError):
         error_vs_gap(_flat_visits([0.0, 0.01]))
+
+
+def test_a_recording_from_a_raw_folder_lands_in_the_reslam_folder_beside_it():
+    """The project keeps captures and re-solved trajectories in sibling folders.
+
+    Before this, a batch re-solve wrote every output back into ``raw/``, which
+    is exactly the mixing the layout exists to prevent.
+    """
+    from rocklabel.slam.cli import build_parser, output_path
+
+    a = build_parser().parse_args(["x.mcap"])
+    assert output_path("recordings/volleyball/raw/Run1.mcap", a) == \
+        "recordings/volleyball/reslam/Run1.reslam.mcap"
+    # anywhere else, the output still stays next to its input
+    assert output_path("recordings/Run1.mcap", a) == "recordings/Run1.reslam.mcap"
+
+
+def test_the_solver_is_reachable_as_a_rocklabel_subcommand():
+    """`rocklabel slam` and `python -m rocklabel.slam` must be one command.
+
+    The dashboard drives the `rocklabel` parser, so a second hand-written flag
+    list would drift the first time a knob was renamed.
+    """
+    from rocklabel.cli import build_parser as main_parser
+    from rocklabel.slam.cli import build_parser as slam_parser, config_from_args
+
+    a = main_parser().parse_args(["slam", "a.mcap", "b.mcap", "--passes", "2",
+                                  "--lock-tilt"])
+    assert a.command == "slam" and a.inputs == ["a.mcap", "b.mcap"]
+    cfg = config_from_args(a)
+    assert cfg.passes == 2 and cfg.lock_roll_pitch is True
+
+    direct = {act.dest for act in slam_parser()._actions}
+    sub = {act.dest for act in main_parser()._subparsers._group_actions[0]
+           .choices["slam"]._actions}
+    assert direct - {"help"} <= sub
+
+
+# --------------------------------------------------------------------------- #
+# driftcheck's measured offset
+# --------------------------------------------------------------------------- #
+def _slab(n, dz=0.0, seed=0):
+    """A rough horizontal patch of ground, optionally lifted by ``dz``."""
+    rng = np.random.default_rng(seed)
+    xy = rng.uniform(-0.4, 0.4, (n, 2))
+    z = rng.normal(0.0, 0.003, n) + dz
+    return np.column_stack([xy, z])
+
+
+def test_surface_offset_reads_near_zero_when_the_rock_held_still():
+    from rocklabel.gui.driftcheck import surface_offset
+
+    out = surface_offset(_slab(4000, 0.0, seed=1), _slab(4000, 0.0, seed=2))
+    assert out["cells"] > 50
+    assert out["median_mm"] < 15.0, out
+
+
+def test_surface_offset_reports_the_size_of_a_real_shift():
+    from rocklabel.gui.driftcheck import surface_offset
+
+    out = surface_offset(_slab(4000, 0.0, seed=1), _slab(4000, 0.08, seed=2))
+    assert 70.0 < out["median_mm"] < 90.0, out
+    assert out["centroid_mm"] > 70.0
+
+
+def test_surface_offset_refuses_to_guess_from_too_few_columns():
+    """Silently returning a number from three overlapping cells would be worse
+    than saying nothing — the caller has an overlay to fall back on."""
+    from rocklabel.gui.driftcheck import surface_offset
+
+    out = surface_offset(_slab(20, seed=1)[:3], _slab(20, seed=2)[:3])
+    assert out["cells"] == 0
+    assert np.isnan(out["median_mm"])

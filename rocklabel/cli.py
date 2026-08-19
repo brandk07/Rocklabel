@@ -1,5 +1,5 @@
-"""Console entry point: rocklabel {inspect, label, driftcheck, generate, trim,
-preview, record, live, dash}.
+"""Console entry point: rocklabel {inspect, slam, label, driftcheck, generate,
+trim, preview, record, live, dash}.
 
 Recording paths are positional (``rocklabel label run.mcap``); the old
 ``--mcap``/``--out`` flag spellings still work.
@@ -95,6 +95,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("mcap", help="path to the .mcap recording")
     _add_config_arg(p)
 
+    from .slam.cli import add_slam_args
+
+    p = sub.add_parser(
+        "slam",
+        help="re-solve a recording's sensor trajectory offline and write a new "
+             "recording; the input file is never modified",
+    )
+    add_slam_args(p)
+
     p = sub.add_parser("label", help="interactively label rocks on the fused world-frame cloud")
     _add_mcap_arg(p)
     _add_config_arg(p)
@@ -112,6 +121,9 @@ def build_parser() -> argparse.ArgumentParser:
     _add_mcap_arg(p)
     p.add_argument("--labels", required=True, help="label JSON produced by 'rocklabel label'")
     p.add_argument("--rock-id", type=int, required=True, help="id of the rock to inspect")
+    p.add_argument("--report-only", action="store_true",
+                   help="print the measured early-vs-late offset and exit without "
+                        "opening the 3D window (works over SSH and in scripts)")
     _add_config_arg(p)
     _add_level_args(p)
 
@@ -206,6 +218,12 @@ def main(argv: list[str] | None = None) -> int:
             print("\n[rocklabel] dashboard stopped.")
         return 0
 
+    if args.command == "slam":
+        # Before load_config: the solver works on a recording's own frames and
+        # poses and never touches the offline topics/crop/sample settings.
+        from .slam.cli import run as run_slam
+        return run_slam(args)
+
     cfg_path = getattr(args, "config", None)
     try:
         cfg = load_config(cfg_path)
@@ -237,7 +255,8 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "driftcheck":
             cfg = _apply_level_args(cfg, args)
             from .gui.driftcheck import run_driftcheck
-            run_driftcheck(_resolve_mcap(args, parser), args.labels, args.rock_id, cfg)
+            run_driftcheck(_resolve_mcap(args, parser), args.labels, args.rock_id, cfg,
+                           report_only=args.report_only)
         elif args.command == "generate":
             mcap = _resolve_mcap(args, parser)
             labels = args.labels

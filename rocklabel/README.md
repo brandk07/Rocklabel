@@ -34,7 +34,7 @@ rocklabel/
 | **`geometry/`** | `leveling`, `accumulate`, `relief` | you need a cloud transformed, fused, or measured. No file reading, no windows, no labels. |
 | **`dataset/`** | `generate`, `labeling`, `neighborhoods`, `bev` | you are turning hand-placed labels into training samples, or adding a dataset format. |
 | **`gui/`** | `viewer`, `camera`, `labeler`, `preview`, `driftcheck` | you are touching a 3D window. Nothing outside this folder imports Open3D. |
-| **`slam/`** | its own solver, registration and voxel map | you are improving where the sensor *was*. Self-contained; run it with `python -m rocklabel.slam`. |
+| **`slam/`** | its own solver, registration and voxel map | you are improving where the sensor *was*. Self-contained; run it with `rocklabel slam`. |
 | **`live/`** | sources, surfaces, viz, webui | you are working with the sensor in real time. |
 | **`train/`** | data, engine, models, ablate, matched, plots, export | you are training or evaluating. **The only place that imports torch.** |
 | **`dashboard/`** | `spec`, `inventory`, `server`, `jobs`, static files | you are changing what the web UI can do. |

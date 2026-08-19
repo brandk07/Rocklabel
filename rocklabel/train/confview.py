@@ -77,7 +77,7 @@ def run_confview(out_dir: str, run_id: str | None, checkpoint: str,
     model.load_state_dict(ck["model"])
     probs_by_frame = _predict_run(ds, model, dev)
 
-    from .. import viewer
+    from ..gui import viewer
 
     state = {"mode": 0, "threshold": float(ck.get("threshold", 0.5))}
     cache = _FrameCache(ds)

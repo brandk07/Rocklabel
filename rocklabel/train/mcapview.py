@@ -44,7 +44,7 @@ def _score_recording(mcap_path: str, cfg: dict, gcfg: dict, model, device,
                      z_min: float | None = None, z_max: float | None = None,
                      max_range: float | None = None,
                      batch: int = 512) -> list[FrameRec]:
-    from .. import viewer  # height_colors, without importing open3d at module load
+    from ..gui import viewer  # height_colors, without importing open3d at module load
 
     eff_stride = stride if stride is not None else gcfg["frame_stride"]
     eff_window = window_s if window_s is not None else (gcfg.get("frame_window_s") or 0.0)
@@ -138,7 +138,7 @@ def run_mcap_replay(mcap_path: str, checkpoint: str, cfg: dict,
         print(f"wrote {dump}")
         return
 
-    from .. import viewer
+    from ..gui import viewer
 
     state = {"mode": 0, "threshold": float(ck.get("threshold", 0.5))}
     modes = ["Confidence (blue-red)", "Detections @ threshold"]

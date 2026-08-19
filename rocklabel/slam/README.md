@@ -1,22 +1,26 @@
 # altslam — a second SLAM for rocklabel recordings
 
 > **Where this lives:** `rocklabel/slam/`. It used to sit in a top-level
-> `altslam/` folder; it moved into the package unchanged. Run it with
-> `python -m rocklabel.slam`, and import it as `rocklabel.slam.<module>`.
-> Its tests are `tests/test_slam.py`.
+> `altslam/` folder; it moved into the package unchanged. Import it as
+> `rocklabel.slam.<module>`. Its tests are `tests/test_slam.py`.
+>
+> **Run it as `rocklabel slam RUN.mcap`** — the same command, the same flags,
+> and the one the dashboard drives (the "Solve poses" card).
+> `python -m rocklabel.slam` still works and is the same code.
 
 Reads a recording, works out a better path for the sensor, writes a **new**
 recording. The original file is never touched.
 
 ```bash
-# one recording -> recordings/VolleyBallTest1.reslam.mcap
-python -m rocklabel.slam recordings/VolleyBallTest1.mcap
+# one recording; a file read from a raw/ folder is written to the reslam/
+# folder beside it -> recordings/volleyball/reslam/VolleyBallTest1.reslam.mcap
+rocklabel slam recordings/volleyball/raw/VolleyBallTest1.mcap
 
 # all of them, in parallel
-ls recordings/VolleyBallTest*.mcap | xargs -P 6 -I{} python -m rocklabel.slam {} --force
+ls recordings/volleyball/raw/*.mcap | xargs -P 6 -I{} rocklabel slam {} --force
 
 # try settings without writing anything
-python -m rocklabel.slam recordings/VolleyBallTest1.mcap --score-only --passes 1
+rocklabel slam recordings/volleyball/raw/VolleyBallTest1.mcap --score-only --passes 1
 ```
 
 The output is the same file format with the same points, the same brightness
@@ -115,7 +119,7 @@ a file instead.
 | `solver.py` | multi-pass whole-recording solve, and per-batch pose output |
 | `evaluate.py` | the surface-thickness score |
 | `reprocess.py` | read mcap → solve → write new mcap |
-| `cli.py` | `python -m rocklabel.slam` |
+| `cli.py` | `rocklabel slam`, and `python -m rocklabel.slam` |
 | `tests/` | `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest tests/test_slam.py -q` |
 
 The env var is only needed because a ROS `launch_testing` plugin in this

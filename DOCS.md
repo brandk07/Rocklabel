@@ -162,7 +162,7 @@ Folders are named after the job the code does, not the command that calls it.
 | `rocklabel/geometry/` | headless maths on a cloud: `leveling`, `accumulate`, `relief` |
 | `rocklabel/dataset/` | labeled recording → training data: `generate`, `labeling`, `neighborhoods`, `bev` |
 | `rocklabel/gui/` | every Open3D window: `viewer`, `camera`, `labeler`, `preview`, `driftcheck` |
-| `rocklabel/slam/` | the offline trajectory solver (`python -m rocklabel.slam`) |
+| `rocklabel/slam/` | the offline trajectory solver (`rocklabel slam`) |
 | `rocklabel/live/` | the live sensor rig |
 | `rocklabel/train/` | the training stack — the only place torch is imported |
 | `rocklabel/dashboard/` | the web UI |

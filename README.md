@@ -20,12 +20,13 @@ pip install -e '.[dash,train]'
 
 ```bash
 rocklabel record recordings/volleyball/raw/RUN.mcap --source udp   # 1. capture
-rocklabel label recordings/volleyball/raw/RUN.mcap                 # 2. click rocks
-rocklabel generate recordings/volleyball/raw/RUN.mcap \
-    --profile full-sweep                                           # 3. build dataset
-rocklabel-train cache                                              # 4. pool it
-rocklabel-train compare                                            # 5. train + evaluate
-rocklabel live --source udp --model best.pt                        # 6. live inference
+rocklabel slam recordings/volleyball/raw/RUN.mcap                  # 2. solve poses
+rocklabel label recordings/volleyball/reslam/RUN.reslam.mcap       # 3. click rocks
+rocklabel generate recordings/volleyball/reslam/RUN.reslam.mcap \
+    --profile full-sweep                                           # 4. build dataset
+rocklabel-train cache                                              # 5. pool it
+rocklabel-train compare                                            # 6. train + evaluate
+rocklabel live --source udp --model best.pt                        # 7. live inference
 ```
 
 Or drive all of it from one page: `rocklabel dash` → `localhost:8765`

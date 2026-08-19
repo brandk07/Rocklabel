@@ -25,6 +25,13 @@ from ..train.ablate import (DEFAULT_REPORT_ROOT as REPORT_ROOT,
                             SUITES as ABLATION_SUITES)
 from ..train.cli import DEFAULT_CACHE, DEFAULT_RUNS_ROOT
 
+# Quoted, not copied: the Solve-poses form offers the solver's real defaults, so
+# a knob retuned in rocklabel/slam/config.py moves the form with it. The module
+# is plain dataclass fields with no heavy imports, which keeps spec.py torch-free.
+from ..slam.config import AltSlamConfig as _SlamConfig
+
+_SLAM_DEFAULTS = _SlamConfig()
+
 #: Early-stop patience, read from the training defaults rather than repeated.
 #: It was repeated once, and the form went on offering 6 for months after the
 #: real default moved to 10.
@@ -485,6 +492,121 @@ COMMANDS: list[Command] = [
         ],
         long_running=True,
     ),
+    # ---------------------------------------------------------------- slam
+    Command(
+        id="slam", bin="rocklabel", sub="slam", stage="slam",
+        icon="⌖",
+        title="Solve poses",
+        tagline="Work out a better sensor path and write a re-solved recording.",
+        what="Reads a recording, works out where the sensor really was scan by "
+             "scan, and writes a NEW recording with the same points, the same "
+             "reflectivity and the same IMU samples — only the pose attached to "
+             "each batch changes. The original file is never touched. A "
+             "recording read out of a 'raw' folder is written to the 'reslam' "
+             "folder beside it.",
+        why="The sensor's own live tracker is confidently wrong on a flat sand "
+            "court: a plane tells you your height and nothing about where you "
+            "are along it, so the whole scan slides sideways while the tracker "
+            "still reports 99% of points matched. This solver aims with the far "
+            "scenery (fence, tree line), lets the alignment correct tilt instead "
+            "of trusting the IMU, and makes several passes over the recording. "
+            "On the volleyball runs it takes the sand surface from about 33 mm "
+            "thick to about 18 mm — which matters because the rocks are only "
+            "5-10 cm proud of the sand.",
+        notes=[
+            "Everything downstream reads the output with no changes: label, "
+            "generate, train and replay just see a better-aligned world.",
+            "Labels are stored in world coordinates, so a recording you re-solve "
+            "with DIFFERENT settings needs its labels checked. Re-running with "
+            "the same settings reproduces the same trajectory exactly, and "
+            "existing labels stay valid.",
+            "About 110 s per 40 s recording at the default 3 passes. Far too "
+            "slow to run live, which is why it runs from a file.",
+            "Tick 'Score only' to try settings without writing anything — it "
+            "prints the surface thickness before and after.",
+            "Measured and rejected, so do not reach for them: 0.05 s windows "
+            "(diverges badly), voxels above 0.20 m, more than about 2 extra "
+            "passes, and locking tilt to the IMU (2x worse on a hand-swept rig).",
+        ],
+        params=[
+            Param("inputs", "path", "Recordings", source="recordings", required=True,
+                  repeat=True,
+                  help="The recording(s) to re-solve. Comma-separate several to "
+                       "do a batch — each is solved and written independently."),
+            Param("out_dir", "outdir", "Output folder", arg="--out-dir",
+                  placeholder="recordings/volleyball/reslam",
+                  help="Where to write. Leave empty and a recording from a 'raw' "
+                       "folder lands in the 'reslam' folder beside it; anything "
+                       "else lands next to its input."),
+            Param("score_only", "bool", "Score only", arg="--score-only",
+                  help="Solve and print the quality numbers but write no file. "
+                       "The cheap way to try a setting before committing to it."),
+            Param("force", "bool", "Overwrite existing", arg="--force",
+                  help="Replace an output file that already exists. Without this "
+                       "an existing output is left alone and reported."),
+            Param("passes", "int", "Solver passes", arg="--passes", min=1, max=6,
+                  default=_SLAM_DEFAULTS.passes,
+                  help="Pass 1 walks the recording forwards, so its earliest "
+                       "poses are its worst and get baked in. Every later pass "
+                       "rebuilds the map from the finished path and re-aligns "
+                       "everything against it. 1 is about 3x faster and nearly "
+                       "as good; past 3 the gain is not measurable."),
+            Param("window", "float", "Seconds per window", arg="--window", unit="s",
+                  min=0.05, max=0.5, step=0.05, default=_SLAM_DEFAULTS.window_sec,
+                  advanced=True,
+                  help="How much of the recording is pooled into one pose "
+                       "solution. 0.10 and 0.20 both work. 0.05 DIVERGES on this "
+                       "data — too few points per window to align with."),
+            Param("range_max", "float", "Furthest points used", arg="--range-max",
+                  unit="m", min=5.0, max=60.0, step=1.0,
+                  default=_SLAM_DEFAULTS.reg_range_max, advanced=True,
+                  help="Points past this distance take no part in alignment. "
+                       "Everything within 12 m of a sand court is sand, and sand "
+                       "cannot tell you where you are along it — the fence and "
+                       "tree line at 15-25 m are what pin down sliding "
+                       "sideways. Lower it only if the distant scenery is itself "
+                       "moving (traffic, a crowd)."),
+            Param("voxel", "float", "Map voxel size", arg="--voxel", unit="m",
+                  min=0.05, max=0.5, step=0.05, default=_SLAM_DEFAULTS.voxel_size,
+                  advanced=True,
+                  help="Cell size of the map used for alignment. Bigger is "
+                       "consistently worse here. This does not limit rock detail "
+                       "— the written point cloud is never voxelized."),
+            Param("iterations", "int", "Alignment iterations", arg="--iterations",
+                  min=1, max=100, default=_SLAM_DEFAULTS.iterations, advanced=True,
+                  help="How many times each window is nudged towards the map. "
+                       "Offline there is time to spare, so this sits well above "
+                       "what a live tracker could afford."),
+            Param("degeneracy", "float", "Flat-ground guard", arg="--degeneracy",
+                  min=0.0, max=0.5, step=0.01,
+                  default=_SLAM_DEFAULTS.degeneracy_threshold, advanced=True,
+                  help="Directions the visible geometry does not actually pin "
+                       "down are left alone rather than solved for from noise. "
+                       "This is the setting that stops flat sand letting the "
+                       "pose slide. 0 turns the guard off entirely."),
+            Param("robust_sigma", "float", "Outlier scale", arg="--robust-sigma",
+                  unit="m", min=0.01, max=1.0, step=0.01,
+                  default=_SLAM_DEFAULTS.robust_sigma, advanced=True,
+                  help="Points disagreeing with the map by more than roughly "
+                       "this are treated as outliers and stop pulling, so "
+                       "somebody walking through the shot cannot drag the "
+                       "answer."),
+            Param("lock_tilt", "bool", "Trust the IMU for tilt", arg="--lock-tilt",
+                  advanced=True,
+                  help="Only let the alignment correct heading, taking roll and "
+                       "pitch from the IMU. Right for a tripod or mast. WRONG "
+                       "for a hand-swept sensor: swinging it accelerates it, and "
+                       "an accelerometer cannot tell that from gravity — it "
+                       "costs about 2x on the volleyball recordings."),
+            Param("suffix", "text", "Output name suffix", arg="--suffix",
+                  default=".reslam", advanced=True,
+                  help="Added to the recording's name for the output, so "
+                       "Run1.mcap becomes Run1.reslam.mcap. The rest of the "
+                       "project expects '.reslam'."),
+            Param("quiet", "bool", "No progress bar", arg="--quiet", advanced=True),
+        ],
+        long_running=True,
+    ),
     # ---------------------------------------------------------------- label
     Command(
         id="label", bin="rocklabel", sub="label", stage="label", gui=True,
@@ -581,6 +703,14 @@ COMMANDS: list[Command] = [
             Param("rock_id", "int", "Rock id", arg="--rock-id", required=True, min=1,
                   help="Which labeled rock to inspect. Ids are listed in the label "
                        "file and in the Labels table."),
+            Param("report_only", "bool", "Numbers only", arg="--report-only",
+                  help="Skip the 3D window and just print how far apart the "
+                       "early and late surfaces sit, in millimetres. Under "
+                       "about 20 mm is sensor noise and the labels are fine; "
+                       "anything approaching a rock radius (150-260 mm) means "
+                       "the label no longer sits on the rock. Use this to check "
+                       "a whole run's labels quickly, or after re-solving a "
+                       "trajectory."),
             *_level_params(),
             _config(),
         ],

@@ -16,12 +16,14 @@ from rocklabel.slam.config import AltSlamConfig
 from rocklabel.slam.reprocess import reprocess
 
 
-def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(
-        prog="python -m rocklabel.slam",
-        description="Re-solve a recording's trajectory offline and write a new "
-                    "recording. The input file is never modified.",
-    )
+def add_slam_args(p: argparse.ArgumentParser) -> argparse.ArgumentParser:
+    """Every flag the offline solver takes, on an existing parser.
+
+    Shared so that ``rocklabel slam`` and ``python -m rocklabel.slam`` are the
+    same command with the same defaults. The dashboard reads the ``rocklabel``
+    parser to check its own form against, and a second hand-copied flag list
+    would drift the first time one of them was renamed.
+    """
     p.add_argument("inputs", nargs="+", help="recording(s) to re-solve (.mcap)")
     p.add_argument("-o", "--output",
                    help="output path (only valid with a single input)")
@@ -66,6 +68,14 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def build_parser() -> argparse.ArgumentParser:
+    return add_slam_args(argparse.ArgumentParser(
+        prog="python -m rocklabel.slam",
+        description="Re-solve a recording's trajectory offline and write a new "
+                    "recording. The input file is never modified.",
+    ))
+
+
 def config_from_args(a) -> AltSlamConfig:
     cfg = AltSlamConfig()
     cfg.passes = a.passes
@@ -80,10 +90,22 @@ def config_from_args(a) -> AltSlamConfig:
 
 
 def output_path(src: str, a) -> str:
+    """Where a re-solved recording lands when --output/--out-dir are left off.
+
+    The project keeps captures and re-solved trajectories in sibling folders
+    (``recordings/<project>/raw`` and ``recordings/<project>/reslam``), so a
+    recording read out of a ``raw`` folder is written to the ``reslam`` one
+    beside it. Anywhere else, the output stays next to its input as before.
+    """
     if a.output:
         return a.output
     stem, ext = os.path.splitext(os.path.basename(src))
-    directory = a.out_dir if a.out_dir else os.path.dirname(src)
+    if a.out_dir:
+        directory = a.out_dir
+    else:
+        directory = os.path.dirname(src)
+        if os.path.basename(directory) == "raw":
+            directory = os.path.join(os.path.dirname(directory), "reslam")
     return os.path.join(directory, f"{stem}{a.suffix}{ext}")
 
 
@@ -120,8 +142,12 @@ def _report(r: dict) -> None:
               f"({r.get('improvement_x', float('nan')):.2f}x sharper)")
 
 
-def main(argv=None) -> int:
-    a = build_parser().parse_args(argv)
+def run(a) -> int:
+    """Do the work for an already-parsed namespace.
+
+    ``rocklabel slam`` parses with the main CLI's parser and calls straight in
+    here, so there is one implementation behind both spellings.
+    """
     if a.output and len(a.inputs) > 1:
         print("--output takes a single input; use --out-dir/--suffix for many",
               file=sys.stderr)
@@ -154,6 +180,10 @@ def main(argv=None) -> int:
         else:
             print(f"  wrote {dst}  ({time.time() - t0:.1f}s)")
     return rc
+
+
+def main(argv=None) -> int:
+    return run(build_parser().parse_args(argv))
 
 
 if __name__ == "__main__":

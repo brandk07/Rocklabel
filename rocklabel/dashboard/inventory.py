@@ -1113,7 +1113,7 @@ def _probe_lidarrig(full: str, info) -> dict:
     """Sample the first frames of a native recording for a density read-out."""
     import numpy as np
 
-    from rocklabel import lidarrig_io
+    from rocklabel.recording import lidarrig_io
 
     topic = info.lidarrig_topics()[0]
     n = pts = 0
