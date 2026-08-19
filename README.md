@@ -1,101 +1,89 @@
-# rocklabel
+# Rocklabel
 
 Deep-learning LiDAR rock perception for the **NASA Lunabotics** competition.
 
-Label rocks **once** per recording on the fused point cloud, auto-generate
-training samples from **every** frame, train a PointNet/PointNet++ classifier,
-then run it on the live sensor.
+Label rocks **once** per recording on the fused point cloud, auto-generate training samples from **every** frame, train a PointNet/PointNet++ classifier, then run it on the live sensor.
 
-Reads ROS 2 rosbag2 mcaps and native lidarrig recordings — auto-detected, no
-ROS 2 install required.
+Reads ROS 2 `rosbag2` mcaps and native `lidarrig` recordings automatically—no ROS 2 install required.
 
-## Install
+---
+
+## Installation
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e '.[dash,train]'
 ```
 
-## Pipeline
+## Quick Pipeline
+
+The core workflow goes from raw capture to live inference in five steps:
 
 ```bash
-rocklabel record recordings/volleyball/raw/RUN.mcap --source udp   # 1. capture
-rocklabel slam recordings/volleyball/raw/RUN.mcap                  # 2. solve poses
-rocklabel label recordings/volleyball/reslam/RUN.reslam.mcap       # 3. click rocks
-rocklabel generate recordings/volleyball/reslam/RUN.reslam.mcap \
-    --profile full-sweep                                           # 4. build dataset
-rocklabel-train cache                                              # 5. pool it
-rocklabel-train compare                                            # 6. train + evaluate
-rocklabel live --source udp --model best.pt                        # 7. live inference
+rocklabel record recordings/RUN.mcap --source udp          # 1. capture
+rocklabel label recordings/RUN.mcap                        # 2. click rocks
+rocklabel generate recordings/RUN.mcap --out datasets/D    # 3. build dataset
+rocklabel-train compare                                    # 4. train + evaluate
+rocklabel live --source udp --model best.pt                # 5. live inference
 ```
 
-Or use the GUI that will also guide you through the pipeline: `rocklabel dash` → `localhost:8765`
+> **Tip:** You can also drive everything from the web dashboard. Run `rocklabel dash` and open `http://localhost:8765` in your browser.
 
-## Layout
+---
 
-Every folder puts the thing that produced a file into the path:
+## Tech Stack
 
-```
-recordings/<project>/{raw,reslam}/   raw captures, and re-solved trajectories
-labels/<project>/                    hand-placed rock labels
-datasets/<profile>/<run>/            training frames, named by HOW they were cut
-training/caches/<profile>/           pooled samples, one cache per profile
-training/experiments/<exp>/<arm>/    every trained fold
-training/reports/<exp>/              figures and tables
-training/exported/                   deployable models (ONNX + TorchScript)
+```text
+Software & Machine Learning
+• Languages & Frameworks: Python, PyTorch (PointNet / PointNet++ models)
+• 3D Perception & Math: Open3D, NumPy, SciPy
+• Data & Middleware: ROS 2 (rosbag2 / MCAP), raw UDP packet parsing
+• Tooling: Flask (for the interactive web dashboard)
 ```
 
-`<profile>` is a **generation profile** — a named way of cutting a recording
-into frames (`full-sweep` is the default and the one to use). See
-[DOCS.md](DOCS.md#generation-profiles).
+---
 
-Every folder under `training/` has a README explaining what is in it; start at
-[training/README.md](training/README.md).
+## Workflow & Labeling
 
-## Code layout
+Labeling is done via an interactive 3D GUI. You can drop bounding shapes (spheres, boxes, lassos) on the fused cloud, set crop limits, and adjust reflectivity ranges to build your dataset.
 
-```
-rocklabel/recording/   reading recordings, getting points and poses out
-rocklabel/geometry/    headless maths on a point cloud
-rocklabel/dataset/     labeled recording -> training data
-rocklabel/gui/         every Open3D window
-rocklabel/slam/        offline trajectory solver
-rocklabel/live/        the live sensor rig
-rocklabel/train/       training and evaluation (the only place torch is used)
-rocklabel/dashboard/   the web UI
-```
+![Labeling GUI - Height Mapping](https://github.com/user-attachments/assets/1360e401-3b8d-4711-9a56-4f3f02132882)
+![Labeling GUI - Relief Mapping](https://github.com/user-attachments/assets/9c7e4200-5ed2-48d6-bb65-4b58cd2fde4d)
 
-Full map, and the rules worth knowing before editing:
-[rocklabel/README.md](rocklabel/README.md).
+Evaluation is strictly **leave-one-run-out**. Consecutive frames barely move, so a random split would leak near-duplicates and inflate scores. Deployable models (ONNX + TorchScript + metadata) are saved to `training/exported/`.
 
-## Notes
+---
 
-- Evaluation is **leave-one-run-out**. Consecutive frames barely move, so a
-  random split leaks near-duplicates and inflates scores.
-- Deployable models (ONNX + TorchScript + metadata) live in
-  `training/exported/`.
-- Raw `.mcap` recordings, the point cache and per-fold checkpoints are
-  gitignored — a clone gets the code, the dataset manifests, the written-up
-  results and the exported models, not the 30 GB of sensor data or the 4 GB of
-  checkpoints.
+## Real-World Use & Data Collection
 
-## Real-World Use
-- Model eval was not just limited to software testing. I built a robot for a testbed to get
-  real-world data to help ensure the viability of the models.
-  <img width="560" height="995" alt="image" src="https://github.com/user-attachments/assets/e3097039-4095-45a4-ba5a-e7efd5903d1a" />
+Model evaluation was not limited to software testing with fabricated data. To simulate uneven lunar terrain, data was collected in various environments, including a sand volleyball court scattered with obstacle rocks.
 
-## Success So far
-- During real-world evals with the robot, I have seen a surprising amount of capability given
-  the extremely limited data the models have been trained on on so far. In the initial train run, there were
-  only 9 x ~45 second clips of manually collected lidar data with a comforter as the
-  ground (for simulated uneven terrain) and random everyday objects as obstacles.
-- Live Testing with the trained models showed a remarkably accurate segmentation of the
-  incoming lidar data.
-- Future testing must occur to see how well this may transfer to an environment with lunar
-  simulant and rocks,but the signs are promising so far.
+![Volleyball Court Environment](https://github.com/user-attachments/assets/1afc3d59-2e2d-439b-a0fd-fc814e3003f7)
 
- <img width="1769" height="995" alt="image" src="https://github.com/user-attachments/assets/0e885ee3-4977-44fb-993f-4dedea15eda3" />
+---
 
+## Hardware Testbed Build
+
+To validate the models outside of pure software evaluation, I designed and built a custom two-wheeled autonomous rover testbed from scratch. The chassis is constructed from slotted flat angle steel for a rigid frame. Electrically, it runs on a 3S LiPo power system and uses an ESP32 microcontroller paired with CAN bus transceivers and motor controllers to drive DC gear motors with encoders.
+
+This setup allows me to replicate closed-loop control and gather realistic, live LiDAR data on the fly to help ensure the viability of the models in the real world.
+
+![Robot Testbed](https://github.com/user-attachments/assets/91364a2a-3d37-4625-8a48-6180bfa6bc78)
+
+---
+
+## Success So Far
+
+During real-world evaluations with the robot, the models have shown remarkably accurate segmentation of the incoming LiDAR data. This capability is highly surprising given the extremely limited data the models have been trained on so far—the initial training run used only 12 short ~45-second clips of manually collected data featuring ~10 limestone rocks scattered throughout a sand court.
+
+**Live Inference Results:**
+
+![Live Replay Reflectivity Map](https://github.com/user-attachments/assets/32c68995-bc6e-4a9f-84b2-7c5b08155898)
+![Live Replay Binary Segmentation](https://github.com/user-attachments/assets/94ed6baf-2d46-4f1d-adda-6273b70748cb)
+
+Future testing must occur to see how well this transfers to a competition environment with actual lunar simulant, but early signs are very promising.
+
+---
 
 **[Full documentation → DOCS.md](DOCS.md)**
 
