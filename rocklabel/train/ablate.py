@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from ..dataset.neighborhoods import FEATURES, GEOMETRY
+from .metrics import normalized_pr_auc
 
 #: Where a sweep's per-fold run directories live: one folder per experiment,
 #: then per arm, then per fold. Renamed from the old ``training/ablate`` (and
@@ -42,8 +43,15 @@ DEFAULT_REPORT_ROOT = os.path.join("training", "reports")
 #: Metrics carried into every table, primary first. PR-AUC leads because the
 #: data is 5-31% rock depending on the run: accuracy is nearly free and ROC-AUC
 #: is optimistic when negatives dominate.
-METRICS = ("pr_auc", "roc_auc", "f1", "precision", "recall")
+#:
+#: ``norm_pr_auc`` rides alongside it as ``(AP - prevalence) / (1 - prevalence)``:
+#: raw PR-AUC starts at the fold's own rock share, so a per-fold table of raw
+#: numbers partly measures how many rocks a recording has rather than how hard
+#: it is. Raw stays the headline for continuity with the two finished sweeps.
+METRICS = ("pr_auc", "norm_pr_auc", "roc_auc", "f1", "precision", "recall")
 PRIMARY = "pr_auc"
+#: The same comparison with the fold's rock share divided out.
+NORMALIZED = "norm_pr_auc"
 
 
 @dataclass
@@ -187,6 +195,31 @@ FULLSWEEP_ARMS = [
     Arm("pointnet2seg-geom-s43", "pointnet2_seg", _GEOM, "Segmentation · shape only (seed 43)",
         "Seed repeat of the shape-only segmentation arm - the noise floor for "
         "the segmenter.", seed=43),
+    Arm("pointnet2seg-geom-e80", "pointnet2_seg", _GEOM,
+        "Segmentation · shape only (80 epochs)",
+        "The shape-only segmenter given 80 epochs instead of 30, with the "
+        "early-stopping patience raised to match. Nothing else changes - same "
+        "frames, same model, same seed - so the gap between this and the "
+        "30-epoch arm is purely what stopping too early cost. Not one of the "
+        "eleven 30-epoch folds early-stopped: every one ran to the cap, the "
+        "median best epoch was 28 of 30, and 7 of 11 peaked in the last five "
+        "epochs. That makes 0.767 a floor, not a ceiling.",
+        overrides={"epochs": 80, "patience": 30}),
+    Arm("pointnet2seg-geom-e80-fine", "pointnet2_seg", _GEOM,
+        "Segmentation · 80 epochs, finer levels",
+        "The 80-epoch segmenter looking at finer scales: the first of its three "
+        "levels now keeps 1,024 of the frame's points instead of 512 and pools "
+        "over a 0.10 m radius instead of 0.25 m. The labelled rocks measure "
+        "21-68 cm across, so the stock 0.25 m radius is a half-metre ball that "
+        "swallows a whole rock - the smallest scale the model looked at was "
+        "bigger than the thing it was hunting. Everything else matches the "
+        "80-epoch arm exactly, so the gap between them is the level geometry "
+        "and nothing else. This is the combination of the two changes that "
+        "measured as worth having, without the one that did not: more epochs "
+        "helped (+0.019, p=0.032), finer levels look like they help, and "
+        "keeping four times the frames did nothing at four times the cost.",
+        overrides={"epochs": 80, "patience": 30,
+                   "seg_npoints": [1024, 256, 64], "seg_radii": [0.1, 0.3, 0.8]}),
 ]
 
 #: Head-to-head questions for the full-sweep suite.
@@ -214,12 +247,94 @@ FULLSWEEP_CONTRASTS = [
      "Noise floor: the same PointNet++ setting, two different seeds."),
     ("pointnet2seg-geom", "pointnet2seg-geom-s43",
      "Noise floor: the same segmentation setting, two different seeds."),
+    ("pointnet2seg-geom", "pointnet2seg-geom-e80",
+     "Segmentation: does it just need longer than 30 epochs?"),
+    ("pointnet2seg-geom-e80", "pointnet2seg-geom-e80-fine",
+     "Segmentation at 80 epochs: do finer levels beat the stock geometry?"),
+    ("pointnet2seg-geom", "pointnet2seg-geom-e80-fine",
+     "Segmentation: longer training and finer levels together, against the "
+     "original 30-epoch arm."),
+]
+
+#: Common to every segmentation arm of the dense suite. Two changes from the
+#: fullsweep suite, both aimed at the same finding: not one of the eleven
+#: 30-epoch segmentation folds ever early-stopped, so the model was still
+#: improving when the run ended.
+#:
+#: * 60 epochs with a matching patience, on ~4x as many frames per epoch - about
+#:   twenty times the gradient steps the 30-epoch runs got.
+#: * A batch of 512, which the engine turns into 16 whole frames per step
+#:   instead of 8. Measured 1.5x faster per epoch at the same settings, which is
+#:   what pays for the extra epochs.
+_SEG_LONG = {"epochs": 60, "patience": 25, "batch": 512}
+
+#: Finer levels for the segmenter (section 3 of the training brief). The stock
+#: geometry throws three quarters of a frame away at the first level and its
+#: finest ball is 0.5 m across (a 0.25 m radius) against labelled rocks that
+#: measure 21-68 cm, mean 44 cm - so the smallest scale it ever looked at was
+#: already bigger than the thing it was hunting. This keeps 1,024 of 1,280
+#: points at the first level and starts at a 0.10 m radius, which is a patch of
+#: a rock's surface rather than the whole rock.
+_SEG_FINE = dict(_SEG_LONG, seg_npoints=[1024, 256, 64], seg_radii=[0.1, 0.3, 0.8])
+
+#: The dense-frame question. Runs on the ``full-sweep-dense`` cache, which is
+#: the same 0.05 s sensor rotations as ``full-sweep`` but keeps every frame
+#: instead of every fourth, at a 1,280-point budget instead of 2,048.
+#:
+#: It also has **twelve** folds, not eleven: VolleyBallTest13 has rocks, an
+#: arena and a height band, and had simply never been generated. Its scores are
+#: therefore not directly comparable fold-for-fold with the fullsweep suite -
+#: compare the eleven shared folds when putting the two side by side.
+SEGDENSE_ARMS = [
+    Arm("seg-long", "pointnet2_seg", _GEOM, "Segmentation · long, dense",
+        "The whole-frame segmenter on four times as many frames, trained for 60 "
+        "epochs instead of 30. The headline arm: the previous sweep's "
+        "segmentation folds all ran out of epochs before they stopped improving, "
+        "and the segmenter was learning from ~2,165 frames per fold where the "
+        "sliding-window classifier had 94,519 samples. Both of those are fixed "
+        "here, and they pull the same way.",
+        overrides=_SEG_LONG),
+    Arm("seg-fine", "pointnet2_seg", _GEOM, "Segmentation · long, dense, finer levels",
+        "Everything the long arm does, plus a finer look: the first level now "
+        "keeps 1,024 of the frame's points instead of 512 and pools over a 0.10 m "
+        "radius instead of 0.25 m. The labelled rocks measure 21-68 cm across "
+        "(mean 44 cm), so a 0.25 m radius is a half-metre ball - it swallows a "
+        "whole rock, and the smallest scale the model looked at was already "
+        "bigger than the thing it was hunting. A 0.10 m radius sees about half "
+        "a rock, so the first level can pick up surface curve rather than "
+        "treating a rock as one blob.",
+        overrides=_SEG_FINE),
+    Arm("pointnet-geom", "pointnet", _GEOM, "PointNet · shape only",
+        "The sliding-window classifier on the same dense frames, so the "
+        "segmenter has a partner trained on exactly the same data for the "
+        "matched-population comparison. PointNet rather than PointNet++ because "
+        "two sweeps found no difference between them and PointNet is three "
+        "times cheaper to train."),
+    Arm("seg-long-s43", "pointnet2_seg", _GEOM,
+        "Segmentation · long, dense (seed 43)",
+        "The long arm again with a different random seed, and nothing else "
+        "changed. Its gap from the long arm is what a difference of nothing "
+        "looks like at these settings - the older 0.0207 floor was measured at "
+        "30 epochs on a quarter of the frames and does not transfer.",
+        overrides=_SEG_LONG, seed=43),
+]
+
+SEGDENSE_CONTRASTS = [
+    ("seg-long", "seg-fine",
+     "Segmentation: does looking at finer scales beat the stock level geometry?"),
+    ("pointnet-geom", "seg-long",
+     "Does whole-frame segmentation beat the sliding-window classifier?"),
+    ("pointnet-geom", "seg-fine",
+     "Does the finer-level segmenter beat the sliding-window classifier?"),
+    ("seg-long", "seg-long-s43",
+     "Noise floor: the same long segmentation setting, two different seeds."),
 ]
 
 SUITES: dict[str, dict] = {
     "reflectivity": {
         "arms": REFLECTIVITY_ARMS,
         "contrasts": REFLECTIVITY_CONTRASTS,
+        "cache": "raw-burst",
         "title": "Does reflectivity help?",
         "blurb": "PointNet and PointNet++, with and without the reflectivity "
                  "channel, plus seed repeats that show how big a meaningless "
@@ -228,13 +343,62 @@ SUITES: dict[str, dict] = {
     "fullsweep": {
         "arms": FULLSWEEP_ARMS,
         "contrasts": FULLSWEEP_CONTRASTS,
+        "cache": "full-sweep",
         "title": "Full sensor sweeps, and per-point segmentation",
         "blurb": "Trained on frames built from whole 20 Hz sensor rotations "
                  "(~1250 points in the crop box) instead of single ~4 ms sensor "
                  "batches (~110 points). Adds the whole-frame segmenter, which "
                  "the batch-sized frames were too sparse to train at all.",
     },
+    "segdense": {
+        "arms": SEGDENSE_ARMS,
+        "contrasts": SEGDENSE_CONTRASTS,
+        "cache": "full-sweep-dense",
+        "title": "Feeding the whole-frame segmenter properly",
+        "blurb": "Every sensor rotation kept instead of every fourth (~4x the "
+                 "frames), 60 epochs instead of 30, and an arm that looks at "
+                 "10 cm scales instead of 25 cm. The previous sweep found the "
+                 "segmenter starved of frames and stopped before it had "
+                 "finished learning; this one removes both limits. Twelve "
+                 "folds, not eleven - VolleyBallTest13 joins as a fold here.",
+    },
 }
+
+
+def cache_profile(suite: str) -> str:
+    """Which generation profile's cache a suite is meant to train on.
+
+    A suite is a set of settings compared fold by fold, and that only means
+    anything if every arm saw the same frames. Two of the three suites here
+    were run on different caches, and pointing one at the other's would produce
+    a table of numbers that looks fine and answers nothing — so the pairing is
+    written down rather than remembered.
+    """
+    if suite not in SUITES:
+        raise SystemExit(f"unknown suite {suite!r} (pick from {sorted(SUITES)})")
+    return SUITES[suite]["cache"]
+
+
+def default_cache_dir(suite: str) -> str:
+    """Where that cache lives, under the standard one-cache-per-profile root."""
+    return os.path.join("training", "caches", cache_profile(suite))
+
+
+def check_cache_matches(suite: str, cache_dir: str) -> None:
+    """Fail loudly when a suite is pointed at a cache cut a different way."""
+    from ..profiles import identify as identify_profile
+    from .data import load_cache_meta
+
+    meta = load_cache_meta(cache_dir)
+    got = meta.get("profile") or identify_profile(meta.get("config_hash", "")) or "unknown"
+    want = cache_profile(suite)
+    if got != want:
+        raise SystemExit(
+            f"suite {suite!r} is defined against the {want!r} cache, but "
+            f"{cache_dir!r} holds {got!r} frames. Its arms would be trained on "
+            "differently-cut data and the paired comparison between them would "
+            f"mean nothing. Use --cache-dir {default_cache_dir(suite)}, or build "
+            f"it with: rocklabel-train cache --datasets datasets/{want}/*")
 
 
 def arms_of(suite: str) -> list[Arm]:
@@ -262,6 +426,7 @@ def run_suite(suite: str, cache_dir: str, root: str, only_arms: list[str] | None
     from .data import load_cache_meta, loro_folds
     from .engine import default_config, train_fold
 
+    check_cache_matches(suite, cache_dir)
     arms = arms_of(suite)
     if only_arms:
         unknown = [a for a in only_arms if a not in {x.name for x in arms}]
@@ -353,6 +518,12 @@ def _fold_metrics(root: str, suite: str, arm_name: str) -> dict[str, dict]:
         if os.path.exists(path):
             with open(path) as f:
                 m = json.load(f)
+            # Every fold trained before the normalized score existed still has
+            # the two numbers it is computed from, so backfill rather than
+            # leaving the old sweeps out of the new column.
+            m.setdefault("baseline_pr_auc", 0.0)
+            m.setdefault(NORMALIZED, normalized_pr_auc(m["pr_auc"],
+                                                       m["baseline_pr_auc"]))
             out[m.get("test_run", name.replace("loro_", "", 1))] = m
     return out
 
@@ -367,7 +538,11 @@ def collect(root: str, suite: str) -> dict:
         m = per_arm[a.name]
         row = {"arm": a.name, "label": a.label, "what": a.what, "model": a.model,
                "features": list(a.features), "seed": a.seed,
-               "overrides": a.overrides, "folds_done": len(m), "folds": list(m)}
+               "overrides": a.overrides, "folds_done": len(m), "folds": list(m),
+               # What a no-skill model would score on each fold, which is that
+               # fold's rock share. Carried so a reader can see how much of a
+               # raw per-fold number is just prevalence.
+               "prevalence": {f: float(m[f]["baseline_pr_auc"]) for f in sorted(m)}}
         for k in METRICS:
             vals = np.array([m[f][k] for f in sorted(m)], float)
             row[k] = {"mean": float(vals.mean()) if len(vals) else None,

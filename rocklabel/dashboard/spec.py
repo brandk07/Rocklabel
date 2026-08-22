@@ -216,6 +216,33 @@ def _gpu_fraction() -> Param:
     )
 
 
+def _seg_geometry() -> list[Param]:
+    """The whole-frame segmenter's three levels, which used to be unreachable.
+
+    Only the per-point segmenter reads these; the two sliding-window
+    classifiers ignore them. Left blank they keep the geometry every
+    segmentation run so far was trained with.
+    """
+    return [
+        Param("seg_npoints", "text", "Segmenter level sizes", arg="--seg-npoints",
+              repeat=True, nargs=True, advanced=True, placeholder="1024, 256, 64",
+              help="Segmenter only. How many points each of the three "
+                   "zoom-out levels keeps, biggest first. Blank means the "
+                   "built-in 512 128 32, which throws away three quarters of "
+                   "a frame at the very first level. Three numbers, "
+                   "descending, comma separated."),
+        Param("seg_radii", "text", "Segmenter level widths (m)", arg="--seg-radii",
+              repeat=True, nargs=True, advanced=True, placeholder="0.1, 0.3, 0.8",
+              help="Segmenter only. How wide a ball, in metres, each level "
+                   "looks at — finest first. Blank means the built-in 0.25 0.6 "
+                   "1.4. The labelled rocks measure 21-68 cm across (mean "
+                   "44 cm), so a 0.25 m radius is a half-metre ball that "
+                   "swallows a whole rock; smaller values "
+                   "let the first level see the surface of a rock rather than "
+                   "the rock as one blob. Three numbers, ascending, comma separated."),
+    ]
+
+
 def _cache_dir(advanced: bool = True) -> Param:
     return Param(
         "cache_dir", "dir", "Cache folder", arg="--cache-dir",
@@ -800,6 +827,49 @@ COMMANDS: list[Command] = [
                   help="Print the available frame indices instead of opening a window."),
         ],
     ),
+    Command(
+        id="coverage", bin="rocklabel", sub="coverage", stage="dataset",
+        icon="◎",
+        title="Rock coverage check",
+        tagline="Does the dataset actually contain every rock you labelled, and how far out?",
+        what="Reads a generated dataset and the labels it was built from, then "
+             "reports, per recording: how many of the labelled rocks produced "
+             "any training samples at all, how far from the sensor those "
+             "samples sit, and which labels are close enough together that "
+             "their samples cannot be told apart. Prints a table in seconds — "
+             "no model, no GPU.",
+        why="Two things go wrong silently here, and the dataset looks perfectly "
+            "healthy while they do. A correctly labelled rock can be too "
+            "sparse in every single frame to clear the 20-neighbour floor, so "
+            "it contributes nothing and nothing says so — twelve of the "
+            "sixty-three volleyball rocks did that on the old raw-burst "
+            "datasets. And the effective range can be far shorter than the "
+            "crop box: those same datasets cropped to 6 m but put 88% of their "
+            "rock samples inside 2 m, so the model was never shown a rock at "
+            "distance. Run this after every Generate.",
+        notes=[
+            "Rocks reported as producing no samples are labelled and invisible. "
+            "The usual fix is a denser generation profile, not a new label.",
+            "Range is measured from the sensor's own position in the frame the "
+            "sample came from, not from the world origin — the rig walks.",
+            "Labels sitting closer together than their own radii are flagged: "
+            "the per-rock counts split one pile between them, so a low count "
+            "on one of a touching pair does not mean that rock was missed.",
+        ],
+        params=[
+            Param("dataset_dir", "dir", "Dataset", source="datasets", required=True,
+                  help="A directory written by Generate."),
+            Param("labels_dir", "dir", "Labels folder", arg="--labels-dir",
+                  advanced=True,
+                  help="Only needed if the label files have moved since the "
+                       "dataset was generated — the manifest records where they "
+                       "were, and that is used first."),
+            Param("as_json", "outpath", "Also write JSON to", arg="--json",
+                  advanced=True,
+                  help="Writes the full per-rock sample counts to a file, which "
+                       "the printed table summarizes."),
+        ],
+    ),
     # ---------------------------------------------------------------- train
     Command(
         id="train-cache", bin="rocklabel-train", sub="cache", stage="train",
@@ -890,6 +960,7 @@ COMMANDS: list[Command] = [
                        "because the data is already canonicalized."),
             Param("no_augment", "bool", "Disable augmentation", arg="--no-augment",
                   advanced=True),
+            *_seg_geometry(),
             Param("seed", "int", "Seed", arg="--seed", default=42, advanced=True),
             _cache_dir(),
             _device(),
@@ -924,6 +995,7 @@ COMMANDS: list[Command] = [
             Param("lr", "float", "Learning rate", arg="--lr", default=0.001, step=0.0001),
             Param("patience", "int", "Early-stop patience", arg="--patience",
                   default=TRAIN_PATIENCE, min=1),
+            *_seg_geometry(),
             _cache_dir(),
             _device(),
             _gpu_fraction(),
@@ -961,9 +1033,15 @@ COMMANDS: list[Command] = [
         ],
         params=[
             Param("suite", "enum", "Question to settle", arg="--suite",
-                  choices=sorted(ABLATION_SUITES), default="reflectivity",
-                  help="Which set of settings to run. 'reflectivity' asks whether "
-                       "the LiDAR brightness channel earns its place next to shape."),
+                  choices=sorted(ABLATION_SUITES), default="segdense",
+                  help="Which set of settings to run. "
+                       + " ".join(f"'{k}': {v['title']} (trains on the "
+                                  f"{v['cache']} cache)."
+                                  for k, v in ABLATION_SUITES.items())
+                       + " Leave the Cache folder blank and each question picks "
+                         "its own cache — the settings inside one question are "
+                         "only comparable if every one of them saw the same "
+                         "frames."),
             Param("arms", "text", "Only these settings", arg="--arms", repeat=True,
                   nargs=True, advanced=True,
                   placeholder="pointnet-geom, pointnet-refl",
@@ -983,6 +1061,7 @@ COMMANDS: list[Command] = [
                   help="Stop a fold after this many epochs with no validation "
                        "gain. Keep it long enough for the learning-rate schedule "
                        "to finish, or no fold ever sees its fine-tuning phase."),
+            *_seg_geometry(),
             Param("ablate_root", "outdir", "Runs folder", arg="--ablate-root",
                   default=EXPERIMENTS_ROOT, advanced=True,
                   help="Where each setting's trained folds are written, as "

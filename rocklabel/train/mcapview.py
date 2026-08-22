@@ -114,7 +114,9 @@ def run_mcap_replay(mcap_path: str, checkpoint: str, cfg: dict,
     ck = torch.load(checkpoint, map_location="cpu", weights_only=False)
     tcfg, gcfg = ck["config"], ck["generator"]
     model = build_model(tcfg["model"], tnet=tcfg["tnet"], dropout=tcfg.get("dropout"),
-                        features=tcfg.get("features"))
+                        features=tcfg.get("features"),
+                        seg_npoints=tcfg.get("seg_npoints"),
+                        seg_radii=tcfg.get("seg_radii"))
     model.load_state_dict(ck["model"])
     print(f"model: {tcfg['model']} (trained on {', '.join(tcfg['train_runs'])}; "
           f"held out {tcfg['test_run']}), threshold {ck.get('threshold', 0.5):.2f}")

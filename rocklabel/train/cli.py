@@ -41,6 +41,7 @@ DEFAULT_RUNS_ROOT = os.path.join(ABLATE_ROOT, "compare")
 ABLATE_PASSTHROUGH = ("epochs", "batch", "lr", "weight_decay", "patience",
                       "val_frac", "gap_frames", "gap_seconds", "augment",
                       "aug_intensity_gain", "aug_intensity_shift", "aug_thin_min",
+                      "seg_npoints", "seg_radii",
                       "dropout", "tnet", "seed", "device")
 
 
@@ -60,6 +61,8 @@ def _settings_match(run_dir: str, cfg: dict) -> bool:
     with open(path) as f:
         old = json.load(f)
     old.setdefault("features", list(FEATURES))  # predates the channel setting
+    for key in ("seg_npoints", "seg_radii"):     # predates the level geometry
+        old.setdefault(key, TRAIN_DEFAULTS[key])
     return old == cfg
 
 
@@ -117,6 +120,24 @@ def _features_arg(p: argparse.ArgumentParser) -> None:
                         "pointnet2 needs dx dy dz (it groups by position).")
 
 
+def _suite_cache(args) -> str:
+    """The cache a suite command should read.
+
+    Every suite names the generation profile it is defined against, and each
+    profile has its own cache, so leaving --cache-dir alone picks the right one
+    instead of silently training a new suite on the old suite's frames. An
+    explicit --cache-dir always wins; it is checked against the suite either way.
+    """
+    from .ablate import default_cache_dir as suite_cache_dir
+
+    chosen = args.cache_dir
+    if chosen == DEFAULT_CACHE:                    # left at the module default
+        chosen = suite_cache_dir(args.suite)
+        if chosen != DEFAULT_CACHE:
+            print(f"suite {args.suite!r} trains on {chosen} (its own cache)")
+    return chosen
+
+
 def _results_dir(args) -> str:
     """Explicit --results-dir wins; otherwise tag the default by channel set."""
     if args.results_dir:
@@ -154,6 +175,15 @@ def _add_train_args(p: argparse.ArgumentParser) -> None:
     opt("--aug-thin-min", type=float,
         help="smallest fraction of a neighborhood's real points kept by the "
              "density augmentation (1.0 = off)")
+    opt("--seg-npoints", type=int, nargs=3, metavar=("N1", "N2", "N3"),
+        help="segmentation only: how many centroids each of the three "
+             "downsampling levels keeps, coarsest last. The default throws "
+             "three quarters of the frame away at the first level")
+    opt("--seg-radii", type=float, nargs=3, metavar=("R1", "R2", "R3"),
+        help="segmentation only: how wide a ball (metres) each level pools "
+             "over, finest first. The default's finest scale is 0.25 m, which "
+             "is the size of a whole rock - smaller values let the first level "
+             "see a rock's surface rather than the rock as one blob")
     p.add_argument("--dropout", type=float, default=None)
     p.add_argument("--tnet", action="store_true",
                    help="enable PointNet input+feature T-Nets (data is already "
@@ -177,6 +207,7 @@ def _train_cfg(args, model: str, train_runs: list[str], test_run: str) -> dict:
         aug_intensity_gain=args.aug_intensity_gain,
         aug_intensity_shift=args.aug_intensity_shift,
         aug_thin_min=args.aug_thin_min,
+        seg_npoints=args.seg_npoints, seg_radii=args.seg_radii,
         seed=args.seed, device=args.device,
     )
 
@@ -365,7 +396,7 @@ def main(argv: list[str] | None = None) -> int:
         from .ablate_report import render_ablation
         if not args.report_only:
             extra = {k: getattr(args, k) for k in ABLATE_PASSTHROUGH}
-            run_suite(args.suite, args.cache_dir, args.ablate_root, args.arms,
+            run_suite(args.suite, _suite_cache(args), args.ablate_root, args.arms,
                       extra, fresh=args.fresh)
         out = args.results_dir or os.path.join(REPORT_ROOT, args.suite)
         render_ablation(args.ablate_root, args.suite, out)
@@ -374,7 +405,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "matched":
         from .matched import render_matched
         out = args.out or os.path.join(REPORT_ROOT, args.suite, "matched")
-        render_matched(args.cache_dir, args.ablate_root, args.suite, out,
+        render_matched(_suite_cache(args), args.ablate_root, args.suite, out,
                        radius=args.radius, aggregation=args.aggregation)
         return 0
 

@@ -1,0 +1,386 @@
+{
+  "suite": "segdense",
+  "title": "Feeding the whole-frame segmenter properly",
+  "blurb": "Every sensor rotation kept instead of every fourth (~4x the frames), 60 epochs instead of 30, and an arm that looks at 10 cm scales instead of 25 cm. The previous sweep found the segmenter starved of frames and stopped before it had finished learning; this one removes both limits. Twelve folds, not eleven - VolleyBallTest13 joins as a fold here.",
+  "folds": [
+    "VolleyBallTest10.reslam",
+    "VolleyBallTest11.reslam",
+    "VolleyBallTest12.reslam",
+    "VolleyBallTest13.reslam",
+    "VolleyBallTest2.reslam",
+    "VolleyBallTest3.reslam",
+    "VolleyBallTest4.reslam",
+    "VolleyBallTest5.reslam",
+    "VolleyBallTest6.reslam",
+    "VolleyBallTest7.reslam",
+    "VolleyBallTest8.reslam",
+    "VolleyBallTest9.reslam"
+  ],
+  "arms": [
+    {
+      "arm": "seg-long",
+      "label": "Segmentation \u00b7 long, dense",
+      "what": "The whole-frame segmenter on four times as many frames, trained for 60 epochs instead of 30. The headline arm: the previous sweep's segmentation folds all ran out of epochs before they stopped improving, and the segmenter was learning from ~2,165 frames per fold where the sliding-window classifier had 94,519 samples. Both of those are fixed here, and they pull the same way.",
+      "model": "pointnet2_seg",
+      "features": [
+        "dx",
+        "dy",
+        "dz"
+      ],
+      "seed": null,
+      "overrides": {
+        "epochs": 60,
+        "patience": 25,
+        "batch": 512
+      },
+      "folds_done": 12,
+      "folds": [
+        "VolleyBallTest10.reslam",
+        "VolleyBallTest11.reslam",
+        "VolleyBallTest12.reslam",
+        "VolleyBallTest13.reslam",
+        "VolleyBallTest2.reslam",
+        "VolleyBallTest3.reslam",
+        "VolleyBallTest4.reslam",
+        "VolleyBallTest5.reslam",
+        "VolleyBallTest6.reslam",
+        "VolleyBallTest7.reslam",
+        "VolleyBallTest8.reslam",
+        "VolleyBallTest9.reslam"
+      ],
+      "prevalence": {
+        "VolleyBallTest10.reslam": 0.007531902644961141,
+        "VolleyBallTest11.reslam": 0.01869089296984854,
+        "VolleyBallTest12.reslam": 0.018135876018766314,
+        "VolleyBallTest13.reslam": 0.013867333481141844,
+        "VolleyBallTest2.reslam": 0.010836721223874751,
+        "VolleyBallTest3.reslam": 0.0123615229160213,
+        "VolleyBallTest4.reslam": 0.01296551842360141,
+        "VolleyBallTest5.reslam": 0.0073132390834156034,
+        "VolleyBallTest6.reslam": 0.005245982252620756,
+        "VolleyBallTest7.reslam": 0.008542638684091147,
+        "VolleyBallTest8.reslam": 0.007035821516084069,
+        "VolleyBallTest9.reslam": 0.01604528393477865
+      },
+      "pr_auc": {
+        "mean": 0.36537907390969043,
+        "std": 0.1676015617146283,
+        "per_fold": {
+          "VolleyBallTest10.reslam": 0.3903211239237989,
+          "VolleyBallTest11.reslam": 0.5484284668614143,
+          "VolleyBallTest12.reslam": 0.25263864756517557,
+          "VolleyBallTest13.reslam": 0.1330531376753059,
+          "VolleyBallTest2.reslam": 0.5106407957371408,
+          "VolleyBallTest3.reslam": 0.6236058416942827,
+          "VolleyBallTest4.reslam": 0.14609295613833415,
+          "VolleyBallTest5.reslam": 0.17812830493221443,
+          "VolleyBallTest6.reslam": 0.30907023229259606,
+          "VolleyBallTest7.reslam": 0.3683188037657866,
+          "VolleyBallTest8.reslam": 0.37452415540264605,
+          "VolleyBallTest9.reslam": 0.5497264209275893
+        }
+      },
+      "norm_pr_auc": {
+        "mean": 0.35809337662026675,
+        "std": 0.169304658555939,
+        "per_fold": {
+          "VolleyBallTest10.reslam": 0.38569423269018327,
+          "VolleyBallTest11.reslam": 0.5398274306194625,
+          "VolleyBallTest12.reslam": 0.2388342397067675,
+          "VolleyBallTest13.reslam": 0.12086183557320057,
+          "VolleyBallTest2.reslam": 0.5052796492118724,
+          "VolleyBallTest3.reslam": 0.6188948010439729,
+          "VolleyBallTest4.reslam": 0.13487617727611106,
+          "VolleyBallTest5.reslam": 0.1720734803505176,
+          "VolleyBallTest6.reslam": 0.30542651210194194,
+          "VolleyBallTest7.reslam": 0.36287608435745894,
+          "VolleyBallTest8.reslam": 0.37009223680924014,
+          "VolleyBallTest9.reslam": 0.5423838397024723
+        }
+      },
+      "roc_auc": {
+        "mean": 0.8519262365448125,
+        "std": 0.10047479923067006,
+        "per_fold": {
+          "VolleyBallTest10.reslam": 0.9210007514793971,
+          "VolleyBallTest11.reslam": 0.8967019422053507,
+          "VolleyBallTest12.reslam": 0.6054749818508197,
+          "VolleyBallTest13.reslam": 0.7462886035100436,
+          "VolleyBallTest2.reslam": 0.8711784290587372,
+          "VolleyBallTest3.reslam": 0.9327516675465193,
+          "VolleyBallTest4.reslam": 0.7637257280476555,
+          "VolleyBallTest5.reslam": 0.8381701150275793,
+          "VolleyBallTest6.reslam": 0.8870163656653348,
+          "VolleyBallTest7.reslam": 0.8884909801888148,
+          "VolleyBallTest8.reslam": 0.9554351125846103,
+          "VolleyBallTest9.reslam": 0.9168801613728881
+        }
+      },
+      "f1": {
+        "mean": 0.39300211922310907,
+        "std": 0.13658241102585508,
+        "per_fold": {
+          "VolleyBallTest10.reslam": 0.41565302008757904,
+          "VolleyBallTest11.reslam": 0.5036399316325886,
+          "VolleyBallTest12.reslam": 0.3135615364515287,
+          "VolleyBallTest13.reslam": 0.22674028587646422,
+          "VolleyBallTest2.reslam": 0.5371034676795386,
+          "VolleyBallTest3.reslam": 0.6118050920186898,
+          "VolleyBallTest4.reslam": 0.18664699372925117,
+          "VolleyBallTest5.reslam": 0.23158292406497924,
+          "VolleyBallTest6.reslam": 0.3502396166134185,
+          "VolleyBallTest7.reslam": 0.4289617486338798,
+          "VolleyBallTest8.reslam": 0.38294924490832677,
+          "VolleyBallTest9.reslam": 0.527141568981064
+        }
+      },
+      "precision": {
+        "mean": 0.5414545145060629,
+        "std": 0.21392195797946778,
+        "per_fold": {
+          "VolleyBallTest10.reslam": 0.40835837202950015,
+          "VolleyBallTest11.reslam": 0.8372974110713534,
+          "VolleyBallTest12.reslam": 0.6238303181534622,
+          "VolleyBallTest13.reslam": 0.30324361628709456,
+          "VolleyBallTest2.reslam": 0.8219590958019376,
+          "VolleyBallTest3.reslam": 0.763445978105664,
+          "VolleyBallTest4.reslam": 0.46,
+          "VolleyBallTest5.reslam": 0.351894374282434,
+          "VolleyBallTest6.reslam": 0.32957534761367907,
+          "VolleyBallTest7.reslam": 0.4953306410903584,
+          "VolleyBallTest8.reslam": 0.309518477043673,
+          "VolleyBallTest9.reslam": 0.7930005425935974
+        }
+      },
+      "recall": {
+        "mean": 0.3351293711189256,
+        "std": 0.13192910491065024,
+        "per_fold": {
+          "VolleyBallTest10.reslam": 0.42321302193913657,
+          "VolleyBallTest11.reslam": 0.3601303639326453,
+          "VolleyBallTest12.reslam": 0.20940946530783192,
+          "VolleyBallTest13.reslam": 0.18106148013845394,
+          "VolleyBallTest2.reslam": 0.39887170915169246,
+          "VolleyBallTest3.reslam": 0.5104216388225935,
+          "VolleyBallTest4.reslam": 0.11707542804257288,
+          "VolleyBallTest5.reslam": 0.17257882882882883,
+          "VolleyBallTest6.reslam": 0.3736685129953132,
+          "VolleyBallTest7.reslam": 0.37827679259830377,
+          "VolleyBallTest8.reslam": 0.5020586098328893,
+          "VolleyBallTest9.reslam": 0.39478660183684494
+        }
+      }
+    },
+    {
+      "arm": "seg-fine",
+      "label": "Segmentation \u00b7 long, dense, finer levels",
+      "what": "Everything the long arm does, plus a finer look: the first level now keeps 1,024 of the frame's points instead of 512 and pools over a 0.10 m radius instead of 0.25 m. The labelled rocks measure 21-68 cm across (mean 44 cm), so a 0.25 m radius is a half-metre ball - it swallows a whole rock, and the smallest scale the model looked at was already bigger than the thing it was hunting. A 0.10 m radius sees about half a rock, so the first level can pick up surface curve rather than treating a rock as one blob.",
+      "model": "pointnet2_seg",
+      "features": [
+        "dx",
+        "dy",
+        "dz"
+      ],
+      "seed": null,
+      "overrides": {
+        "epochs": 60,
+        "patience": 25,
+        "batch": 512,
+        "seg_npoints": [
+          1024,
+          256,
+          64
+        ],
+        "seg_radii": [
+          0.1,
+          0.3,
+          0.8
+        ]
+      },
+      "folds_done": 0,
+      "folds": [],
+      "prevalence": {},
+      "pr_auc": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "norm_pr_auc": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "roc_auc": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "f1": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "precision": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "recall": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      }
+    },
+    {
+      "arm": "pointnet-geom",
+      "label": "PointNet \u00b7 shape only",
+      "what": "The sliding-window classifier on the same dense frames, so the segmenter has a partner trained on exactly the same data for the matched-population comparison. PointNet rather than PointNet++ because two sweeps found no difference between them and PointNet is three times cheaper to train.",
+      "model": "pointnet",
+      "features": [
+        "dx",
+        "dy",
+        "dz"
+      ],
+      "seed": null,
+      "overrides": {},
+      "folds_done": 0,
+      "folds": [],
+      "prevalence": {},
+      "pr_auc": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "norm_pr_auc": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "roc_auc": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "f1": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "precision": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "recall": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      }
+    },
+    {
+      "arm": "seg-long-s43",
+      "label": "Segmentation \u00b7 long, dense (seed 43)",
+      "what": "The long arm again with a different random seed, and nothing else changed. Its gap from the long arm is what a difference of nothing looks like at these settings - the older 0.0207 floor was measured at 30 epochs on a quarter of the frames and does not transfer.",
+      "model": "pointnet2_seg",
+      "features": [
+        "dx",
+        "dy",
+        "dz"
+      ],
+      "seed": 43,
+      "overrides": {
+        "epochs": 60,
+        "patience": 25,
+        "batch": 512
+      },
+      "folds_done": 0,
+      "folds": [],
+      "prevalence": {},
+      "pr_auc": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "norm_pr_auc": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "roc_auc": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "f1": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "precision": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "recall": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      }
+    }
+  ],
+  "contrasts": [
+    {
+      "baseline": "seg-long",
+      "variant": "seg-fine",
+      "question": "Segmentation: does looking at finer scales beat the stock level geometry?",
+      "n_folds": 0,
+      "folds": [],
+      "pr_auc": null,
+      "norm_pr_auc": null,
+      "roc_auc": null,
+      "f1": null,
+      "precision": null,
+      "recall": null
+    },
+    {
+      "baseline": "pointnet-geom",
+      "variant": "seg-long",
+      "question": "Does whole-frame segmentation beat the sliding-window classifier?",
+      "n_folds": 0,
+      "folds": [],
+      "pr_auc": null,
+      "norm_pr_auc": null,
+      "roc_auc": null,
+      "f1": null,
+      "precision": null,
+      "recall": null
+    },
+    {
+      "baseline": "pointnet-geom",
+      "variant": "seg-fine",
+      "question": "Does the finer-level segmenter beat the sliding-window classifier?",
+      "n_folds": 0,
+      "folds": [],
+      "pr_auc": null,
+      "norm_pr_auc": null,
+      "roc_auc": null,
+      "f1": null,
+      "precision": null,
+      "recall": null
+    },
+    {
+      "baseline": "seg-long",
+      "variant": "seg-long-s43",
+      "question": "Noise floor: the same long segmentation setting, two different seeds.",
+      "n_folds": 0,
+      "folds": [],
+      "pr_auc": null,
+      "norm_pr_auc": null,
+      "roc_auc": null,
+      "f1": null,
+      "precision": null,
+      "recall": null
+    }
+  ],
+  "noise_floor_pr_auc": null
+}

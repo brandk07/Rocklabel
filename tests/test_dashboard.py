@@ -1090,3 +1090,27 @@ def test_the_catalog_quotes_the_real_default_paths():
 def test_the_profile_list_reaches_the_browser(project):
     names = [p["name"] for p in inventory.snapshot(str(project))["profiles"]]
     assert "full-sweep" in names and "raw-burst" in names
+
+
+def test_the_segmenter_level_controls_reach_the_cli_as_three_numbers():
+    """The form takes one text box per level setting and the CLI wants three
+    separate values, so the two have to agree on the split."""
+    from rocklabel.train.cli import build_parser
+
+    argv = spec.build_argv(spec.COMMANDS_BY_ID["train-ablate"],
+                           {"suite": "segdense", "seg_npoints": "1024, 256, 64",
+                            "seg_radii": "0.1, 0.3, 0.8"})
+    args = build_parser().parse_args(argv[1:])
+    assert args.seg_npoints == [1024, 256, 64]
+    assert args.seg_radii == [0.1, 0.3, 0.8]
+
+
+def test_every_ablation_suite_names_the_cache_the_form_describes():
+    """The suite picker's help promises each question trains on its own cache;
+    that only holds if every suite declares one."""
+    from rocklabel.train.ablate import SUITES
+
+    suite = next(p for p in spec.COMMANDS_BY_ID["train-ablate"].params
+                 if p.name == "suite")
+    for name, declared in SUITES.items():
+        assert declared["cache"] in suite.help, name

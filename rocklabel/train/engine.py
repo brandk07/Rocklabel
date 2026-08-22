@@ -197,6 +197,12 @@ def train_fold(cfg: dict, run_dir: str, resume: bool = True) -> dict:
         # channel. Filling the default in keeps them resumable instead of
         # reading as a settings change nobody made.
         old.setdefault("features", list(FEATURES))
+        # Same for the segmenter's level geometry: runs predating the setting
+        # used what was hardcoded in the model, which is what the default still
+        # is, so filling it in keeps them resumable rather than reading as a
+        # settings change nobody made.
+        for key in ("seg_npoints", "seg_radii"):
+            old.setdefault(key, TRAIN_DEFAULTS[key])
         if old != cfg:
             raise SystemExit(f"{run_dir} was created with different settings; "
                              "pick a new --run-dir or delete it")
@@ -239,8 +245,12 @@ def train_fold(cfg: dict, run_dir: str, resume: bool = True) -> dict:
           f"val {len(va)}, test run {cfg['test_run']}, device {device}")
 
     model = build_model(cfg["model"], tnet=cfg["tnet"], dropout=cfg.get("dropout"),
-                        features=cfg.get("features")).to(device)
+                        features=cfg.get("features"),
+                        seg_npoints=cfg.get("seg_npoints"),
+                        seg_radii=cfg.get("seg_radii")).to(device)
     print(f"  input channels: {', '.join(model.features)}")
+    if task == "segment":
+        print(f"  levels: {model.npoints} centroids at {model.radii} m")
     opt = torch.optim.AdamW(model.parameters(), lr=cfg["lr"], weight_decay=cfg["weight_decay"])
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=cfg["epochs"])
     loss_fn = torch.nn.BCEWithLogitsLoss(pos_weight=torch.tensor(n_neg / max(n_pos, 1.0),

@@ -185,6 +185,7 @@ rocklabel generate recordings/volleyball/reslam/RUN.reslam.mcap --profile full-s
 | profile | what it does |
 |---|---|
 | `full-sweep` | **The default.** One whole 20 Hz sensor rotation per frame (~1,250 points in the crop box). Measured worth +0.040–0.055 PR-AUC over raw bursts, and the only profile dense enough to train the per-point segmenter at all. |
+| `full-sweep-dense` | Same rotations, but every one is kept instead of every fourth — about four times the frames, at a 1,280-point-per-frame budget instead of 2,048. For the per-point segmenter, which learns from whole frames and so is short of frames, not of points. |
 | `double-sweep` | Two rotations per frame (~2,500 points), frame stride halved to keep the frame count. Untested. |
 | `raw-burst` | One raw ~4 ms sensor batch per frame (~110 points). What the first eleven volleyball datasets used. Kept only to reproduce an old result. |
 | `fused` | Full sweep with levelling off — the Comforter recordings only. |
@@ -653,6 +654,39 @@ the fit is not re-run: the label file's recorded angle is replayed verbatim,
 so `generate`'s frame matches `label`'s exactly even though the two use
 different strides. A frame mismatch is an error, not a warning.
 
+### 4b. `rocklabel coverage` — is every rock you labelled actually in there?
+
+```bash
+rocklabel coverage datasets/full-sweep/volleyball
+```
+
+Two things go wrong here silently, and the dataset looks perfectly healthy
+while they do. **Run this after every `generate`.**
+
+**A labelled rock can produce no training samples at all.** A candidate ball
+becomes a sample only if it holds `min_neighbors` (20) returns inside
+`neighborhood_radius_m`. On sparse frames a real, correctly-labelled rock can
+fall under that floor in *every* frame and contribute nothing — 12 of the 63
+labelled volleyball rocks did exactly that on the raw-burst datasets, and
+nothing said so. The fix is almost always a denser generation profile, not a
+new label.
+
+**The effective range can be far shorter than the crop box.** The same floor
+bites hardest far from the sensor. Those raw-burst datasets cropped 6 m forward
+but put 88% of their rock samples inside 2 m, so the model was never taught
+what a rock looks like at distance. The command prints the median, 95th
+percentile and furthest rock-sample range per recording, measured from the
+sensor's own position in the frame each sample came from — the rig walks, so
+distance from the world origin would be a different question.
+
+It also flags **labels sitting closer together than their own radii**. Their
+samples cannot be told apart by the nearest-label rule, so a low count on one
+of a touching pair is not evidence that rock was missed. VolleyBallTest4 has
+five such pairs, more than any other recording.
+
+`--json PATH` writes the full per-rock sample counts. There is a
+**"Rock coverage check" card on the dashboard's Dataset stage**.
+
 ### 5. `rocklabel preview` — skip through what was actually written
 
 ```bash
@@ -1065,6 +1099,17 @@ compares them **paired by fold**. Two rules make it different from `compare`:
   win/loss count, and an exact Wilcoxon signed-rank p-value (written out in
   numpy — scipy is not a dependency).
 
+Each suite names the generation profile it was defined against, and each
+profile has its own cache, so leaving `--cache-dir` alone picks the right one.
+Point a suite at another cache and the sweep refuses to start: the arms inside
+a suite are only comparable if every one of them saw the same frames.
+
+| suite | asks | trains on |
+|---|---|---|
+| `reflectivity` | Does the brightness channel earn its place beside shape? | `raw-burst` cache |
+| `fullsweep` | Do whole sensor rotations beat raw bursts, and is per-point segmentation viable? | `full-sweep` cache |
+| `segdense` | Does the whole-frame segmenter improve when given four times the frames, twice the epochs, and a finer look? | `full-sweep-dense` cache, **12 folds** (VolleyBallTest13 joins as a fold here) |
+
 The built-in `reflectivity` suite covers PointNet and PointNet++ with and
 without the intensity channel, both models with the intensity augmentation
 switched off (the default jitter is deliberately wider than the rock/clear
@@ -1079,6 +1124,58 @@ effect against it.
 Both commands are on the dashboard's Train stage ("Reflectivity check" and
 "Ablation sweep"), and the sweep's progress, per-arm ranking and figures appear
 on the Models page while it runs.
+
+#### Reading a per-fold table: raw and normalized PR-AUC
+
+Every report prints per-fold scores **twice**. Raw PR-AUC starts at the fold's
+own rock share, and rock share runs from 6.3% to 31.6% across the volleyball
+recordings — a five-fold spread — so a raw per-fold table partly measures how
+many rocks a recording has rather than how hard it is. That has produced two
+wrong conclusions on this project already.
+
+The second table divides it out: `(PR-AUC - rock share) / (1 - rock share)`,
+where guessing scores 0 and a perfect model scores 1. Read that one when
+asking *which recording is hard*. Raw is kept beside it for continuity with
+the two finished sweeps. Neither is comparable **across tasks**: normalizing
+fixes the floor, not the unit, so a segmenter graded per point and a
+classifier graded per candidate ball still need `matched`, below, to be put
+side by side.
+
+#### `rocklabel-train matched` — comparing a segmenter to a classifier
+
+```bash
+rocklabel-train matched --suite fullsweep
+```
+
+The two tasks are graded in different units. A classifier is scored on
+candidate 0.5 m balls, about 19% of which sit on a rock; a segmenter is scored
+on individual points, about 1% of which do. PR-AUC moves with that share, so
+their raw numbers are simply not the same measurement — the ablation report
+shows the segmenter losing by 0.37, which is entirely the prevalence gap and
+not a fact about either model.
+
+`matched` re-scores both on **one shared population**: every candidate centre,
+with its own rock/clear label. The classifier gives each centre a probability
+directly; the segmenter gives one by pooling its per-point probabilities within
+`--radius` (default 0.15 m) of that centre, using `--aggregation`
+(`max`/`mean`/`nearest`). Same centres, same labels, same prevalence — so a
+difference is a difference in the models. Writes
+`training/reports/<suite>/matched/`, and it is a card on the dashboard's Train
+stage.
+
+On the full-sweep data this is what says segmentation **ties** the
+sliding-window classifier (+0.003 PR-AUC, p = 0.97) rather than losing badly,
+and that it is much steadier on the hardest recordings.
+
+#### The segmenter's three levels
+
+`--seg-npoints` and `--seg-radii` size the per-point segmenter's three
+downsampling levels: how many points each keeps, and how wide a ball each pools
+over. They used to be written into the model class and were unreachable without
+editing it. The built-in `512 128 32` at `0.25 0.6 1.4` m throws three quarters
+of a frame away at the very first level, and its finest ball is about the size
+of a whole rock. Leaving both blank keeps exactly that, so checkpoints trained
+before the setting existed still load.
 
 Note: `pointnet2_seg` (per-point segmentation) needs format C, which requires
 frames holding at least `segmentation_min_points` (512) points. Recordings

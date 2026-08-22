@@ -44,6 +44,14 @@ TRAIN_DEFAULTS: dict = {
     "aug_intensity_gain": 0.25,
     "aug_intensity_shift": 0.10,
     "aug_thin_min": 0.5,
+    # Segmentation only: how many centroids each of the three downsampling
+    # levels keeps, and how wide a ball it pools over (metres). These used to be
+    # written into the model class, which made them unreachable without editing
+    # it - and the built-in finest radius, 0.25 m, is about the size of a whole
+    # rock, so the smallest scale the model looked at was already bigger than
+    # the object it was hunting. Ignored by the two classifiers.
+    "seg_npoints": [512, 128, 32],
+    "seg_radii": [0.25, 0.6, 1.4],
     "seed": 42,
     "device": None,
 }

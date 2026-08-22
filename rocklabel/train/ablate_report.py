@@ -16,7 +16,7 @@ import os
 
 import numpy as np
 
-from .ablate import METRICS, PRIMARY, SUITES, collect
+from .ablate import METRICS, NORMALIZED, PRIMARY, SUITES, collect
 from .plots import BASE, GRID, INK, MUTED, SERIES, _save
 
 #: Contrasts whose baseline and variant are the same setting under two seeds.
@@ -113,6 +113,13 @@ def fig_per_fold_lines(data: dict, out_path: str, arms: list[str] | None = None)
 
     wanted = arms or ["pointnet-geom", "pointnet-refl", "pointnet2-geom", "pointnet2-refl"]
     rows = [a for a in data["arms"] if a["arm"] in wanted and a["folds_done"]]
+    # A suite whose arms are named something else entirely (the dense suite has
+    # no "pointnet2-refl") would otherwise draw nothing at all. Fall back to the
+    # four best-scoring arms, which is what the hardcoded list was picking
+    # anyway back when every suite shared those names.
+    if not rows:
+        done = [a for a in data["arms"] if a["folds_done"]]
+        rows = sorted(done, key=lambda a: -(a[PRIMARY]["mean"] or 0))[:4]
     if not rows:
         return
     folds = sorted({f for a in rows for f in a[PRIMARY]["per_fold"]})
@@ -181,8 +188,16 @@ def write_markdown(data: dict, path: str) -> None:
               "that is noise, whatever the average says.", ""]
 
     L += ["## Every setting", "",
-          "| setting | folds | PR-AUC | ROC-AUC | F1 | what it is |",
-          "|---|---|---|---|---|---|"]
+          "**Normalized PR-AUC** is the same score with the fold's own rock "
+          "share divided out: `(PR-AUC - rock share) / (1 - rock share)`. "
+          "Guessing scores 0 and a perfect model scores 1, so recordings with "
+          "very different numbers of rocks can be put on one line. Raw PR-AUC "
+          "is kept beside it for continuity with the earlier sweeps. The two "
+          "are never comparable *across* tasks — a segmenter graded per point "
+          "and a classifier graded per candidate ball are still two different "
+          "measurements after normalizing.", "",
+          "| setting | folds | PR-AUC | normalized | ROC-AUC | F1 | what it is |",
+          "|---|---|---|---|---|---|---|"]
     for a in sorted(data["arms"], key=lambda r: -(r[PRIMARY]["mean"] or 0)):
         if not a["folds_done"]:
             continue
@@ -191,34 +206,62 @@ def write_markdown(data: dict, path: str) -> None:
             s = f"{m['mean']:.3f}"
             return s + (f" ± {m['std']:.3f}" if m["std"] is not None else "")
         L.append(f"| {a['label']} | {a['folds_done']} | **{cell('pr_auc')}** | "
-                 f"{cell('roc_auc')} | {cell('f1')} | {a['what']} |")
+                 f"{cell(NORMALIZED)} | {cell('roc_auc')} | {cell('f1')} | "
+                 f"{a['what']} |")
 
     L += ["", "## Head to head, paired fold by fold", "",
           "Each row trains two settings on the exact same folds and compares them "
           "one fold at a time. `W/L` counts folds won and lost. The p-value is a "
           "Wilcoxon signed-rank test: below 0.05 means the pattern of wins is "
           "unlikely to be chance.", "",
-          "| comparison | folds | change in PR-AUC | W/L | p | verdict |",
-          "|---|---|---|---|---|---|"]
+          "| comparison | folds | change in PR-AUC | same, normalized | W/L | p | verdict |",
+          "|---|---|---|---|---|---|---|"]
     for c in data["contrasts"]:
         if not c["n_folds"]:
-            L.append(f"| {c['question']} | 0 | — | — | — | not run yet |")
+            L.append(f"| {c['question']} | 0 | — | — | — | — | not run yet |")
             continue
-        m = c[PRIMARY]
+        m, mn = c[PRIMARY], c[NORMALIZED]
         L.append(f"| {c['question']} | {c['n_folds']} | "
                  f"{m['mean_delta']:+.4f} ± {(m['std_delta'] or 0):.4f} | "
+                 f"{mn['mean_delta']:+.4f} | "
                  f"{m['wins']}/{m['losses']} | {m['p_value']:.3f} | "
                  f"{_verdict(c, floor)} |")
 
-    L += ["", "## Per-fold detail", "",
-          "| setting | " + " | ".join(_short(f) for f in data["folds"]) + " |",
-          "|---|" + "---|" * len(data["folds"])]
+    def per_fold_table(key: str) -> list[str]:
+        rows = ["| setting | " + " | ".join(_short(f) for f in data["folds"]) + " |",
+                "|---|" + "---|" * len(data["folds"])]
+        for a in data["arms"]:
+            if not a["folds_done"]:
+                continue
+            cells = [f"{a[key]['per_fold'][f]:.3f}" if f in a[key]["per_fold"]
+                     else "–" for f in data["folds"]]
+            rows.append(f"| {a['label']} | " + " | ".join(cells) + " |")
+        return rows
+
+    L += ["", "## Per-fold detail, raw PR-AUC", "",
+          "This is the table the two earlier sweeps report, and on its own it "
+          "is misleading: a recording with more rocks starts higher for free.", ""]
+    L += per_fold_table(PRIMARY)
+
+    L += ["", "## Per-fold detail, with rock share divided out", "",
+          "The same folds, scored so that guessing is 0 and perfect is 1. This "
+          "is the table to read when asking *which recording is hard*.", ""]
+    L += per_fold_table(NORMALIZED)
+
+    # The rock share itself, so the gap between the two tables is explicable.
+    shares = {}
     for a in data["arms"]:
-        if not a["folds_done"]:
-            continue
-        cells = [f"{a[PRIMARY]['per_fold'].get(f, float('nan')):.3f}"
-                 if f in a[PRIMARY]["per_fold"] else "–" for f in data["folds"]]
-        L.append(f"| {a['label']} | " + " | ".join(cells) + " |")
+        if a["folds_done"]:
+            shares.setdefault(a["model"], a["prevalence"])
+    if shares:
+        L += ["", "How much of each recording is rock, in the units each model "
+              "is graded in — this is exactly the amount the second table "
+              "removes:", "",
+              "| graded per | " + " | ".join(_short(f) for f in data["folds"]) + " |",
+              "|---|" + "---|" * len(data["folds"])]
+        for model, prev in sorted(shares.items()):
+            cells = [f"{prev[f]:.1%}" if f in prev else "–" for f in data["folds"]]
+            L.append(f"| {model} | " + " | ".join(cells) + " |")
 
     L += ["", "![](arm_ranking.png)", "", "![](paired_deltas.png)", "",
           "![](per_fold.png)", ""]

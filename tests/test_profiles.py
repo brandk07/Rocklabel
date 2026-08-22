@@ -157,3 +157,71 @@ def test_default_datasets_reads_the_profile_folder(tmp_path):
     (base / "not-a-dataset").mkdir()
     found = default_datasets("full-sweep", root=str(tmp_path / "datasets"))
     assert [os.path.basename(p) for p in found] == ["a", "b"]
+
+
+# --------------------------------------------------------------------------- #
+# the rock-coverage check
+# --------------------------------------------------------------------------- #
+def _tiny_dataset(tmp_path, frames, rocks, radius=0.2):
+    """A dataset directory with just enough on disk for coverage to read."""
+    import json
+    import numpy as np
+
+    d = tmp_path / "ds"
+    (d / "points" / "run1").mkdir(parents=True)
+    labels = d / "run1.labels.json"
+    labels.write_text(json.dumps({"rocks": [
+        {"id": i + 1, "center": list(c), "radius": radius}
+        for i, c in enumerate(rocks)]}))
+    for i, (centers, lab, origin) in enumerate(frames):
+        np.savez(d / "points" / "run1" / f"frame_{i:06d}.npz",
+                 centers_odom=np.array(centers, np.float32).reshape(-1, 3),
+                 labels=np.array(lab, np.int8),
+                 robot_pose=np.eye(4) * 1.0 + np.pad(
+                     np.array(origin, float).reshape(3, 1), ((0, 1), (3, 0))))
+    (d / "manifest.json").write_text(json.dumps({
+        "profile": "full-sweep",
+        "config": {"generator": {"crop_forward_m": 6.0, "min_neighbors": 20}},
+        "runs": {"run1": {"labels_path": str(labels)}}}))
+    return str(d)
+
+
+def test_coverage_names_a_labelled_rock_that_produced_no_samples(tmp_path):
+    """The silent failure this command exists for: the rock is labelled, the
+    dataset builds cleanly, and the model never sees it."""
+    from rocklabel.dataset.coverage import measure_dataset
+
+    ds = _tiny_dataset(
+        tmp_path,
+        # samples land on rock 1 only; rock 2 is never sampled
+        frames=[([[0.0, 0.0, 0.0], [3.0, 0.0, 0.0]], [1, 0], [0.0, 0.0, 0.0])],
+        rocks=[(0.0, 0.0, 0.0), (5.0, 0.0, 0.0)])
+    out = measure_dataset(ds)
+    assert out["silent_rocks"] == 1
+    assert out["runs"][0]["silent_rocks"] == [2]
+    assert out["runs"][0]["samples_per_rock"] == {1: 1, 2: 0}
+
+
+def test_coverage_measures_range_from_the_sensor_not_the_world_origin(tmp_path):
+    """The rig walks, so distance from the origin is a different question."""
+    from rocklabel.dataset.coverage import measure_dataset
+
+    ds = _tiny_dataset(
+        tmp_path,
+        frames=[([[10.0, 0.0, 0.0]], [1], [8.0, 0.0, 0.0])],
+        rocks=[(10.0, 0.0, 0.0)])
+    run = measure_dataset(ds)["runs"][0]
+    assert run["rock_range_max_m"] == pytest.approx(2.0)
+
+
+def test_coverage_flags_labels_too_close_to_tell_apart(tmp_path):
+    """Two labels closer than their own radii split one pile of samples, so a
+    low count on one of them is not evidence that rock was missed."""
+    from rocklabel.dataset.coverage import measure_dataset
+
+    ds = _tiny_dataset(
+        tmp_path,
+        frames=[([[0.0, 0.0, 0.0], [0.25, 0.0, 0.0]], [1, 1], [0.0, 0.0, 0.0])],
+        rocks=[(0.0, 0.0, 0.0), (0.25, 0.0, 0.0)], radius=0.2)
+    run = measure_dataset(ds)["runs"][0]
+    assert run["overlapping_labels"] == [{"rocks": [1, 2], "gap_m": 0.25}]

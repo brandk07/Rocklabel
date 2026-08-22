@@ -1,0 +1,45 @@
+{
+  "model": "pointnet2_seg",
+  "task": "binary rock classification (per neighborhood sample)",
+  "input": {
+    "points": "[batch, 256, 4] float32, channels [dx, dy, dz, intensity]",
+    "counts": "[batch] int64, number of real (non-padded) points; pass 256 if unknown",
+    "neighborhood_points": 256,
+    "neighborhood_radius_m": 0.5,
+    "centers_voxel_m": 0.05,
+    "min_neighbors": 20,
+    "features_used": [
+      "dx",
+      "dy",
+      "dz"
+    ],
+    "features_ignored": [
+      "intensity"
+    ]
+  },
+  "preprocessing_contract": "Neighborhood = all points within neighborhood_radius_m of a candidate center from a centers_voxel_m voxel grid. dx/dy = point xy minus center xy (odom frame, axis-aligned); dz = point z minus the neighborhood's minimum z (local ground ~ 0); intensity = LiDAR reflectivity as recorded (observed range ~[0, 1], passed through unchanged). If fewer than neighborhood_points points: pad by repeating real points AFTER them (real points come first); if more: random subsample. Inputs are already canonicalized - do not re-center or re-normalize. This model was trained on ['dx', 'dy', 'dz'] only: the shape stays [B, 256, 4] but ['intensity'] is selected out inside the model, so you may pass anything (zeros included) in those channels.",
+  "output": "rock probability in [0, 1] (sigmoid applied)",
+  "decision_threshold": 0.97,
+  "source_config_hash": "3ccba26a29cb160027339d4861da325732c5429c567cc7d5c671705bcbf77800",
+  "training": {
+    "train_runs": [
+      "VolleyBallTest10.reslam",
+      "VolleyBallTest12.reslam",
+      "VolleyBallTest2.reslam",
+      "VolleyBallTest3.reslam",
+      "VolleyBallTest4.reslam",
+      "VolleyBallTest5.reslam",
+      "VolleyBallTest6.reslam",
+      "VolleyBallTest7.reslam",
+      "VolleyBallTest8.reslam",
+      "VolleyBallTest9.reslam"
+    ],
+    "held_out_run": "VolleyBallTest11.reslam",
+    "epochs_trained": 71,
+    "seed": 42,
+    "tnet": false,
+    "class_weighting": "BCE pos_weight = n_clear / n_rock of the train split",
+    "augmentation": "random z-rotation + xy mirror"
+  },
+  "exported": "2026-08-21T22:42:50Z"
+}

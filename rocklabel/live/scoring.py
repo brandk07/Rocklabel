@@ -100,7 +100,7 @@ class LiveScorer:
     ) -> None:
         import torch  # lazy: only --model runs need the training extra
 
-        from rocklabel.train.models import build_model
+        from rocklabel.train.models import build_model, model_task
 
         self._torch = torch
         self._engine = engine
@@ -112,6 +112,11 @@ class LiveScorer:
         self._gcfg = ck["generator"]
         self.threshold = float(ck.get("threshold", 0.5))
         self.model_name = self._tcfg["model"]
+        #: "classify" scores one 0.5 m ball at a time; "segment" labels every
+        #: point of a whole frame in one pass. The two need different input
+        #: tensors and return different shapes, so the scoring pass branches on
+        #: this rather than assuming the classifier.
+        self.task = model_task(self.model_name)
         if self.settings.window_sec is None:
             self.settings.window_sec = float(self._gcfg.get("frame_window_s") or 0.0)
         self._device = torch.device(
@@ -122,6 +127,8 @@ class LiveScorer:
             tnet=self._tcfg["tnet"],
             dropout=self._tcfg.get("dropout"),
             features=self._tcfg.get("features"),
+            seg_npoints=self._tcfg.get("seg_npoints"),
+            seg_radii=self._tcfg.get("seg_radii"),
         )
         self._model.load_state_dict(ck["model"])
         self._model.eval().to(self._device)
@@ -145,6 +152,11 @@ class LiveScorer:
         #: ``(scan_z_lo, scan_z_hi, band_lo, band_hi)`` of the last pass that
         #: found nothing in the region, else None.
         self._last_miss: tuple[float, float, float, float] | None = None
+        #: Last exception from the scoring thread. Printing it to the terminal
+        #: was not enough: a scorer that raises every pass looks exactly like
+        #: one that is still warming up, and the panel said "warming up…"
+        #: forever with the reason only in a log nobody was watching.
+        self._last_error: str | None = None
 
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -192,7 +204,12 @@ class LiveScorer:
                 try:
                     self._score_once()
                 except Exception as e:  # never kill the app from the scorer
+                    with self._lock:
+                        self._last_error = f"{type(e).__name__}: {e}"
                     print(f"[rocklabel] live scorer error: {e}", flush=True)
+                else:
+                    with self._lock:
+                        self._last_error = None
             elapsed = time.perf_counter() - t0
             self._stop.wait(max(0.05, float(self.settings.interval_sec) - elapsed))
 
@@ -238,9 +255,57 @@ class LiveScorer:
         match_radius = max(_MATCH_VOXELS * voxel, 0.15)
         return _Result(all_centers, all_probs, match_radius)
 
-    def _score_once(self) -> None:
+    def _score_balls(self, xyz: np.ndarray, vals: np.ndarray):
+        """Classifier path: cut the frame into candidate balls, one probability
+        each. Returns ``(centers, probs)`` or None when nothing was scorable."""
         from rocklabel.dataset.neighborhoods import build_inference_samples
 
+        torch, s, g = self._torch, self.settings, self._gcfg
+        samples = build_inference_samples(xyz, vals, g, self._rng,
+                                          max_centers=int(s.max_centers))
+        if samples is None:
+            return None
+        self._last_centers_capped = len(samples["centers_odom"]) >= int(s.max_centers)
+        neigh = torch.from_numpy(samples["neighborhoods"])
+        cnt = torch.from_numpy(samples["true_counts"].astype(np.int64))
+        out = []
+        with torch.no_grad():
+            for i in range(0, len(neigh), self._batch):
+                logits = self._model(
+                    neigh[i:i + self._batch].to(self._device),
+                    cnt[i:i + self._batch].to(self._device),
+                )
+                out.append(torch.sigmoid(logits).float().cpu().numpy())
+        return samples["centers_odom"].astype(np.float64), np.concatenate(out)
+
+    def _score_frame(self, xyz: np.ndarray, vals: np.ndarray, base: np.ndarray):
+        """Segmenter path: the whole frame in one pass, one probability per
+        point. Returns ``(points, probs)`` in the same shape contract as
+        :meth:`_score_balls`, so everything downstream is unchanged — the map,
+        the nearest-neighbour lookup and the threshold all work on
+        (position, probability) pairs and do not care which produced them.
+
+        The prediction is put back on the point it came from via the frame
+        builder's ``index``, and padding rows are dropped: a padded row is a
+        duplicate of a real point, so keeping it would weight that point twice.
+        """
+        from rocklabel.dataset.neighborhoods import build_inference_frame
+
+        torch, g = self._torch, self._gcfg
+        frame = build_inference_frame(xyz, vals, base, g, self._rng)
+        if frame is None:
+            return None
+        n_real = int(frame["true_count"])
+        self._last_centers_capped = len(xyz) > int(g["segmentation_points"])
+        pts = torch.from_numpy(frame["points"])[None]           # [1, N, 4]
+        cnt = torch.tensor([n_real], dtype=torch.long)
+        with torch.no_grad():
+            logits = self._model(pts.to(self._device), cnt.to(self._device))
+            probs = torch.sigmoid(logits)[0].float().cpu().numpy()
+        keep = frame["index"][:n_real]
+        return xyz[keep].astype(np.float64), probs[:n_real]
+
+    def _score_once(self) -> None:
         t0 = time.perf_counter()
         s, g = self.settings, self._gcfg
         if self._clear_requested:
@@ -276,25 +341,11 @@ class LiveScorer:
             self._inten_scale = self._probe_intensity_scale(vals)
         vals = vals * (self._inten_scale or 1.0)
 
-        samples = build_inference_samples(xyz, vals, g, self._rng,
-                                          max_centers=int(s.max_centers))
-        if samples is None:
+        scored = (self._score_frame(xyz, vals, base) if self.task == "segment"
+                  else self._score_balls(xyz, vals))
+        if scored is None:
             return
-        self._last_centers_capped = len(samples["centers_odom"]) >= int(s.max_centers)
-
-        torch = self._torch
-        neigh = torch.from_numpy(samples["neighborhoods"])
-        cnt = torch.from_numpy(samples["true_counts"].astype(np.int64))
-        out = []
-        with torch.no_grad():
-            for i in range(0, len(neigh), self._batch):
-                logits = self._model(
-                    neigh[i:i + self._batch].to(self._device),
-                    cnt[i:i + self._batch].to(self._device),
-                )
-                out.append(torch.sigmoid(logits).float().cpu().numpy())
-        probs = np.concatenate(out)
-        centers = samples["centers_odom"].astype(np.float64)
+        centers, probs = scored
 
         # Merge outside the lock (the map can be large); only swap under it.
         if s.persist:
@@ -371,8 +422,11 @@ class LiveScorer:
             n_in = self._last_in_region
             capped = self._last_centers_capped
             miss = self._last_miss
+            error = self._last_error
         warning = ""
-        if miss is not None:
+        if error is not None:
+            warning = f"scoring is failing: {error}"
+        elif miss is not None:
             s_lo, s_hi, b_lo, b_hi = miss
             warning = (f"region empty: scan z {s_lo:+.2f}..{s_hi:+.2f} m, "
                        f"band {b_lo:+.2f}..{b_hi:+.2f} m")
@@ -387,8 +441,10 @@ class LiveScorer:
             "in_region": int(n_in),
             "capped": bool(capped),
             "warning": warning,
+            "error": error,
             "threshold": float(self.threshold),
             "model_name": self.model_name,
+            "task": self.task,
         }
 
     def status(self) -> str:
@@ -397,6 +453,8 @@ class LiveScorer:
             return "scoring off"
         hint = f"\n! {s['warning']}" if s["warning"] else ""
         if not s["ready"]:
+            if s["error"]:
+                return f"not scoring — every pass is failing{hint}"
             return f"warming up… (no pass finished yet){hint}"
         cap_note = " (capped)" if s["capped"] else ""
         return (

@@ -13,7 +13,8 @@ caches/<profile>/
 
 | folder | built from | holds |
 |---|---|---|
-| `full-sweep/` | `datasets/full-sweep/volleyball` | 11 volleyball recordings, one whole sensor rotation per frame. **The one to train on.** |
+| `full-sweep/` | `datasets/full-sweep/volleyball` | 11 volleyball recordings, one whole sensor rotation per frame. **The one to train the sliding-window classifiers on.** |
+| `full-sweep-dense/` | `datasets/full-sweep-dense/volleyball` | the same rotations with every frame kept instead of every fourth — 12 recordings (VolleyBallTest13 joins here), 10,822 frames and 410,954 samples against full-sweep's 2,700 and 94,519. **The one to train the whole-frame segmenter on**, which learns from frames and so was short of them. |
 | `raw-burst/` | the 11 `datasets/raw-burst/*` folders | the same 11 recordings cut the old way, one raw ~4 ms sensor batch per frame. Kept only to reproduce old results. |
 | `archive-comforter-fused/` | `datasets/archive/comforter-fused` | 8 Comforter recordings. Old project, kept for reference. |
 

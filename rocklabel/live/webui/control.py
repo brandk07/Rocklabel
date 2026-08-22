@@ -218,8 +218,15 @@ class LiveController:
                 text["model.map"] = text["model.pass"] = "scoring off"
                 text["model.region"] = "—"
             elif not m["ready"]:
-                text["model.map"] = "warming up…"
-                text["model.pass"] = "no pass finished yet"
+                # A scorer raising on every pass looked identical to one still
+                # warming up, and the panel sat on "warming up…" indefinitely
+                # with the reason only in the terminal.
+                if m.get("error"):
+                    text["model.map"] = "not scoring — every pass is failing"
+                    text["model.pass"] = m["error"]
+                else:
+                    text["model.map"] = "warming up…"
+                    text["model.pass"] = "no pass finished yet"
                 text["model.region"] = "—"
             else:
                 text["model.map"] = (f"{m['map_centers']:,} centers · "

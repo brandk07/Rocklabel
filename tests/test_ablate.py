@@ -54,12 +54,14 @@ def test_wilcoxon_p_never_exceeds_one():
 # --------------------------------------------------------------------------- #
 # collecting a suite off disk
 # --------------------------------------------------------------------------- #
-def _fake_fold(root: str, suite: str, arm: str, test_run: str, pr_auc: float) -> None:
+def _fake_fold(root: str, suite: str, arm: str, test_run: str, pr_auc: float,
+               prevalence: float = 0.2) -> None:
     d = os.path.join(root, suite, arm, f"loro_{test_run}")
     os.makedirs(d, exist_ok=True)
     with open(os.path.join(d, "test_metrics.json"), "w") as f:
         json.dump({"test_run": test_run, "pr_auc": pr_auc, "roc_auc": 0.9,
-                   "f1": 0.5, "precision": 0.5, "recall": 0.5}, f)
+                   "f1": 0.5, "precision": 0.5, "recall": 0.5,
+                   "baseline_pr_auc": prevalence}, f)
 
 
 def test_collect_pairs_arms_fold_by_fold(tmp_path):
@@ -250,3 +252,100 @@ def test_arm_run_directories_never_collide(tmp_path):
     arms = arms_of("reflectivity")
     dirs = [arm_dir(str(tmp_path), "reflectivity", a, "r1") for a in arms]
     assert len(set(dirs)) == len(dirs)
+
+
+# --------------------------------------------------------------------------- #
+# prevalence-normalized scores
+# --------------------------------------------------------------------------- #
+def test_normalizing_puts_guessing_at_zero_and_perfect_at_one():
+    """The whole point: a fold with many rocks must not look better for free."""
+    # A no-skill model's PR-AUC *is* the rock share, whatever that share is.
+    assert M.normalized_pr_auc(0.063, 0.063) == pytest.approx(0.0)
+    assert M.normalized_pr_auc(0.316, 0.316) == pytest.approx(0.0)
+    assert M.normalized_pr_auc(1.0, 0.2) == pytest.approx(1.0)
+    # Two folds five times apart in rock share, both a fifth of the way from
+    # guessing to perfect, now read as equally hard.
+    low = M.normalized_pr_auc(0.063 + 0.2 * (1 - 0.063), 0.063)
+    high = M.normalized_pr_auc(0.316 + 0.2 * (1 - 0.316), 0.316)
+    assert low == pytest.approx(high) == pytest.approx(0.2)
+
+
+def test_summarize_carries_the_normalized_score_beside_the_raw_one():
+    labels = np.array([1, 0, 0, 0, 1, 0, 0, 0, 0, 0], np.int8)
+    probs = np.linspace(0.9, 0.1, 10)
+    out = M.summarize(labels, probs, 0.5)
+    assert out["norm_pr_auc"] == pytest.approx(
+        M.normalized_pr_auc(out["pr_auc"], out["baseline_pr_auc"]))
+
+
+def test_reordering_bites_a_high_prevalence_fold_that_looked_fine(tmp_path):
+    """A fold can lead on raw PR-AUC and trail once its rock share is removed.
+
+    This is the trap the normalized column exists for, so it is asserted
+    rather than trusted: 'which recording is hard' must be answered by the
+    normalized number.
+    """
+    root = str(tmp_path)
+    _fake_fold(root, "fullsweep", "pointnet2-geom", "rocky", 0.70, prevalence=0.32)
+    _fake_fold(root, "fullsweep", "pointnet2-geom", "sparse", 0.60, prevalence=0.06)
+    arm = collect(root, "fullsweep")["arms"][0]
+    assert arm["pr_auc"]["per_fold"]["rocky"] > arm["pr_auc"]["per_fold"]["sparse"]
+    assert arm["norm_pr_auc"]["per_fold"]["rocky"] < arm["norm_pr_auc"]["per_fold"]["sparse"]
+    assert arm["prevalence"] == {"rocky": 0.32, "sparse": 0.06}
+
+
+def test_folds_finished_before_the_normalized_score_existed_are_backfilled(tmp_path):
+    """The two completed sweeps predate the column and must still fill it in."""
+    root = str(tmp_path)
+    d = os.path.join(root, "fullsweep", "pointnet2-geom", "loro_old")
+    os.makedirs(d)
+    with open(os.path.join(d, "test_metrics.json"), "w") as f:
+        json.dump({"test_run": "old", "pr_auc": 0.5, "roc_auc": 0.8, "f1": 0.4,
+                   "precision": 0.4, "recall": 0.4, "baseline_pr_auc": 0.2}, f)
+    arm = collect(root, "fullsweep")["arms"][0]
+    assert arm["norm_pr_auc"]["per_fold"]["old"] == pytest.approx(0.375)
+
+
+def test_the_report_prints_both_a_raw_and_a_normalized_per_fold_table(tmp_path):
+    from rocklabel.train.ablate_report import render_ablation
+
+    root, out = str(tmp_path / "runs"), str(tmp_path / "rep")
+    for fold, prev in (("a", 0.30), ("b", 0.08)):
+        _fake_fold(root, "fullsweep", "pointnet2-geom", fold, 0.6, prevalence=prev)
+    render_ablation(root, "fullsweep", out)
+    text = open(os.path.join(out, "summary.md")).read()
+    assert "Per-fold detail, raw PR-AUC" in text
+    assert "Per-fold detail, with rock share divided out" in text
+    # and the shares themselves, so the gap between the two tables is explicable
+    assert "30.0%" in text and "8.0%" in text
+
+
+# --------------------------------------------------------------------------- #
+# a suite is bound to the cache it was defined against
+# --------------------------------------------------------------------------- #
+def test_every_suite_names_a_cache_that_a_profile_can_build():
+    from rocklabel.profiles import PROFILES
+    from rocklabel.train.ablate import cache_profile, default_cache_dir
+
+    for suite in SUITES:
+        assert cache_profile(suite) in PROFILES, suite
+        assert default_cache_dir(suite).endswith(cache_profile(suite))
+
+
+def test_a_suite_refuses_a_cache_cut_a_different_way(tmp_path):
+    """Arms are only comparable if every one of them saw the same frames, so
+    pointing a suite at another suite's cache has to fail loudly rather than
+    produce a table that looks fine and answers nothing."""
+    from rocklabel.profiles import apply_profile
+    from rocklabel.config import DEFAULTS, config_hash
+    from rocklabel.train.ablate import check_cache_matches
+
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    wrong = config_hash(apply_profile(DEFAULTS, "raw-burst"))
+    (cache / "meta.json").write_text(json.dumps(
+        {"config_hash": wrong, "profile": "raw-burst", "runs": {}}))
+    check_cache_matches("reflectivity", str(cache))          # its own cache
+    with pytest.raises(SystemExit) as e:
+        check_cache_matches("segdense", str(cache))
+    assert "full-sweep-dense" in str(e.value) and "raw-burst" in str(e.value)

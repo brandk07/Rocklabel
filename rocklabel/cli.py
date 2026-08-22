@@ -182,6 +182,18 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--frame", type=int, help="frame index to start at (default: first frame)")
     p.add_argument("--list", action="store_true", help="list available frame indices and exit")
 
+    p = sub.add_parser("coverage",
+                       help="check a generated dataset actually contains every "
+                            "labelled rock, and how far from the sensor they "
+                            "appear")
+    p.add_argument("dataset_dir", metavar="DATASET_DIR",
+                   help="dataset directory written by 'rocklabel generate'")
+    p.add_argument("--labels-dir", default=None,
+                   help="where to look for label files if the paths recorded in "
+                        "the manifest no longer exist (e.g. labels/volleyball)")
+    p.add_argument("--json", dest="as_json", default=None, metavar="PATH",
+                   help="also write the full per-rock numbers to this file")
+
     p = sub.add_parser(
         "dash",
         help="open the web dashboard: run every command from a browser, with "
@@ -277,6 +289,15 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command in ("record", "live"):
             from .live.run import run_live
             run_live(args, record_cmd=(args.command == "record"))
+        elif args.command == "coverage":
+            from .dataset.coverage import measure_dataset, print_report
+            result = measure_dataset(args.dataset_dir, args.labels_dir)
+            print_report(result)
+            if args.as_json:
+                import json as _json
+                with open(args.as_json, "w") as f:
+                    _json.dump(result, f, indent=2)
+                print(f"\nwrote {args.as_json}")
         elif args.command == "preview":
             out_dir = args.out_pos or args.out_flag
             if not out_dir:

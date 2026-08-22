@@ -29,6 +29,7 @@ Other metrics, as mean difference across folds (positive = segmenter ahead):
 | metric | mean difference | segmenter wins | p |
 |---|---|---|---|
 | pr_auc | +0.0031 | 6/11 | 0.966 |
+| norm_pr_auc | +0.0042 | 6/11 | 0.966 |
 | roc_auc | +0.0115 | 7/11 | 0.577 |
 | f1 | +0.0041 | 6/11 | 0.898 |
 | precision | -0.0016 | 5/11 | 0.765 |
@@ -60,6 +61,7 @@ Other metrics, as mean difference across folds (positive = segmenter ahead):
 | metric | mean difference | segmenter wins | p |
 |---|---|---|---|
 | pr_auc | +0.0041 | 6/11 | 0.898 |
+| norm_pr_auc | +0.0050 | 6/11 | 0.898 |
 | roc_auc | +0.0147 | 7/11 | 0.465 |
 | f1 | +0.0079 | 6/11 | 0.898 |
 | precision | +0.0216 | 5/11 | 0.765 |

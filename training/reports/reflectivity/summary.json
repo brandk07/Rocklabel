@@ -42,6 +42,19 @@
         "VolleyBallTest8.reslam",
         "VolleyBallTest9.reslam"
       ],
+      "prevalence": {
+        "VolleyBallTest10.reslam": 0.05296288257000217,
+        "VolleyBallTest11.reslam": 0.3028557715382769,
+        "VolleyBallTest12.reslam": 0.31365313653136534,
+        "VolleyBallTest2.reslam": 0.18741529525653436,
+        "VolleyBallTest3.reslam": 0.24846625766871167,
+        "VolleyBallTest4.reslam": 0.17392942358407634,
+        "VolleyBallTest5.reslam": 0.11656333038086802,
+        "VolleyBallTest6.reslam": 0.04635463546354635,
+        "VolleyBallTest7.reslam": 0.15555229142185664,
+        "VolleyBallTest8.reslam": 0.11049803978510236,
+        "VolleyBallTest9.reslam": 0.2675408719346049
+      },
       "pr_auc": {
         "mean": 0.7318683889731432,
         "std": 0.17451114711307875,
@@ -57,6 +70,23 @@
           "VolleyBallTest7.reslam": 0.7483846879449255,
           "VolleyBallTest8.reslam": 0.8528816686431595,
           "VolleyBallTest9.reslam": 0.8823697561871944
+        }
+      },
+      "norm_pr_auc": {
+        "mean": 0.6769231674497852,
+        "std": 0.19959568971438268,
+        "per_fold": {
+          "VolleyBallTest10.reslam": 0.7533829177713465,
+          "VolleyBallTest11.reslam": 0.7266189722565586,
+          "VolleyBallTest12.reslam": 0.4835947974632889,
+          "VolleyBallTest2.reslam": 0.8763990717688618,
+          "VolleyBallTest3.reslam": 0.9022956947055626,
+          "VolleyBallTest4.reslam": 0.32023454032835114,
+          "VolleyBallTest5.reslam": 0.6111212227459953,
+          "VolleyBallTest6.reslam": 0.39646234839985556,
+          "VolleyBallTest7.reslam": 0.7020356506399466,
+          "VolleyBallTest8.reslam": 0.8346059503665425,
+          "VolleyBallTest9.reslam": 0.8394036755013266
         }
       },
       "roc_auc": {
@@ -155,6 +185,19 @@
         "VolleyBallTest8.reslam",
         "VolleyBallTest9.reslam"
       ],
+      "prevalence": {
+        "VolleyBallTest10.reslam": 0.05296288257000217,
+        "VolleyBallTest11.reslam": 0.3028557715382769,
+        "VolleyBallTest12.reslam": 0.31365313653136534,
+        "VolleyBallTest2.reslam": 0.18741529525653436,
+        "VolleyBallTest3.reslam": 0.24846625766871167,
+        "VolleyBallTest4.reslam": 0.17392942358407634,
+        "VolleyBallTest5.reslam": 0.11656333038086802,
+        "VolleyBallTest6.reslam": 0.04635463546354635,
+        "VolleyBallTest7.reslam": 0.15555229142185664,
+        "VolleyBallTest8.reslam": 0.11049803978510236,
+        "VolleyBallTest9.reslam": 0.2675408719346049
+      },
       "pr_auc": {
         "mean": 0.7258036249949289,
         "std": 0.18031708879680203,
@@ -170,6 +213,23 @@
           "VolleyBallTest7.reslam": 0.7522799015987713,
           "VolleyBallTest8.reslam": 0.8704788890580959,
           "VolleyBallTest9.reslam": 0.8850927979870874
+        }
+      },
+      "norm_pr_auc": {
+        "mean": 0.6678224765979736,
+        "std": 0.21343948431995494,
+        "per_fold": {
+          "VolleyBallTest10.reslam": 0.7595970332989502,
+          "VolleyBallTest11.reslam": 0.7338932020553143,
+          "VolleyBallTest12.reslam": 0.37541243522290313,
+          "VolleyBallTest2.reslam": 0.8608355066502834,
+          "VolleyBallTest3.reslam": 0.9006835756620482,
+          "VolleyBallTest4.reslam": 0.31717467935977867,
+          "VolleyBallTest5.reslam": 0.5907813079412133,
+          "VolleyBallTest6.reslam": 0.40351059168181413,
+          "VolleyBallTest7.reslam": 0.7066483858209142,
+          "VolleyBallTest8.reslam": 0.8543891787370399,
+          "VolleyBallTest9.reslam": 0.8431213461474486
         }
       },
       "roc_auc": {
@@ -267,6 +327,19 @@
         "VolleyBallTest8.reslam",
         "VolleyBallTest9.reslam"
       ],
+      "prevalence": {
+        "VolleyBallTest10.reslam": 0.05296288257000217,
+        "VolleyBallTest11.reslam": 0.3028557715382769,
+        "VolleyBallTest12.reslam": 0.31365313653136534,
+        "VolleyBallTest2.reslam": 0.18741529525653436,
+        "VolleyBallTest3.reslam": 0.24846625766871167,
+        "VolleyBallTest4.reslam": 0.17392942358407634,
+        "VolleyBallTest5.reslam": 0.11656333038086802,
+        "VolleyBallTest6.reslam": 0.04635463546354635,
+        "VolleyBallTest7.reslam": 0.15555229142185664,
+        "VolleyBallTest8.reslam": 0.11049803978510236,
+        "VolleyBallTest9.reslam": 0.2675408719346049
+      },
       "pr_auc": {
         "mean": 0.7228809377490778,
         "std": 0.16655045794105947,
@@ -282,6 +355,23 @@
           "VolleyBallTest7.reslam": 0.7523408249606441,
           "VolleyBallTest8.reslam": 0.7975033133241508,
           "VolleyBallTest9.reslam": 0.878430178436483
+        }
+      },
+      "norm_pr_auc": {
+        "mean": 0.6661225356651888,
+        "std": 0.18993216396844181,
+        "per_fold": {
+          "VolleyBallTest10.reslam": 0.7502880392579305,
+          "VolleyBallTest11.reslam": 0.7142668162643688,
+          "VolleyBallTest12.reslam": 0.4808576506784249,
+          "VolleyBallTest2.reslam": 0.859531382385822,
+          "VolleyBallTest3.reslam": 0.8907899523676519,
+          "VolleyBallTest4.reslam": 0.3271426899818424,
+          "VolleyBallTest5.reslam": 0.5823172292925425,
+          "VolleyBallTest6.reslam": 0.4090602481101703,
+          "VolleyBallTest7.reslam": 0.7067205316284685,
+          "VolleyBallTest8.reslam": 0.7723482401017672,
+          "VolleyBallTest9.reslam": 0.8340251122480884
         }
       },
       "roc_auc": {
@@ -380,6 +470,19 @@
         "VolleyBallTest8.reslam",
         "VolleyBallTest9.reslam"
       ],
+      "prevalence": {
+        "VolleyBallTest10.reslam": 0.05296288257000217,
+        "VolleyBallTest11.reslam": 0.3028557715382769,
+        "VolleyBallTest12.reslam": 0.31365313653136534,
+        "VolleyBallTest2.reslam": 0.18741529525653436,
+        "VolleyBallTest3.reslam": 0.24846625766871167,
+        "VolleyBallTest4.reslam": 0.17392942358407634,
+        "VolleyBallTest5.reslam": 0.11656333038086802,
+        "VolleyBallTest6.reslam": 0.04635463546354635,
+        "VolleyBallTest7.reslam": 0.15555229142185664,
+        "VolleyBallTest8.reslam": 0.11049803978510236,
+        "VolleyBallTest9.reslam": 0.2675408719346049
+      },
       "pr_auc": {
         "mean": 0.7138911672225116,
         "std": 0.18595440423339632,
@@ -395,6 +498,23 @@
           "VolleyBallTest7.reslam": 0.733324045883341,
           "VolleyBallTest8.reslam": 0.8491186166441879,
           "VolleyBallTest9.reslam": 0.8762449008716507
+        }
+      },
+      "norm_pr_auc": {
+        "mean": 0.6547547613098574,
+        "std": 0.21309246708412827,
+        "per_fold": {
+          "VolleyBallTest10.reslam": 0.7444640363435006,
+          "VolleyBallTest11.reslam": 0.739532487910216,
+          "VolleyBallTest12.reslam": 0.3844885026907923,
+          "VolleyBallTest2.reslam": 0.8639934638217128,
+          "VolleyBallTest3.reslam": 0.8632363041151692,
+          "VolleyBallTest4.reslam": 0.34103539513233144,
+          "VolleyBallTest5.reslam": 0.6039615438235233,
+          "VolleyBallTest6.reslam": 0.31597282548311584,
+          "VolleyBallTest7.reslam": 0.6842007487169569,
+          "VolleyBallTest8.reslam": 0.8303754346765461,
+          "VolleyBallTest9.reslam": 0.831041631694567
         }
       },
       "roc_auc": {
@@ -496,6 +616,19 @@
         "VolleyBallTest8.reslam",
         "VolleyBallTest9.reslam"
       ],
+      "prevalence": {
+        "VolleyBallTest10.reslam": 0.05296288257000217,
+        "VolleyBallTest11.reslam": 0.3028557715382769,
+        "VolleyBallTest12.reslam": 0.31365313653136534,
+        "VolleyBallTest2.reslam": 0.18741529525653436,
+        "VolleyBallTest3.reslam": 0.24846625766871167,
+        "VolleyBallTest4.reslam": 0.17392942358407634,
+        "VolleyBallTest5.reslam": 0.11656333038086802,
+        "VolleyBallTest6.reslam": 0.04635463546354635,
+        "VolleyBallTest7.reslam": 0.15555229142185664,
+        "VolleyBallTest8.reslam": 0.11049803978510236,
+        "VolleyBallTest9.reslam": 0.2675408719346049
+      },
       "pr_auc": {
         "mean": 0.7279877898372761,
         "std": 0.18360991257157463,
@@ -511,6 +644,23 @@
           "VolleyBallTest7.reslam": 0.7505305786512749,
           "VolleyBallTest8.reslam": 0.8712844645913427,
           "VolleyBallTest9.reslam": 0.8774358214275424
+        }
+      },
+      "norm_pr_auc": {
+        "mean": 0.6699316060270012,
+        "std": 0.22147049351533996,
+        "per_fold": {
+          "VolleyBallTest10.reslam": 0.7668052301408965,
+          "VolleyBallTest11.reslam": 0.7822864545493802,
+          "VolleyBallTest12.reslam": 0.33144517638901855,
+          "VolleyBallTest2.reslam": 0.8751143423049405,
+          "VolleyBallTest3.reslam": 0.8955089986474698,
+          "VolleyBallTest4.reslam": 0.30547664419756687,
+          "VolleyBallTest5.reslam": 0.5964127425662186,
+          "VolleyBallTest6.reslam": 0.4236588712117292,
+          "VolleyBallTest7.reslam": 0.7045768271800104,
+          "VolleyBallTest8.reslam": 0.8552948265818767,
+          "VolleyBallTest9.reslam": 0.8326675525279073
         }
       },
       "roc_auc": {
@@ -612,6 +762,19 @@
         "VolleyBallTest8.reslam",
         "VolleyBallTest9.reslam"
       ],
+      "prevalence": {
+        "VolleyBallTest10.reslam": 0.05296288257000217,
+        "VolleyBallTest11.reslam": 0.3028557715382769,
+        "VolleyBallTest12.reslam": 0.31365313653136534,
+        "VolleyBallTest2.reslam": 0.18741529525653436,
+        "VolleyBallTest3.reslam": 0.24846625766871167,
+        "VolleyBallTest4.reslam": 0.17392942358407634,
+        "VolleyBallTest5.reslam": 0.11656333038086802,
+        "VolleyBallTest6.reslam": 0.04635463546354635,
+        "VolleyBallTest7.reslam": 0.15555229142185664,
+        "VolleyBallTest8.reslam": 0.11049803978510236,
+        "VolleyBallTest9.reslam": 0.2675408719346049
+      },
       "pr_auc": {
         "mean": 0.7109760793929277,
         "std": 0.18249090820435943,
@@ -627,6 +790,23 @@
           "VolleyBallTest7.reslam": 0.7445841477958355,
           "VolleyBallTest8.reslam": 0.8150924676915907,
           "VolleyBallTest9.reslam": 0.8724902761198626
+        }
+      },
+      "norm_pr_auc": {
+        "mean": 0.6503458867070289,
+        "std": 0.21650644142945852,
+        "per_fold": {
+          "VolleyBallTest10.reslam": 0.7487368956838814,
+          "VolleyBallTest11.reslam": 0.7775627230106527,
+          "VolleyBallTest12.reslam": 0.3136421674780387,
+          "VolleyBallTest2.reslam": 0.8400183762908767,
+          "VolleyBallTest3.reslam": 0.8767147471597008,
+          "VolleyBallTest4.reslam": 0.33165975090699684,
+          "VolleyBallTest5.reslam": 0.5890891319906114,
+          "VolleyBallTest6.reslam": 0.3608079543544386,
+          "VolleyBallTest7.reslam": 0.6975350283865104,
+          "VolleyBallTest8.reslam": 0.7921224004231122,
+          "VolleyBallTest9.reslam": 0.8259155780924977
         }
       },
       "roc_auc": {
@@ -725,6 +905,19 @@
         "VolleyBallTest8.reslam",
         "VolleyBallTest9.reslam"
       ],
+      "prevalence": {
+        "VolleyBallTest10.reslam": 0.05296288257000217,
+        "VolleyBallTest11.reslam": 0.3028557715382769,
+        "VolleyBallTest12.reslam": 0.31365313653136534,
+        "VolleyBallTest2.reslam": 0.18741529525653436,
+        "VolleyBallTest3.reslam": 0.24846625766871167,
+        "VolleyBallTest4.reslam": 0.17392942358407634,
+        "VolleyBallTest5.reslam": 0.11656333038086802,
+        "VolleyBallTest6.reslam": 0.04635463546354635,
+        "VolleyBallTest7.reslam": 0.15555229142185664,
+        "VolleyBallTest8.reslam": 0.11049803978510236,
+        "VolleyBallTest9.reslam": 0.2675408719346049
+      },
       "pr_auc": {
         "mean": 0.22401333769707074,
         "std": 0.12405434247887541,
@@ -740,6 +933,23 @@
           "VolleyBallTest7.reslam": 0.18710080375802934,
           "VolleyBallTest8.reslam": 0.09784991426127781,
           "VolleyBallTest9.reslam": 0.3580964327521866
+        }
+      },
+      "norm_pr_auc": {
+        "mean": 0.05700531138027116,
+        "std": 0.08143828272552471,
+        "per_fold": {
+          "VolleyBallTest10.reslam": 0.06525744185140486,
+          "VolleyBallTest11.reslam": 0.2582305794483305,
+          "VolleyBallTest12.reslam": -0.05187326875059881,
+          "VolleyBallTest2.reslam": 0.03769513649839918,
+          "VolleyBallTest3.reslam": 0.04976132651692,
+          "VolleyBallTest4.reslam": 0.044286493638176126,
+          "VolleyBallTest5.reslam": 0.07544337763628825,
+          "VolleyBallTest6.reslam": 0.0014844990081762843,
+          "VolleyBallTest7.reslam": 0.037359935986199994,
+          "VolleyBallTest8.reslam": -0.01421933406506361,
+          "VolleyBallTest9.reslam": 0.12363223741474999
         }
       },
       "roc_auc": {
@@ -837,6 +1047,19 @@
         "VolleyBallTest8.reslam",
         "VolleyBallTest9.reslam"
       ],
+      "prevalence": {
+        "VolleyBallTest10.reslam": 0.05296288257000217,
+        "VolleyBallTest11.reslam": 0.3028557715382769,
+        "VolleyBallTest12.reslam": 0.31365313653136534,
+        "VolleyBallTest2.reslam": 0.18741529525653436,
+        "VolleyBallTest3.reslam": 0.24846625766871167,
+        "VolleyBallTest4.reslam": 0.17392942358407634,
+        "VolleyBallTest5.reslam": 0.11656333038086802,
+        "VolleyBallTest6.reslam": 0.04635463546354635,
+        "VolleyBallTest7.reslam": 0.15555229142185664,
+        "VolleyBallTest8.reslam": 0.11049803978510236,
+        "VolleyBallTest9.reslam": 0.2675408719346049
+      },
       "pr_auc": {
         "mean": 0.7325937690478721,
         "std": 0.17446669854453886,
@@ -852,6 +1075,23 @@
           "VolleyBallTest7.reslam": 0.7478959010764401,
           "VolleyBallTest8.reslam": 0.8342649024947134,
           "VolleyBallTest9.reslam": 0.8796065406076474
+        }
+      },
+      "norm_pr_auc": {
+        "mean": 0.6778690259322977,
+        "std": 0.20095935707333376,
+        "per_fold": {
+          "VolleyBallTest10.reslam": 0.7595070649131459,
+          "VolleyBallTest11.reslam": 0.756949884728188,
+          "VolleyBallTest12.reslam": 0.4716121434363619,
+          "VolleyBallTest2.reslam": 0.8708191013698865,
+          "VolleyBallTest3.reslam": 0.908283299244699,
+          "VolleyBallTest4.reslam": 0.3058385554622862,
+          "VolleyBallTest5.reslam": 0.625067715364439,
+          "VolleyBallTest6.reslam": 0.4077170137843759,
+          "VolleyBallTest7.reslam": 0.7014568263225611,
+          "VolleyBallTest8.reslam": 0.8136765235848988,
+          "VolleyBallTest9.reslam": 0.8356311570444329
         }
       },
       "roc_auc": {
@@ -950,6 +1190,19 @@
         "VolleyBallTest8.reslam",
         "VolleyBallTest9.reslam"
       ],
+      "prevalence": {
+        "VolleyBallTest10.reslam": 0.05296288257000217,
+        "VolleyBallTest11.reslam": 0.3028557715382769,
+        "VolleyBallTest12.reslam": 0.31365313653136534,
+        "VolleyBallTest2.reslam": 0.18741529525653436,
+        "VolleyBallTest3.reslam": 0.24846625766871167,
+        "VolleyBallTest4.reslam": 0.17392942358407634,
+        "VolleyBallTest5.reslam": 0.11656333038086802,
+        "VolleyBallTest6.reslam": 0.04635463546354635,
+        "VolleyBallTest7.reslam": 0.15555229142185664,
+        "VolleyBallTest8.reslam": 0.11049803978510236,
+        "VolleyBallTest9.reslam": 0.2675408719346049
+      },
       "pr_auc": {
         "mean": 0.7279507798614091,
         "std": 0.18127248813571548,
@@ -965,6 +1218,23 @@
           "VolleyBallTest7.reslam": 0.7551504054680986,
           "VolleyBallTest8.reslam": 0.8734804231596587,
           "VolleyBallTest9.reslam": 0.8863655968180766
+        }
+      },
+      "norm_pr_auc": {
+        "mean": 0.670466468294973,
+        "std": 0.2151416100849502,
+        "per_fold": {
+          "VolleyBallTest10.reslam": 0.7543536076890616,
+          "VolleyBallTest11.reslam": 0.7511078155396864,
+          "VolleyBallTest12.reslam": 0.3768075908473449,
+          "VolleyBallTest2.reslam": 0.8647306391339128,
+          "VolleyBallTest3.reslam": 0.8947520037446584,
+          "VolleyBallTest4.reslam": 0.2997140392686238,
+          "VolleyBallTest5.reslam": 0.6088435011369596,
+          "VolleyBallTest6.reslam": 0.41215167061098035,
+          "VolleyBallTest7.reslam": 0.7100476535791991,
+          "VolleyBallTest8.reslam": 0.8577635772609483,
+          "VolleyBallTest9.reslam": 0.8448590524333285
         }
       },
       "roc_auc": {
@@ -1062,6 +1332,19 @@
         "VolleyBallTest8.reslam",
         "VolleyBallTest9.reslam"
       ],
+      "prevalence": {
+        "VolleyBallTest10.reslam": 0.05296288257000217,
+        "VolleyBallTest11.reslam": 0.3028557715382769,
+        "VolleyBallTest12.reslam": 0.31365313653136534,
+        "VolleyBallTest2.reslam": 0.18741529525653436,
+        "VolleyBallTest3.reslam": 0.24846625766871167,
+        "VolleyBallTest4.reslam": 0.17392942358407634,
+        "VolleyBallTest5.reslam": 0.11656333038086802,
+        "VolleyBallTest6.reslam": 0.04635463546354635,
+        "VolleyBallTest7.reslam": 0.15555229142185664,
+        "VolleyBallTest8.reslam": 0.11049803978510236,
+        "VolleyBallTest9.reslam": 0.2675408719346049
+      },
       "pr_auc": {
         "mean": 0.7314071401582855,
         "std": 0.17375628796916825,
@@ -1077,6 +1360,23 @@
           "VolleyBallTest7.reslam": 0.737812790028834,
           "VolleyBallTest8.reslam": 0.8557242980083136,
           "VolleyBallTest9.reslam": 0.8774740016505254
+        }
+      },
+      "norm_pr_auc": {
+        "mean": 0.6755702582273325,
+        "std": 0.2018689585219591,
+        "per_fold": {
+          "VolleyBallTest10.reslam": 0.75619616742235,
+          "VolleyBallTest11.reslam": 0.7335092155215822,
+          "VolleyBallTest12.reslam": 0.46974523364096943,
+          "VolleyBallTest2.reslam": 0.8728504154725666,
+          "VolleyBallTest3.reslam": 0.8993654339806334,
+          "VolleyBallTest4.reslam": 0.28583194441202703,
+          "VolleyBallTest5.reslam": 0.6242225452391098,
+          "VolleyBallTest6.reslam": 0.42951415569259704,
+          "VolleyBallTest7.reslam": 0.6895163462369633,
+          "VolleyBallTest8.reslam": 0.8378017042741194,
+          "VolleyBallTest9.reslam": 0.8327196786077389
         }
       },
       "roc_auc": {
@@ -1175,6 +1475,19 @@
         "VolleyBallTest8.reslam",
         "VolleyBallTest9.reslam"
       ],
+      "prevalence": {
+        "VolleyBallTest10.reslam": 0.05296288257000217,
+        "VolleyBallTest11.reslam": 0.3028557715382769,
+        "VolleyBallTest12.reslam": 0.31365313653136534,
+        "VolleyBallTest2.reslam": 0.18741529525653436,
+        "VolleyBallTest3.reslam": 0.24846625766871167,
+        "VolleyBallTest4.reslam": 0.17392942358407634,
+        "VolleyBallTest5.reslam": 0.11656333038086802,
+        "VolleyBallTest6.reslam": 0.04635463546354635,
+        "VolleyBallTest7.reslam": 0.15555229142185664,
+        "VolleyBallTest8.reslam": 0.11049803978510236,
+        "VolleyBallTest9.reslam": 0.2675408719346049
+      },
       "pr_auc": {
         "mean": 0.7262433966658809,
         "std": 0.17713519866674537,
@@ -1190,6 +1503,23 @@
           "VolleyBallTest7.reslam": 0.7372952661505415,
           "VolleyBallTest8.reslam": 0.8618611716439698,
           "VolleyBallTest9.reslam": 0.8835333801338252
+        }
+      },
+      "norm_pr_auc": {
+        "mean": 0.6683580657321778,
+        "std": 0.21019130874019568,
+        "per_fold": {
+          "VolleyBallTest10.reslam": 0.7586128641431723,
+          "VolleyBallTest11.reslam": 0.7484602637868409,
+          "VolleyBallTest12.reslam": 0.3667458712398192,
+          "VolleyBallTest2.reslam": 0.8656868387993938,
+          "VolleyBallTest3.reslam": 0.8939484149843037,
+          "VolleyBallTest4.reslam": 0.3336613560288085,
+          "VolleyBallTest5.reslam": 0.6046140003681733,
+          "VolleyBallTest6.reslam": 0.4056123643791722,
+          "VolleyBallTest7.reslam": 0.6889034913816119,
+          "VolleyBallTest8.reslam": 0.8447009286829937,
+          "VolleyBallTest9.reslam": 0.8409923292596656
         }
       },
       "roc_auc": {
@@ -1302,6 +1632,29 @@
           "VolleyBallTest7.reslam": 0.0038952136538458193,
           "VolleyBallTest8.reslam": 0.017597220414936388,
           "VolleyBallTest9.reslam": 0.0027230417998930223
+        }
+      },
+      "norm_pr_auc": {
+        "mean_delta": -0.009100690851811633,
+        "std_delta": 0.03468134291879425,
+        "median_delta": 0.003717670646122051,
+        "wins": 6,
+        "losses": 5,
+        "ties": 0,
+        "statistic": 32.0,
+        "p_value": 0.9658203125,
+        "per_fold": {
+          "VolleyBallTest10.reslam": 0.0062141155276037585,
+          "VolleyBallTest11.reslam": 0.007274229798755694,
+          "VolleyBallTest12.reslam": -0.10818236224038574,
+          "VolleyBallTest2.reslam": -0.01556356511857837,
+          "VolleyBallTest3.reslam": -0.0016121190435144372,
+          "VolleyBallTest4.reslam": -0.00305986096857247,
+          "VolleyBallTest5.reslam": -0.020339914804782033,
+          "VolleyBallTest6.reslam": 0.007048243281958577,
+          "VolleyBallTest7.reslam": 0.004612735180967609,
+          "VolleyBallTest8.reslam": 0.019783228370497397,
+          "VolleyBallTest9.reslam": 0.003717670646122051
         }
       },
       "roc_auc": {
@@ -1438,6 +1791,29 @@
           "VolleyBallTest9.reslam": -0.002185277564832222
         }
       },
+      "norm_pr_auc": {
+        "mean_delta": -0.011367774355331458,
+        "std_delta": 0.04746246862167274,
+        "median_delta": -0.002983480553521378,
+        "wins": 5,
+        "losses": 6,
+        "ties": 0,
+        "statistic": 27.0,
+        "p_value": 0.6376953125,
+        "per_fold": {
+          "VolleyBallTest10.reslam": -0.005824002914429971,
+          "VolleyBallTest11.reslam": 0.025265671645847143,
+          "VolleyBallTest12.reslam": -0.09636914798763258,
+          "VolleyBallTest2.reslam": 0.0044620814358907746,
+          "VolleyBallTest3.reslam": -0.027553648252482743,
+          "VolleyBallTest4.reslam": 0.013892705150489015,
+          "VolleyBallTest5.reslam": 0.021644314530980813,
+          "VolleyBallTest6.reslam": -0.09308742262705444,
+          "VolleyBallTest7.reslam": -0.022519782911511577,
+          "VolleyBallTest8.reslam": 0.058027194574778895,
+          "VolleyBallTest9.reslam": -0.002983480553521378
+        }
+      },
       "roc_auc": {
         "mean_delta": -0.010830780121093892,
         "std_delta": 0.03489984848029819,
@@ -1570,6 +1946,29 @@
           "VolleyBallTest7.reslam": 0.002145890706349407,
           "VolleyBallTest8.reslam": 0.01840279594818317,
           "VolleyBallTest9.reslam": -0.004933934759651981
+        }
+      },
+      "norm_pr_auc": {
+        "mean_delta": -0.006991561422783773,
+        "std_delta": 0.05252826957783264,
+        "median_delta": -0.0012847294639213303,
+        "wins": 5,
+        "losses": 6,
+        "ties": 0,
+        "statistic": 32.0,
+        "p_value": 0.9658203125,
+        "per_fold": {
+          "VolleyBallTest10.reslam": 0.013422312369550049,
+          "VolleyBallTest11.reslam": 0.05566748229282159,
+          "VolleyBallTest12.reslam": -0.15214962107427032,
+          "VolleyBallTest2.reslam": -0.0012847294639213303,
+          "VolleyBallTest3.reslam": -0.006786696058092789,
+          "VolleyBallTest4.reslam": -0.014757896130784265,
+          "VolleyBallTest5.reslam": -0.014708480179776773,
+          "VolleyBallTest6.reslam": 0.027196522811873625,
+          "VolleyBallTest7.reslam": 0.0025411765400638053,
+          "VolleyBallTest8.reslam": 0.020688876215334218,
+          "VolleyBallTest9.reslam": -0.006736122973419301
         }
       },
       "roc_auc": {
@@ -1706,6 +2105,29 @@
           "VolleyBallTest9.reslam": -0.005939902316620338
         }
       },
+      "norm_pr_auc": {
+        "mean_delta": -0.01577664895816001,
+        "std_delta": 0.057224502706895115,
+        "median_delta": -0.00810953415559068,
+        "wins": 4,
+        "losses": 7,
+        "ties": 0,
+        "statistic": 23.0,
+        "p_value": 0.4130859375,
+        "per_fold": {
+          "VolleyBallTest10.reslam": -0.0015511435740491741,
+          "VolleyBallTest11.reslam": 0.06329590674628383,
+          "VolleyBallTest12.reslam": -0.1672154832003862,
+          "VolleyBallTest2.reslam": -0.01951300609494533,
+          "VolleyBallTest3.reslam": -0.014075205207951136,
+          "VolleyBallTest4.reslam": 0.004517060925154415,
+          "VolleyBallTest5.reslam": 0.006771902698068932,
+          "VolleyBallTest6.reslam": -0.0482522937557317,
+          "VolleyBallTest7.reslam": -0.009185503241958104,
+          "VolleyBallTest8.reslam": 0.019774160321345047,
+          "VolleyBallTest9.reslam": -0.00810953415559068
+        }
+      },
       "roc_auc": {
         "mean_delta": -0.01917842574628018,
         "std_delta": 0.06536772967182608,
@@ -1838,6 +2260,29 @@
           "VolleyBallTest7.reslam": -0.0017493229474964123,
           "VolleyBallTest8.reslam": 0.0008055755332467829,
           "VolleyBallTest9.reslam": -0.0076569765595450034
+        }
+      },
+      "norm_pr_auc": {
+        "mean_delta": 0.0021091294290278614,
+        "std_delta": 0.02279828314018806,
+        "median_delta": 0.000905647844836821,
+        "wins": 6,
+        "losses": 5,
+        "ties": 0,
+        "statistic": 28.0,
+        "p_value": 0.7001953125,
+        "per_fold": {
+          "VolleyBallTest10.reslam": 0.0072081968419462905,
+          "VolleyBallTest11.reslam": 0.0483932524940659,
+          "VolleyBallTest12.reslam": -0.04396725883388458,
+          "VolleyBallTest2.reslam": 0.01427883565465704,
+          "VolleyBallTest3.reslam": -0.005174577014578352,
+          "VolleyBallTest4.reslam": -0.011698035162211795,
+          "VolleyBallTest5.reslam": 0.0056314346250052605,
+          "VolleyBallTest6.reslam": 0.020148279529915047,
+          "VolleyBallTest7.reslam": -0.0020715586409038034,
+          "VolleyBallTest8.reslam": 0.000905647844836821,
+          "VolleyBallTest9.reslam": -0.010453793619541352
         }
       },
       "roc_auc": {
@@ -1974,6 +2419,29 @@
           "VolleyBallTest9.reslam": -0.003939577750711409
         }
       },
+      "norm_pr_auc": {
+        "mean_delta": -0.010800631784596226,
+        "std_delta": 0.020655159467357298,
+        "median_delta": -0.0053785632532381555,
+        "wins": 3,
+        "losses": 8,
+        "ties": 0,
+        "statistic": 16.0,
+        "p_value": 0.1474609375,
+        "per_fold": {
+          "VolleyBallTest10.reslam": -0.003094878513415944,
+          "VolleyBallTest11.reslam": -0.01235215599218975,
+          "VolleyBallTest12.reslam": -0.0027371467848639752,
+          "VolleyBallTest2.reslam": -0.01686768938303973,
+          "VolleyBallTest3.reslam": -0.011505742337910685,
+          "VolleyBallTest4.reslam": 0.006908149653491291,
+          "VolleyBallTest5.reslam": -0.02880399345345286,
+          "VolleyBallTest6.reslam": 0.01259789971031472,
+          "VolleyBallTest7.reslam": 0.004684880988521933,
+          "VolleyBallTest8.reslam": -0.062257710264775334,
+          "VolleyBallTest9.reslam": -0.0053785632532381555
+        }
+      },
       "roc_auc": {
         "mean_delta": -0.003267436660916526,
         "std_delta": 0.010028670904528485,
@@ -2106,6 +2574,29 @@
           "VolleyBallTest7.reslam": -0.018955855715430348,
           "VolleyBallTest8.reslam": -0.021360272413908032,
           "VolleyBallTest9.reslam": -0.008847897115436654
+        }
+      },
+      "norm_pr_auc": {
+        "mean_delta": -0.01306771528811605,
+        "std_delta": 0.030837358307244604,
+        "median_delta": -0.012079714452881585,
+        "wins": 5,
+        "losses": 6,
+        "ties": 0,
+        "statistic": 19.0,
+        "p_value": 0.240234375,
+        "per_fold": {
+          "VolleyBallTest10.reslam": -0.015132996955449673,
+          "VolleyBallTest11.reslam": 0.005639285854901699,
+          "VolleyBallTest12.reslam": 0.009076067467889193,
+          "VolleyBallTest2.reslam": 0.0031579571714294152,
+          "VolleyBallTest3.reslam": -0.03744727154687899,
+          "VolleyBallTest4.reslam": 0.023860715772552776,
+          "VolleyBallTest5.reslam": 0.013180235882309987,
+          "VolleyBallTest6.reslam": -0.0875377661986983,
+          "VolleyBallTest7.reslam": -0.022447637103957252,
+          "VolleyBallTest8.reslam": -0.024013744060493836,
+          "VolleyBallTest9.reslam": -0.012079714452881585
         }
       },
       "roc_auc": {
@@ -2242,6 +2733,29 @@
           "VolleyBallTest9.reslam": -0.0027632155795469515
         }
       },
+      "norm_pr_auc": {
+        "mean_delta": 0.0009458584825126626,
+        "std_delta": 0.014626086769745476,
+        "median_delta": -0.0005788243173854291,
+        "wins": 5,
+        "losses": 6,
+        "ties": 0,
+        "statistic": 32.0,
+        "p_value": 0.9658203125,
+        "per_fold": {
+          "VolleyBallTest10.reslam": 0.00612414714179943,
+          "VolleyBallTest11.reslam": 0.030330912471629445,
+          "VolleyBallTest12.reslam": -0.011982654026926998,
+          "VolleyBallTest2.reslam": -0.005579970398975287,
+          "VolleyBallTest3.reslam": 0.005987604539136382,
+          "VolleyBallTest4.reslam": -0.014395984866064915,
+          "VolleyBallTest5.reslam": 0.013946492618443607,
+          "VolleyBallTest6.reslam": 0.011254665384520357,
+          "VolleyBallTest7.reslam": -0.0005788243173854291,
+          "VolleyBallTest8.reslam": -0.020929426781643667,
+          "VolleyBallTest9.reslam": -0.0037725184568936365
+        }
+      },
       "roc_auc": {
         "mean_delta": -0.0022402561897822263,
         "std_delta": 0.0124976729673641,
@@ -2374,6 +2888,29 @@
           "VolleyBallTest7.reslam": 0.002870503869327301,
           "VolleyBallTest8.reslam": 0.003001534101562786,
           "VolleyBallTest9.reslam": 0.0012727988309891858
+        }
+      },
+      "norm_pr_auc": {
+        "mean_delta": 0.0026439916969996065,
+        "std_delta": 0.010153753535139521,
+        "median_delta": 0.0033743985239084173,
+        "wins": 8,
+        "losses": 3,
+        "ties": 0,
+        "statistic": 23.0,
+        "p_value": 0.4130859375,
+        "per_fold": {
+          "VolleyBallTest10.reslam": -0.005243425609888663,
+          "VolleyBallTest11.reslam": 0.017214613484372143,
+          "VolleyBallTest12.reslam": 0.0013951556244417573,
+          "VolleyBallTest2.reslam": 0.003895132483629382,
+          "VolleyBallTest3.reslam": -0.0059315719173898,
+          "VolleyBallTest4.reslam": -0.01746064009115489,
+          "VolleyBallTest5.reslam": 0.018062193195746312,
+          "VolleyBallTest6.reslam": 0.008641078929166213,
+          "VolleyBallTest7.reslam": 0.0033992677582849185,
+          "VolleyBallTest8.reslam": 0.0033743985239084173,
+          "VolleyBallTest9.reslam": 0.0017377062858798809
         }
       },
       "roc_auc": {

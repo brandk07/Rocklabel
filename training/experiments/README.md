@@ -23,6 +23,7 @@ would put near-identical frames on both sides and produce meaningless scores.
 |---|---|---|
 | `fullsweep/` | 88, done | Does building frames from whole sensor rotations beat single raw bursts, and can a per-point segmenter compete with the sliding-window classifiers? **Yes to both.** |
 | `reflectivity/` | 121, done | Does the LiDAR brightness channel earn its place beside shape? **No.** |
+| `segdense/` | 48 planned (12 folds x 4 settings) | The whole-frame segmenter fed properly: every sensor rotation kept instead of every fourth, 60 epochs instead of 30, and a setting that looks at 10 cm scales instead of 25 cm. The one experiment with twelve folds — VolleyBallTest13 joins as a fold here. |
 | `seedstudy/` | 14 | How far apart do two runs of the *identical* setting land? This is the yardstick that says whether any other difference is real. |
 | `compare/` | flat | Output of `rocklabel-train compare` — plain per-model folds, named `<model>_loro_<run>` instead of the setting/fold nesting a sweep uses. |
 | `compare-fused/` | flat | The same, for the old Comforter recordings. |

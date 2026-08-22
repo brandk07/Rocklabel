@@ -1406,7 +1406,9 @@ class VizApp(PivotCamera):
         if not m["enabled"]:
             rows = ("scoring off", "-", "-")
         elif not m["ready"]:
-            rows = ("warming up…", "no pass finished yet", "-")
+            rows = (("not scoring — every pass is failing", m["error"], "-")
+                    if m.get("error") else
+                    ("warming up…", "no pass finished yet", "-"))
         else:
             cap = " (capped)" if m["capped"] else ""
             rows = (

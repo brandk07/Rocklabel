@@ -24,6 +24,7 @@ rocklabel slam recordings/volleyball/raw/RUN.mcap                  # 2. solve po
 rocklabel label recordings/volleyball/reslam/RUN.reslam.mcap       # 3. click rocks
 rocklabel generate recordings/volleyball/reslam/RUN.reslam.mcap \
     --profile full-sweep                                           # 4. build dataset
+rocklabel coverage datasets/full-sweep/volleyball                  # 4b. is every rock in it?
 rocklabel-train cache                                              # 5. pool it
 rocklabel-train compare                                            # 6. train + evaluate
 rocklabel live --source udp --model best.pt                        # 7. live inference

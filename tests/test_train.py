@@ -334,3 +334,56 @@ def test_one_training_step_runs_for_both_tasks(tmp_path, model, task):
         loss = torch.nn.functional.binary_cross_entropy_with_logits(logits, y)
     loss.backward()
     assert torch.isfinite(loss)
+
+
+# --------------------------------------------------------------------------- #
+# the segmenter's level geometry, now a setting rather than a hardcoded number
+# --------------------------------------------------------------------------- #
+def test_segmenter_levels_can_be_set_and_are_what_the_model_uses():
+    model = build_model("pointnet2_seg", seg_npoints=[1024, 256, 64],
+                        seg_radii=[0.1, 0.3, 0.8]).eval()
+    assert model.npoints == (1024, 256, 64) and model.radii == (0.1, 0.3, 0.8)
+    assert (model.sa1.npoint, model.sa2.npoint, model.sa3.npoint) == (1024, 256, 64)
+    assert (model.sa1.radius, model.sa2.radius, model.sa3.radius) == (0.1, 0.3, 0.8)
+    pts = torch.randn(2, 1280, 4) * 0.5
+    with torch.no_grad():
+        out = model(pts, torch.tensor([1280, 900]))
+    assert out.shape == (2, 1280) and torch.isfinite(out).all()
+
+
+def test_leaving_the_segmenter_levels_unset_keeps_what_every_run_so_far_used():
+    """Checkpoints trained before the setting existed have to load into the
+    same shape they were saved from."""
+    assert build_model("pointnet2_seg").npoints == (512, 128, 32)
+    assert build_model("pointnet2_seg").radii == (0.25, 0.6, 1.4)
+
+
+@pytest.mark.parametrize("npoints,radii", [
+    ([128, 512, 32], [0.1, 0.3, 0.8]),      # levels must shrink, not grow
+    ([1024, 256, 64], [0.8, 0.3, 0.1]),     # and the balls must widen
+    ([1024, 256], [0.1, 0.3, 0.8]),         # three levels, not two
+])
+def test_segmenter_rejects_levels_that_are_not_a_coarsening(npoints, radii):
+    with pytest.raises(ValueError):
+        build_model("pointnet2_seg", seg_npoints=npoints, seg_radii=radii)
+
+
+def test_a_run_started_before_the_level_setting_existed_still_resumes(tmp_path):
+    """train_fold refuses to write into a directory whose config disagrees with
+    it. Both finished sweeps have configs with no level geometry in them, so
+    filling in the default has to count as agreement, not as a change."""
+    from rocklabel.train import TRAIN_DEFAULTS
+    from rocklabel.train.engine import default_config, train_fold
+
+    run_dir = tmp_path / "loro_x"
+    run_dir.mkdir()
+    cfg = default_config(model="pointnet2_seg", cache_dir=str(tmp_path),
+                         train_runs=["a"], test_run="b")
+    old = {k: v for k, v in cfg.items() if k not in ("seg_npoints", "seg_radii")}
+    (run_dir / "config.json").write_text(json.dumps(old))
+    # Fails later for want of a cache, but never on "different settings".
+    # (DataError subclasses SystemExit, so the catch has to be BaseException.)
+    with pytest.raises(BaseException) as e:
+        train_fold(cfg, str(run_dir))
+    assert "different settings" not in str(e.value)
+    assert TRAIN_DEFAULTS["seg_npoints"] == [512, 128, 32]

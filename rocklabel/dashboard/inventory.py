@@ -724,7 +724,17 @@ def ablations(root: str) -> list[dict]:
     base = os.path.join(root, DIRS["experiments"])
     if not os.path.isdir(base):
         return []
-    n_folds = len(cache_runs(root))
+    # Each suite declares the cache it trains on, and they no longer all hold
+    # the same recordings - the dense cache has twelve runs where the others
+    # have eleven - so the denominator is read per suite rather than once.
+    def folds_of(suite: str) -> int:
+        declared = SUITES.get(suite)
+        if not declared:
+            return len(cache_runs(root))
+        meta = _read_json(os.path.join(root, DIRS["caches"], declared["cache"],
+                                       "meta.json")) or {}
+        return len(meta.get("runs") or {})
+
     out = []
     for suite in sorted(os.listdir(base)):
         sdir = os.path.join(base, suite)
@@ -757,7 +767,7 @@ def ablations(root: str) -> list[dict]:
             })
         summary = _read_json(
             os.path.join(root, DIRS["reports"], suite, "summary.json")) or {}
-        folds = n_folds or len(folds_seen)
+        folds = folds_of(suite) or len(folds_seen)
         out.append({
             "name": suite,
             "path": os.path.relpath(sdir, root),

@@ -99,6 +99,8 @@ def _bare_scorer(centers, probs, settings=None):
     scorer._last_pass_centers = len(probs)
     scorer._last_in_region = 100
     scorer._last_miss = None
+    scorer._last_error = None
+    scorer.task = "classify"
     scorer._map = {}
     scorer._clear_requested = False
     scorer._result = _Result(centers, probs, match_radius=0.2)
@@ -203,3 +205,76 @@ def test_inference_samples_max_centers_cap():
     assert len(full["centers_odom"]) > 50
     assert len(capped["centers_odom"]) <= 50
     assert capped["neighborhoods"].shape[1:] == (32, 4)
+
+
+# --------------------------------------------------------------------------- #
+# live scoring with a per-point segmenter
+# --------------------------------------------------------------------------- #
+def test_inference_frame_matches_what_the_segmenter_was_trained_on():
+    """Live has to hand the model the exact tensor shape training did, and it
+    has to be able to put each prediction back on the point it came from."""
+    from rocklabel.config import DEFAULTS
+    from rocklabel.dataset.neighborhoods import (build_inference_frame,
+                                                 build_segmentation_frame)
+    from rocklabel.profiles import apply_profile
+
+    g = apply_profile(DEFAULTS, "full-sweep")["generator"]
+    n = int(g["segmentation_points"])
+    xyz = np.random.default_rng(0).uniform(-3, 3, (900, 3)).astype(np.float32)
+    inten = np.zeros(900, np.float32)
+    base = np.array([1.0, 2.0, -0.5], np.float32)
+
+    live = build_inference_frame(xyz, inten, base, g, np.random.default_rng(1))
+    trained = build_segmentation_frame(xyz, inten, np.zeros(900, np.int8), base,
+                                       g, np.random.default_rng(1))
+    assert live["points"].shape == trained["points"].shape == (n, 4)
+    assert int(live["true_count"]) == int(trained["true_count"]) == 900
+    # same selection under the same seed, so live sees training's canonicalization
+    assert np.allclose(live["points"], trained["points"])
+    # the extra piece live needs: which original point each row came from
+    idx = live["index"][:900]
+    assert np.allclose(live["points"][:900, :3], xyz[idx] - base)
+
+
+def test_a_frame_too_sparse_to_score_is_skipped_not_guessed():
+    from rocklabel.config import DEFAULTS
+    from rocklabel.dataset.neighborhoods import build_inference_frame
+    from rocklabel.profiles import apply_profile
+
+    g = apply_profile(DEFAULTS, "full-sweep")["generator"]
+    thin = np.zeros((int(g["segmentation_min_points"]) - 1, 3), np.float32)
+    out = build_inference_frame(thin, np.zeros(len(thin), np.float32),
+                                np.zeros(3, np.float32), g,
+                                np.random.default_rng(0))
+    assert out is None
+
+
+def test_the_segmenter_returns_one_probability_per_point_not_per_ball():
+    """The bug this guards: the live scorer fed a segmenter format-A balls and
+    got back [balls, points] where it expected [balls], so every pass raised
+    and the panel sat on 'warming up' forever."""
+    torch = pytest.importorskip("torch")
+    from rocklabel.train.models import build_model
+
+    balls = torch.randn(4, 256, 4)
+    counts = torch.full((4,), 256, dtype=torch.long)
+    clf = build_model("pointnet", features=["dx", "dy", "dz"]).eval()
+    seg = build_model("pointnet2_seg", features=["dx", "dy", "dz"]).eval()
+    with torch.no_grad():
+        assert clf(balls, counts).shape == (4,)          # one per ball
+        assert seg(balls, counts).shape == (4, 256)      # one per point
+
+
+def test_a_failing_scorer_says_so_instead_of_warming_up_forever():
+    """The panel used to show 'warming up…' indefinitely while every pass
+    raised, with the reason only in a terminal log."""
+    scorer = _bare_scorer(np.zeros((0, 3)), np.zeros(0, np.float32))
+    scorer._result = None
+    scorer._last_error = "TypeError: only 0-dimensional arrays can be converted"
+    st = scorer.status_dict()
+    assert st["ready"] is False
+    assert "scoring is failing" in st["warning"]
+    assert "every pass is failing" in scorer.status()
+    # and with no error it still reads as warming up
+    scorer._last_error = None
+    assert "warming up" in scorer.status()

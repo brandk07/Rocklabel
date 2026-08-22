@@ -66,6 +66,29 @@ PROFILES: dict[str, Profile] = {
             "generator.segmentation_points": 2048,
         },
     ),
+    "full-sweep-dense": Profile(
+        name="full-sweep-dense",
+        title="Full sweep, every frame kept — for the whole-frame segmenter",
+        what="The same 0.05 second merge as full sweep, so a frame is still one "
+             "complete sensor rotation, but nothing is thrown away: every "
+             "rotation becomes a frame instead of every fourth. That is about "
+             "four times as many frames. The segmenter's per-frame point budget "
+             "drops from 2,048 to 1,280, which is still above the fullest frame "
+             "measured on this rig.",
+        when="Use it to train the whole-frame segmenter. The segmenter learns "
+             "from whole frames, so frames are the thing it is short of - it "
+             "saw about 2,165 of them per fold where the sliding-window "
+             "classifier saw 94,519 samples. Meanwhile 43% of every stored "
+             "frame was padding, so the smaller point budget costs no real "
+             "points and buys back most of the extra time the extra frames "
+             "cost. Frames are 0.05 s apart here, so consecutive ones overlap "
+             "heavily - it is more frames, not four times more scenery.",
+        overrides={
+            "generator.frame_window_s": 0.05,
+            "generator.frame_stride": 1,
+            "generator.segmentation_points": 1280,
+        },
+    ),
     "double-sweep": Profile(
         name="double-sweep",
         title="Double sweep — two rotations per frame",

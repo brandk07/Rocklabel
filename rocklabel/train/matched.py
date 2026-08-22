@@ -129,8 +129,8 @@ def _score(y: np.ndarray, p: np.ndarray) -> dict:
     """
     out = M.summarize(y, p, M.best_f1_threshold(y, p))
     return {k: float(out[k]) for k in
-            ("pr_auc", "roc_auc", "f1", "precision", "recall", "rock_frac",
-             "baseline_pr_auc", "threshold")}
+            ("pr_auc", "norm_pr_auc", "roc_auc", "f1", "precision", "recall",
+             "rock_frac", "baseline_pr_auc", "threshold")}
 
 
 def compare(cache_dir: str, ablate_root: str, suite: str, clf_arm: str,
@@ -235,8 +235,14 @@ def render_matched(cache_dir: str, ablate_root: str, suite: str, out_dir: str,
                    radius: float = DEFAULT_RADIUS_M, aggregation: str = "max",
                    pairs: list[tuple[str, str]] | None = None) -> dict:
     """Write the matched-population comparison as JSON, Markdown and figures."""
+    from .ablate import check_cache_matches
     from .data import load_cache_meta
 
+    # Same guard as the sweep: the segmenter's per-point positions are read
+    # straight out of this cache and matched against the classifier's stored
+    # centers, so a cache cut a different way would be matching two different
+    # sets of frames against each other.
+    check_cache_matches(suite, cache_dir)
     os.makedirs(out_dir, exist_ok=True)
     runs = sorted(load_cache_meta(cache_dir)["runs"])
     labels = _labels_of(suite)

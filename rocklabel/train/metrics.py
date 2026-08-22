@@ -105,4 +105,29 @@ def summarize(labels: np.ndarray, probs: np.ndarray, threshold: float = 0.5) -> 
         "baseline_accuracy": max(rock_frac, 1.0 - rock_frac),
         "baseline_pr_auc": rock_frac,
     })
+    out["norm_pr_auc"] = normalized_pr_auc(out["pr_auc"], rock_frac)
     return out
+
+
+def normalized_pr_auc(pr_auc: float, prevalence: float) -> float:
+    """PR-AUC rescaled so guessing scores 0 and a perfect model scores 1.
+
+    ``(AP - prevalence) / (1 - prevalence)``. Raw PR-AUC starts at the positive
+    rate, so a run with many rocks looks better than a run with few even when
+    both models are equally good. Rock share spans 6.3%-31.6% across the eleven
+    volleyball recordings, a 5x spread, which is enough that a raw per-fold
+    table partly measures how many rocks a recording has.
+
+    Measured, the reordering is mild - on full-sweep data it swaps three
+    adjacent pairs of folds and leaves both ends of the table alone, and for the
+    segmenter (every fold ~1% rock) it changes nothing at all. It is reported
+    because it is honest and free, not because it overturns rankings.
+
+    Only comparable within one population: a segmenter's per-point score and a
+    classifier's per-ball score are still two different measurements after
+    normalizing, because normalizing fixes the floor, not the unit. Use
+    ``rocklabel-train matched`` for that comparison.
+    """
+    if prevalence >= 1.0:
+        return 0.0
+    return float((pr_auc - prevalence) / (1.0 - prevalence))

@@ -66,7 +66,9 @@ def export_model(checkpoint_path: str, out_dir: str) -> None:
     ck = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     cfg, gcfg = ck["config"], ck["generator"]
     model = build_model(cfg["model"], tnet=cfg["tnet"], dropout=cfg.get("dropout"),
-                        features=cfg.get("features"))
+                        features=cfg.get("features"),
+                        seg_npoints=cfg.get("seg_npoints"),
+                        seg_radii=cfg.get("seg_radii"))
     model.load_state_dict(ck["model"])
     wrapped = InferenceModel(model).eval()
 

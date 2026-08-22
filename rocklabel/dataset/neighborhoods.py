@@ -166,6 +166,46 @@ def build_segmentation_frame(
     }
 
 
+def build_inference_frame(
+    xyz: np.ndarray,
+    intensity: np.ndarray,
+    base: np.ndarray,
+    gcfg: dict,
+    rng: np.random.Generator,
+) -> dict | None:
+    """One whole frame for a per-point segmenter, live — format C with no labels.
+
+    Same selection and canonicalization as :func:`build_segmentation_frame`, so
+    a model sees at inference exactly the tensor it was trained on: dx/dy/dz
+    relative to the robot base, intensity passed through, real points first and
+    padding repeating them.
+
+    Also returns ``index``, which :func:`build_segmentation_frame` has no reason
+    to: training pairs each row with a stored label, but live the caller has to
+    put each row's *prediction* back on the point it came from.
+    """
+    n = int(gcfg["segmentation_points"])
+    k = len(xyz)
+    if k < int(gcfg["segmentation_min_points"]):
+        return None
+    if k > n:
+        idx = rng.choice(k, n, replace=False)
+    else:
+        idx = np.concatenate([np.arange(k), rng.choice(k, n - k, replace=True)])
+    pts = xyz[idx]
+    local = np.empty((n, 4), np.float32)
+    local[:, 0] = pts[:, 0] - base[0]
+    local[:, 1] = pts[:, 1] - base[1]
+    local[:, 2] = pts[:, 2] - base[2]
+    local[:, 3] = intensity[idx]
+    return {
+        "points": local,
+        "index": idx,
+        "true_count": np.int32(min(k, n)),
+        "base_odom": np.asarray(base, np.float32),
+    }
+
+
 def build_inference_samples(
     xyz: np.ndarray,
     intensity: np.ndarray,

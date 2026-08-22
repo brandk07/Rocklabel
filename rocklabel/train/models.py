@@ -371,6 +371,16 @@ class PointNetPPSeg(nn.Module):
         if self.features[:3] != list(GEOMETRY):
             raise ValueError("segmentation samples and groups by position, so it needs "
                              f"all of {list(GEOMETRY)} selected; got {self.features}")
+        if len(npoints) != 3 or len(radii) != 3:
+            raise ValueError("segmentation has exactly three levels, so it needs "
+                             f"three npoints and three radii; got {npoints} / {radii}")
+        if list(npoints) != sorted(npoints, reverse=True):
+            raise ValueError("each segmentation level samples fewer centroids than "
+                             f"the one above it, so npoints must descend; got {npoints}")
+        if list(radii) != sorted(radii):
+            raise ValueError("each segmentation level pools over a wider ball than "
+                             f"the one above it, so radii must ascend; got {radii}")
+        self.npoints, self.radii = tuple(npoints), tuple(radii)
         extra = self.features[3:]
         self.register_buffer("extra_idx", _feature_buffer(extra), persistent=False)
         c0 = len(extra)
@@ -408,9 +418,15 @@ class PointNetPPSeg(nn.Module):
 
 
 def build_model(name: str, tnet: bool = False, dropout: float | None = None,
-                features: list[str] | None = None) -> nn.Module:
+                features: list[str] | None = None,
+                seg_npoints=None, seg_radii=None) -> nn.Module:
     """``features=None`` means all of :data:`FEATURES` — the historical
-    behavior, so checkpoints trained before the setting existed still load."""
+    behavior, so checkpoints trained before the setting existed still load.
+
+    ``seg_npoints``/``seg_radii`` size the segmenter's three levels; ``None``
+    keeps the geometry every segmentation run before them was trained with, so
+    those checkpoints still load into the shape they were saved from.
+    """
     if name == "pointnet":
         return PointNet(tnet=tnet, dropout=0.3 if dropout is None else dropout,
                         features=features)
@@ -418,6 +434,11 @@ def build_model(name: str, tnet: bool = False, dropout: float | None = None,
         return PointNetPP(dropout=0.4 if dropout is None else dropout,
                           features=features)
     if name == "pointnet2_seg":
+        kw = {}
+        if seg_npoints is not None:
+            kw["npoints"] = tuple(int(n) for n in seg_npoints)
+        if seg_radii is not None:
+            kw["radii"] = tuple(float(r) for r in seg_radii)
         return PointNetPPSeg(dropout=0.3 if dropout is None else dropout,
-                             features=features)
+                             features=features, **kw)
     raise ValueError(f"unknown model {name!r} (pick from {sorted(MODELS)})")
