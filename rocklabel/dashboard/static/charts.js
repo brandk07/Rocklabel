@@ -153,8 +153,16 @@ function groupedColumns(o) {
 
   if (o.series.length >= 2) fig.appendChild(legend(o.series.map((s) => s.name), colors));
 
-  const W = 720, H = 260;
+  const H = 260;
   const M = { top: 12, right: 12, bottom: 34, left: 44 };
+  // Fold names like "VolleyBallTest10.reslam" scrunch into an unreadable mash
+  // once a suite has a dozen of them, so the canvas grows with the category
+  // count and each label truncates inside its own band instead of overlapping
+  // its neighbours. The extra width scrolls horizontally (.chart-scroll); the
+  // table view below carries every full name either way.
+  const MIN_BAND = 72;
+  const baseW = 720;
+  const W = Math.max(baseW, M.left + M.right + o.categories.length * MIN_BAND);
   const plotW = W - M.left - M.right;
   const plotH = H - M.top - M.bottom;
 
@@ -190,6 +198,11 @@ function groupedColumns(o) {
   const gap = 2;                                   // the surface gap, not a stroke
   const barW = Math.min(24, (bandW * 0.62 - gap * (nSeries - 1)) / nSeries);
   const groupW = barW * nSeries + gap * (nSeries - 1);
+  // Roughly how many glyphs fit one band at this font size; every label gets
+  // at least three so a degenerate band still shows something.
+  const maxChars = Math.max(3, Math.floor((bandW - 8) / 6.4));
+  const labelOf = (cat) => (String(cat).length > maxChars
+    ? `${String(cat).slice(0, maxChars - 1)}…` : String(cat));
 
   o.categories.forEach((cat, ci) => {
     const cx = M.left + bandW * ci + bandW / 2;
@@ -216,12 +229,18 @@ function groupedColumns(o) {
       path.addEventListener('blur', hideTip);
       svg.appendChild(path);
     });
-    svg.appendChild(el('text', {
+    const label = el('text', {
       x: cx, y: H - 12, 'text-anchor': 'middle',
       fill: cssVar('--text-secondary'), 'font-size': 11.5,
-    }, cat));
+    }, labelOf(cat));
+    if (label.textContent !== String(cat)) {
+      // The full name on hover for a label the band was too narrow to spell out.
+      label.appendChild(el('title', {}, String(cat)));
+    }
+    svg.appendChild(label);
   });
 
+  if (W > baseW) svg.setAttribute('width', W);   // wide charts scroll, not squish
   chart.appendChild(svg);
   scroll.appendChild(chart);
   fig.appendChild(scroll);

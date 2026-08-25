@@ -293,18 +293,18 @@ class DisplayConfig:
     #: How many recent points to keep in the rolling raw-point buffer.
     raw_buffer_size: int = 60_000
     #: Show the raw point cloud on startup.
-    show_points: bool = True
+    show_points: bool = False
     #: Show the reconstructed mesh on startup.
-    show_mesh: bool = True
+    show_mesh: bool = False
     #: How many recent frames the accumulated world-frame cloud keeps (toggle:
     #: C, adjustable live in the View panel). Retention is counted in frames so
     #: it means the same thing whatever a source calls a frame: the SICK
     #: streams ~225 small telegrams/s, a ros2 bag one full cloud per rev.
-    accum_frames: int = 5_000
+    accum_frames: int = 50_000
     #: Hard point ceiling for that cloud — a memory / render-cost guard, not
     #: the retention knob. Whichever limit is hit first drops the oldest frame;
     #: raising it above ~1M makes each rebuild visibly expensive.
-    accum_buffer_size: int = 800_000
+    accum_buffer_size: int = 1_200_000
     #: Keep every Nth point in the accumulated cloud (memory / render cost).
     accum_subsample: int = 4
     #: Show the accumulated cloud on startup.

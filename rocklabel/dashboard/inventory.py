@@ -522,49 +522,43 @@ def _history(path: str) -> list[dict]:
 
 
 def runs(root: str) -> list[dict]:
-    """The flat ``<model>_loro_<run>`` folds that `train` and `compare` write."""
+    """Every evaluated sweep fold — the source for the headline numbers.
+
+    The pipeline page's best-held-out-F1 hero and its folds-evaluated counts
+    read this, so it follows the suites on the Runs board: the current
+    volleyball-test sweeps. It deliberately skips the retired flat ``compare``
+    experiments, whose numbers answered a different population and only made
+    the headline describe work nobody looks at anymore.
+
+    Only ``test_metrics.json`` is opened per fold — no configs, no histories —
+    because this runs on every state poll.
+    """
+    base = os.path.join(root, DIRS["experiments"])
     out = []
-    bases = [os.path.join(root, DIRS["experiments"], e) for e in FLAT_EXPERIMENTS]
-    for base in bases:
-        if not os.path.isdir(base):
+    if not os.path.isdir(base):
+        return out
+    for run_dir in _checkpoint_dirs(base):
+        parts = os.path.relpath(run_dir, base).split(os.sep)
+        if parts[0] in FLAT_EXPERIMENTS or any(".superseded-" in p for p in parts):
             continue
-        for name in sorted(os.listdir(base)):
-            entry = _run_entry(root, base, name)
-            if entry:
-                out.append(entry)
-    out.sort(key=lambda r: (r["experiment"], r["model"], r["test_run"]))
+        metrics = _read_json(os.path.join(run_dir, "test_metrics.json"))
+        if not metrics:
+            continue
+        arm = parts[1] if len(parts) >= 3 else ""
+        fold = metrics.get("test_run") or _fold_of(parts[-1])
+        out.append({
+            "name": f"{parts[0]}/{arm}/{fold}",
+            "path": os.path.relpath(run_dir, root),
+            "experiment": parts[0],
+            "arm": arm,
+            "model": metrics.get("model") or "",
+            "test_run": fold,
+            "metrics": metrics,
+            "complete": True,
+            "mtime": _stat(run_dir)["mtime"],
+        })
+    out.sort(key=lambda r: (r["experiment"], r["arm"], r["test_run"]))
     return out
-
-
-def _run_entry(root: str, base: str, name: str) -> dict | None:
-    """One flat ``<model>_loro_<run>`` fold directory, or None if it is not one."""
-    full = os.path.join(base, name)
-    if not os.path.isdir(full):
-        return None
-    cfg = _read_json(os.path.join(full, "config.json")) or {}
-    metrics = _read_json(os.path.join(full, "test_metrics.json")) or {}
-    best = os.path.join(full, "best.pt")
-    history = _history(os.path.join(full, "history.csv"))
-    return {
-        "name": name,
-        "path": os.path.relpath(full, root),
-        "experiment": os.path.basename(base),
-        "model": cfg.get("model") or metrics.get("model") or "",
-        "test_run": cfg.get("test_run") or metrics.get("test_run") or "",
-        "train_runs": cfg.get("train_runs") or [],
-        "epochs_configured": cfg.get("epochs"),
-        "epochs_run": len(history),
-        "batch": cfg.get("batch"),
-        "lr": cfg.get("lr"),
-        "config": cfg,
-        "metrics": metrics,
-        "complete": bool(metrics),
-        "checkpoint": os.path.relpath(best, root) if os.path.exists(best) else None,
-        "checkpoint_size": _stat(best)["size"] if os.path.exists(best) else 0,
-        "mtime": _stat(best if os.path.exists(best) else full)["mtime"],
-        "history": history,
-        "exported": os.path.isdir(os.path.join(root, DIRS["exported"], name)),
-    }
 
 
 #: How a fold directory names the recording it held out.
@@ -604,6 +598,8 @@ def checkpoints(root: str) -> list[dict]:
     it was tested against, and what it scored. Entries are sorted best-first
     inside their group, and the top scorer of each experiment is flagged so the
     browser can offer "just give me the good one" without scanning the list.
+    The retired flat ``compare`` experiments are not listed: their weights
+    answer a population nothing current matches.
 
     ``last.pt`` is listed but flagged unusable: it is the resume point, carrying
     optimizer/scheduler state but none of the config, generator settings or
@@ -623,8 +619,11 @@ def checkpoints(root: str) -> list[dict]:
     for run_dir in _checkpoint_dirs(base):
         parts = os.path.relpath(run_dir, base).split(os.sep)
         experiment = parts[0]
-        # <experiment>/<arm>/<fold> for a sweep; <experiment>/<model>_loro_<run>
-        # for a compare run, whose arm is the model named in its own config.
+        # The retired flat compare experiments trained on a population nothing
+        # current matches; their weights are not offered next to sweep arms.
+        if experiment in FLAT_EXPERIMENTS:
+            continue
+        # <experiment>/<arm>/<fold> for a sweep.
         if len(parts) >= 3:
             arm, fold_dir = parts[1], parts[-1]
         else:
@@ -985,6 +984,10 @@ def training_activity(root: str) -> list[dict]:
     for experiment in sorted(os.listdir(base)):
         edir = os.path.join(base, experiment)
         if not os.path.isdir(edir):
+            continue
+        # The retired flat compares are finished history; they never train again
+        # and have no business in a panel about the present.
+        if experiment in FLAT_EXPERIMENTS:
             continue
         arms: dict[str, list[dict]] = {}
         for run_dir in _checkpoint_dirs(edir) + _unstarted_dirs(edir):

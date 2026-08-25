@@ -10,8 +10,9 @@ engine through a direct method call rather than any kind of IPC. That is also
 why it binds ``127.0.0.1``: this thread can re-aim a LiDAR rig's scoring region
 and start writing files, and has no business listening on the network.
 
-The page borrows `rocklabel dash`'s stylesheet wholesale (see ``/theme/``)
-rather than shipping a second copy of the same design tokens.
+The page is visually self-contained (``static/live.css`` carries its own
+design tokens) and borrows exactly one dashboard asset over ``/theme/``:
+``charts.js``, the tooltip + table primitives behind its charts.
 """
 
 from __future__ import annotations
@@ -50,18 +51,18 @@ def create_app(controller: LiveController) -> Flask:
             subtitle=schema["subtitle"],
         )
 
-    #: Dashboard assets this page borrows rather than duplicating: the design
-    #: tokens, and the chart implementation behind the trend plots. An explicit
-    #: list, not an extension test — this must never become a general file
-    #: server for the package directory.
-    shared_assets = {"app.css", "charts.js"}
+    #: Dashboard assets this page borrows rather than duplicating: the chart
+    #: and tooltip primitives. An explicit list, not an extension test — this
+    #: must never become a general file server for the package directory.
+    shared_assets = {"charts.js"}
 
     @app.get("/theme/<path:filename>")
     def theme(filename: str):
         """Serve a dashboard asset shared with this page.
 
-        One design system, one implementation: a second copy of app.css or
-        charts.js here is how the two surfaces drift apart.
+        Styling is NOT borrowed any more: live.css owns this panel's tokens so
+        the two surfaces can restyle independently. Only code that would drift
+        out of step if copied is shared.
         """
         if filename not in shared_assets:
             abort(404, filename)

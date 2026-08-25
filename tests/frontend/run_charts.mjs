@@ -39,6 +39,25 @@ check('NaN fold must not draw a bar', count(g, 'path') === 7);
 check('grouped columns need a table view', count(g, 'table') === 1);
 check('grouped columns need a caption', count(g, 'figcaption') === 1);
 
+// A dozen long held-out-run names must not print over each other: the canvas
+// grows with the category count and each label truncates inside its own band,
+// with the full name reachable on hover.
+const many = Array.from({ length: 12 }, (_, i) => `VolleyBallTest${i + 2}.reslam`);
+const wide = C.groupedColumns({
+  categories: many,
+  series: [
+    { name: 'segmenter · dense cache', values: many.map((_, i) => (i % 5 ? 0.63 : NaN)) },
+  ],
+  max: 1,
+});
+const wsvg = [...wide.walk()].find((x) => x.tagName === 'svg');
+check('many categories grow the canvas instead of scrunching',
+  wsvg && Number(wsvg.getAttribute('width')) > 720);
+check('every too-long label truncates', count(wide, 'title') === many.length);
+check('truncated labels keep their full name on hover',
+  [...wide.walk()].filter((x) => x.tagName === 'title')
+    .every((t, i) => t.textContent === many[i]));
+
 // Lines: a 30-epoch history.csv.
 const epochs = [...Array(30).keys()];
 const l = C.lineChart({

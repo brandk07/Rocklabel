@@ -35,6 +35,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from . import clusters
+
 #: Points farther than this many candidate-voxel edges from every scored
 #: center get no prediction (the viewer dims them instead of coloring).
 _MATCH_VOXELS = 3.0
@@ -70,6 +72,14 @@ class ScoreSettings:
     max_cloud_points: int = 60_000
     #: Candidate centers scored per pass (random subsample above this).
     max_centers: int = 5_000
+    #: Rock outlines. Display only: these two group the detections the model
+    #: already produced into objects (see :mod:`rocklabel.live.clusters`) and
+    #: never change what is fed to the model, so moving them costs no pass.
+    #: ``cluster_link_m`` is how close two detections must be to belong to the
+    #: same rock; ``cluster_min_points`` is the noise gate — smaller clumps get
+    #: no outline.
+    cluster_link_m: float = clusters.DEFAULT_LINK_M
+    cluster_min_points: int = clusters.DEFAULT_MIN_POINTS
 
 
 class _Result:
@@ -111,6 +121,19 @@ class LiveScorer:
         self._tcfg = ck["config"]
         self._gcfg = ck["generator"]
         self.threshold = float(ck.get("threshold", 0.5))
+        #: The checkpoint's own tuned threshold, kept separately because
+        #: ``threshold`` is a live knob — and when two models are being compared
+        #: they share one slider, so the value each was tuned to is the only
+        #: record of what its author intended.
+        self.tuned_threshold = self.threshold
+        #: Where this model came from, for the panel and for the comparison's
+        #: "am I already running this one" check.
+        self.checkpoint = str(checkpoint)
+        #: Scan window the model was TRAINED with. Two checkpoints that
+        #: disagree about this are not directly comparable on one setting, so
+        #: the comparison says so rather than quietly feeding one the wrong
+        #: density.
+        self.frame_window_s = float(self._gcfg.get("frame_window_s") or 0.0)
         self.model_name = self._tcfg["model"]
         #: "classify" scores one 0.5 m ball at a time; "segment" labels every
         #: point of a whole frame in one pass. The two need different input
@@ -385,6 +408,15 @@ class LiveScorer:
         if matched.any():
             probs[matched] = res.probs[idx[matched]]
         return probs, matched
+
+    @property
+    def center_spacing_m(self) -> float:
+        """Edge of the candidate voxel grid the prediction map is keyed on.
+
+        Detections sit on this grid, so it is also how much ground one of them
+        stands for — which is what the outline builder inflates its polygons by.
+        """
+        return float(self._gcfg["centers_voxel_m"])
 
     def detections(self) -> tuple[np.ndarray, np.ndarray] | None:
         """Centers and probs of the current map (probs >= threshold only)."""

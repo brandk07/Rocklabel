@@ -1,20 +1,24 @@
-/* The extra views: an overhead map of the room, and the confidence histogram.
+/* The extra views: an overhead map of the room, the confidence histogram, and
+ * the compact trend sparks in the right rail.
  *
- * The trend plots are not here — those are Charts.lineChart from the dashboard,
- * reused as-is. What lives in this file is the two things it has no equivalent
- * of: a spatial map, and a distribution with a live threshold on it.
+ * The full-sized plots are not here — tooltips and table twins are Charts.*
+ * from the dashboard, reused as-is. What lives in this file is what it has no
+ * equivalent of: a spatial map, a distribution with a live threshold on it,
+ * and rail-sized sparks drawn at their true pixel size.
  *
  * Encoding, decided once and applied in both:
  *
- *   terrain / context  neutral sequential ramp, --surface-3 → --text-secondary.
- *                      Those two tokens swap ends between light and dark mode,
- *                      so the ramp re-anchors with the theme for free, and
- *                      being neutral it never competes with the thing you are
- *                      actually looking for.
- *   rock               --series-2 (orange), the ONE chromatic hue on the map,
- *                      and the same hue on the histogram's above-threshold
- *                      bars. Orange means "the model calls this a rock" in both
- *                      places, which is what makes the two charts one view.
+ *   terrain / context  neutral sequential ramp, --inset → --dim. Neutral so it
+ *                      never competes with the thing you are actually looking
+ *                      for, and anchored to the same tokens as the surfaces
+ *                      around it, so both themes re-anchor it for free.
+ *   rock               --series-2 (the accent green), the ONE saturated hue on
+ *                      the map, and the same hue on the histogram's
+ *                      above-threshold bars. Green means "the model calls this
+ *                      a rock" in both places, which is what makes the two
+ *                      charts one view. Outlines are the same green: a filled
+ *                      shape at low opacity under a solid edge, so overlapping
+ *                      rocks still read as separate objects.
  *   sensor             --series-1 (blue). Distinct from rock at a glance and
  *                      under CVD; it is a different kind of thing, not a
  *                      different amount of one.
@@ -60,7 +64,13 @@ function overhead(canvas, scene) {
 
   const bev = scene.bev;
   const dets = (scene.detections && scene.detections.rows) || [];
+  const rocks = (scene.rocks && scene.rocks.rows) || [];
   const sensor = scene.sensor || { x: 0, y: 0, yaw_deg: 0 };
+  // Display mode 2 is "rock outlines": the same detections, grouped into
+  // objects. Polygons REPLACE the dots — drawing both would say the same thing
+  // twice and hide the shape that is the whole point of the mode.
+  const outlined = scene.display === 2;
+  const shapes = outlined ? rocks : [];
 
   // World bounds: the terrain, plus anything drawn on top of it. A detection
   // just outside the fused area must not be silently cropped away.
@@ -73,6 +83,12 @@ function overhead(canvas, scene) {
   for (const d of dets) {
     minX = Math.min(minX, d[0]); maxX = Math.max(maxX, d[0]);
     minY = Math.min(minY, d[1]); maxY = Math.max(maxY, d[1]);
+  }
+  for (const r of shapes) {
+    for (const [x, y] of r.poly) {
+      minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+      minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+    }
   }
   const pad = 0.4;
   minX -= pad; maxX += pad; minY -= pad; maxY += pad;
@@ -88,8 +104,8 @@ function overhead(canvas, scene) {
 
   // -- terrain ------------------------------------------------------------- //
   if (bev) {
-    const low = parseHex(V('--surface-3'));
-    const high = parseHex(V('--text-secondary'));
+    const low = parseHex(V('--inset'));
+    const high = parseHex(V('--dim'));
     const bytes = atob(bev.data);
     const img = ctx.createImageData(bev.w, bev.h);
     for (let j = 0; j < bev.h; j++) {
@@ -125,16 +141,37 @@ function overhead(canvas, scene) {
     ctx.restore();
   }
 
-  // -- detections ---------------------------------------------------------- //
-  // Sized in world units so the marks mean "this much ground", with a floor so
-  // they stay visible zoomed out. One hue: presence is the message.
+  // -- detections, or the outlines built from them ------------------------- //
   const rock = V('--series-2');
-  const markPx = Math.max(3, Math.min(9, 0.12 * scale));
-  ctx.fillStyle = rock;
-  for (const d of dets) {
-    ctx.beginPath();
-    ctx.arc(sx(d[0]), sy(d[1]), markPx / 2, 0, Math.PI * 2);
-    ctx.fill();
+  if (outlined) {
+    // Drawn at their true footprint: an outline is a claim about how much
+    // ground the rock covers, so it must never be a fixed-size mark.
+    ctx.save();
+    ctx.lineWidth = 1.5;
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = rock;
+    for (const r of shapes) {
+      ctx.beginPath();
+      r.poly.forEach(([x, y], i) => (i ? ctx.lineTo(sx(x), sy(y))
+                                      : ctx.moveTo(sx(x), sy(y))));
+      ctx.closePath();
+      ctx.globalAlpha = 0.22;         // fill reads as area, edge as the shape
+      ctx.fillStyle = rock;
+      ctx.fill();
+      ctx.globalAlpha = 1;
+      ctx.stroke();
+    }
+    ctx.restore();
+  } else {
+    // Sized in world units so the marks mean "this much ground", with a floor
+    // so they stay visible zoomed out. One hue: presence is the message.
+    const markPx = Math.max(3, Math.min(9, 0.12 * scale));
+    ctx.fillStyle = rock;
+    for (const d of dets) {
+      ctx.beginPath();
+      ctx.arc(sx(d[0]), sy(d[1]), markPx / 2, 0, Math.PI * 2);
+      ctx.fill();
+    }
   }
 
   // -- sensor -------------------------------------------------------------- //
@@ -163,12 +200,16 @@ function overhead(canvas, scene) {
   ctx.beginPath();
   ctx.moveTo(12, barY); ctx.lineTo(12 + metres * scale, barY);
   ctx.stroke();
-  ctx.font = '11px system-ui, sans-serif';
+  ctx.font = '10px ui-monospace, Menlo, Consolas, monospace';
   ctx.fillText(`${metres} m`, 12, barY - 5);
   ctx.restore();
 
+  // Hover targets: one per drawn thing. An outline is hit at its centroid,
+  // which is where the reader is looking when they point at a rock.
   return {
-    marks: dets.map((d) => ({ x: sx(d[0]), y: sy(d[1]), d })),
+    marks: outlined
+      ? shapes.map((r) => ({ x: sx(r.x), y: sy(r.y), rock: r }))
+      : dets.map((d) => ({ x: sx(d[0]), y: sy(d[1]), d })),
     scale,
   };
 }
@@ -181,7 +222,7 @@ function niceMetres(target) {
 /* ============================================================= HISTOGRAM === */
 /**
  * Confidence distribution of every scored center, with the decision threshold
- * drawn on it. Bars at or above the threshold take the same orange the map
+ * drawn on it. Bars at or above the threshold take the same green the map
  * paints rocks with, so "how many marks am I about to see" is readable here.
  *
  * @param {object} hist  {counts, edges, threshold, total, above}
@@ -299,6 +340,114 @@ function roundedTop(x, y, w, h, r) {
        + `L${x + w - rr},${y} Q${x + w},${y} ${x + w},${y + rr} L${x + w},${bottom} Z`;
 }
 
+/* ================================================================= SPARKS === */
+/**
+ * One measure over time, sized for the right rail. Drawn in a viewBox that
+ * matches its real pixel size, so labels stay legible instead of scaling down
+ * with a wide chart. The latest value is printed in the header — the number
+ * you actually act on should not need a hover.
+ *
+ * @param {object} s  a history series {id, label, unit, values[]}
+ */
+function spark(s) {
+  const NS = 'http://www.w3.org/2000/svg';
+  const mk = (tag, attrs, text) => {
+    const n = document.createElementNS(NS, tag);
+    for (const [k, v] of Object.entries(attrs || {})) n.setAttribute(k, v);
+    if (text != null) n.textContent = text;
+    return n;
+  };
+  const el = (tag, cls, text) => {
+    const n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text != null) n.textContent = text;
+    return n;
+  };
+
+  const W = 300, H = 58;
+  const M = { l: 2, r: 46, t: 7, b: 6 };       // right margin holds the readout
+  const plotW = W - M.l - M.r;
+  const plotH = H - M.t - M.b;
+
+  const vals = s.values.filter(Number.isFinite);
+  const max = Math.max(...vals, 0);
+  const min = Math.min(...vals, 0);
+  const span = (max - min) || 1;
+  const step = Math.max(1, s.values.length - 1);
+  const xOf = (i) => M.l + (i / step) * plotW;
+  const yOf = (v) => M.t + (1 - (v - min) / span) * plotH;
+
+  const fig = el('div', 'spark');
+  const head = el('div', 'spark-head');
+  head.appendChild(el('span', 'spark-label', s.label));
+  head.appendChild(el('span', 'spark-unit', s.unit));
+  const last = vals[vals.length - 1];
+  head.appendChild(el('span', 'spark-val', compact(last)));
+  fig.appendChild(head);
+
+  const svg = mk('svg', {
+    viewBox: `0 0 ${W} ${H}`, role: 'img',
+    // meet, spelled out: if a container ever forces a height on this svg it
+    // letterboxes rather than stretches the line out of shape.
+    preserveAspectRatio: 'xMidYMid meet',
+    'aria-label': `${s.label}, latest ${compact(last)} ${s.unit}`,
+  });
+
+  // zero line where the range crosses it — a flat-at-zero series must read
+  // as "nothing happening", not as a gap.
+  if (min < 0 && max > 0) {
+    svg.appendChild(mk('line', {
+      x1: M.l, x2: M.l + plotW, y1: yOf(0), y2: yOf(0),
+      stroke: V('--gridline'), 'stroke-width': 1, 'shape-rendering': 'crispEdges',
+    }));
+  }
+
+  const pts = s.values
+    .map((v, i) => (Number.isFinite(v) ? [xOf(i), yOf(v)] : null))
+    .filter(Boolean);
+  const lineColor = V('--series-1');
+  if (pts.length >= 2) {
+    svg.appendChild(mk('path', {
+      d: 'M' + pts.map((p) => `${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(' L'),
+      fill: 'none', stroke: lineColor, 'stroke-width': 1.5,
+      'stroke-linejoin': 'round', 'stroke-linecap': 'round',
+    }));
+  }
+  const tip = pts[pts.length - 1];
+  if (tip) {
+    svg.appendChild(mk('circle', {
+      cx: tip[0], cy: tip[1], r: 2.5, fill: lineColor,
+      stroke: V('--surface-1'), 'stroke-width': 1,
+    }));
+    svg.appendChild(mk('text', {
+      x: W - M.r + 8, y: Math.max(9, Math.min(H - 3, tip[1] + 3)),
+      fill: V('--text-secondary'), 'font-size': 10,
+      style: 'font-variant-numeric: tabular-nums',
+    }, compact(last)));
+  }
+
+  // Nearest-sample hover: which second was that dip in?
+  const hit = mk('rect', {
+    x: M.l, y: 0, width: plotW, height: H,
+    fill: 'transparent', style: 'cursor: crosshair',
+  });
+  hit.addEventListener('mousemove', (e) => {
+    const box = svg.getBoundingClientRect();
+    const rel = ((e.clientX - box.left) / Math.max(1, box.width)) * W;
+    const i = Math.max(0, Math.min(s.values.length - 1,
+      Math.round(((rel - M.l) / plotW) * step)));
+    window.Charts.showTip(e, `${s.label} · t−${step - i}s`, [
+      { label: 'value', value: compact(s.values[i]), color: lineColor },
+      { label: 'range', value: `${compact(min)} – ${compact(max)}` },
+    ]);
+  });
+  hit.addEventListener('mouseleave', () => window.Charts.hideTip());
+  svg.appendChild(hit);
+
+  fig.appendChild(svg);
+  return fig;
+}
+
 function niceTicks(max, count = 4) {
   if (max <= 0) return [0];
   const raw = max / count;
@@ -315,4 +464,4 @@ function compact(n) {
   return `${(n / 1e6).toFixed(1)}M`;
 }
 
-window.Views = { overhead, histogram, niceTicks, compact };
+window.Views = { overhead, histogram, spark, niceTicks, compact };

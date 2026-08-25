@@ -29,8 +29,16 @@ import threading
 
 import numpy as np
 
+from .. import clusters
 from ..colormap import move_range_end
+from ..compare import Comparison, short_name
+from ..recording import format_speed
 from . import scene, spec
+
+#: Checkpoints offered in the model pickers. The project has hundreds of them;
+#: a dropdown past this is not a picker. The ones that survive the cut are the
+#: best of each experiment first, then the rest, best-first inside their group.
+MAX_CHECKPOINT_CHOICES = 80
 
 #: How long a write waits for the GUI thread to apply it before answering
 #: anyway. The GUI drains its queue every frame (60 ms at the default 16 fps),
@@ -54,13 +62,35 @@ def _compact(n: float) -> str:
 class LiveController:
     """Reads and writes one running live session on behalf of the web page."""
 
-    def __init__(self, config, engine, scorer=None, viz=None) -> None:
+    def __init__(self, config, engine, scorer=None, viz=None,
+                 comparison=None, project_root: str = "") -> None:
         self._cfg = config
         self._engine = engine
         self._scorer = scorer
         self._viz = viz
+        #: The model slots of this session. Built here when the caller did not
+        #: bring one, so a plain --model run can still swap checkpoints and open
+        #: a comparison without run.py having anticipated it.
+        self._compare = comparison or Comparison(config, engine, scorer=scorer,
+                                                 viz=viz)
+        self._compare.on_swap = self._on_model_swap
+        #: Where to look for checkpoints to offer in the model pickers. The
+        #: live process is started from the project root — that is how
+        #: `rocklabel dash` launches it — so the working directory is the
+        #: honest default.
+        self._root = project_root or os.getcwd()
         self._replay = bool(getattr(engine.source, "is_replay", False))
         self._history = scene.History()
+        #: Prediction display mode when there is no Open3D window to hold it
+        #: (--headless --web-ui). With a window the viewer owns it, so that one
+        #: number is not kept in two places.
+        self._display = 0
+        #: Last computed rock outlines per model, and the (pass, threshold,
+        #: settings) they were computed for. Clustering a full prediction map
+        #: is real work and the page asks for it four times a second, so it is
+        #: done once per scoring pass and reused by the readouts and the map.
+        #: Keyed by scorer, because a comparison has two of them.
+        self._outline_cache: dict[int, tuple[tuple, clusters.Outlines]] = {}
 
     # ------------------------------------------------------------------ #
     # Capabilities
@@ -101,6 +131,67 @@ class LiveController:
             done.wait(_POST_TIMEOUT_SEC)
 
     # ------------------------------------------------------------------ #
+    # Prediction display mode + rock outlines
+    # ------------------------------------------------------------------ #
+    @property
+    def display_mode(self) -> int:
+        """0 = confidence ramp, 1 = detections at the threshold, 2 = outlines.
+
+        The Open3D window owns this when there is one — it is what its own
+        Display dropdown writes — and the controller keeps it otherwise, so a
+        ``--headless --web-ui`` run can still switch the overhead map to
+        outlines.
+        """
+        if self._viz is not None:
+            return int(self._viz._model_display)
+        return int(self._display)
+
+    def _on_model_swap(self, slot: str, scorer) -> None:
+        """A slot changed checkpoint: rebind whatever still points at the old
+        scorer, and drop outlines that describe predictions now gone."""
+        if slot == "a":
+            self._scorer = scorer
+        self._outline_cache.clear()
+
+    def outlines(self, scorer=None) -> clusters.Outlines:
+        """Rock outlines for a model's current prediction map.
+
+        Recomputed only when the scoring pass, the threshold or one of the two
+        outline settings changed: the page polls the readouts four times a
+        second and the model finishes a pass twice a second, so without this
+        the same clustering would be redone six times for nothing.
+
+        The Open3D window works out its own copy on the GUI thread, because
+        that is where its geometry has to be built. Sharing one result across
+        the two threads would buy a few milliseconds a second and cost a lock
+        on the render path, which is the wrong trade.
+        """
+        scorer = self._scorer if scorer is None else scorer
+        if scorer is None:
+            return clusters.Outlines()
+        got = scorer.detections()
+        if got is None:
+            return clusters.Outlines()
+        centers, probs = got
+        st = scorer.settings
+        key = (int(getattr(scorer, "version", 0)), int(len(probs)),
+               round(float(scorer.threshold), 4),
+               round(float(st.cluster_link_m), 4), int(st.cluster_min_points))
+        cached = self._outline_cache.get(id(scorer))
+        if cached is not None and cached[0] == key:
+            return cached[1]
+        found = clusters.find_rocks(
+            centers, probs,
+            link_m=float(st.cluster_link_m),
+            min_points=int(st.cluster_min_points),
+            # Detections sit on the candidate voxel grid, so each one stands
+            # for half a cell of ground in every direction.
+            pad_m=0.5 * float(getattr(scorer, "center_spacing_m", 0.0)),
+        )
+        self._outline_cache[id(scorer)] = (key, found)
+        return found
+
+    # ------------------------------------------------------------------ #
     # Schema
     # ------------------------------------------------------------------ #
     def schema(self) -> dict:
@@ -109,12 +200,55 @@ class LiveController:
             title = os.path.basename(getattr(src, "path", "") or "recording")
         else:
             title = f"source · {self._cfg.source.kind}"
-        return spec.to_json(self.capabilities) | {
+        return spec.to_json(self.capabilities,
+                            {"checkpoints": self.checkpoint_choices()}) | {
             "mode": "replay" if self._replay else "live",
             "subtitle": title,
             "model": self._scorer.model_name if self._scorer else "",
             "duration_sec": (float(src.duration_sec) if self._replay else 0.0),
         }
+
+    # ------------------------------------------------------------------ #
+    # The model pickers' options
+    # ------------------------------------------------------------------ #
+    def checkpoint_choices(self) -> list[dict]:
+        """Checkpoints the two model pickers offer, best of each sweep first.
+
+        Read from the same inventory the dashboard's pickers use, so the two
+        surfaces name and rank checkpoints identically. Whatever is loaded now
+        is always in the list even if it would not have made the cut — a picker
+        that cannot show you what you are already running is broken.
+        """
+        found: list[dict] = []
+        try:
+            from rocklabel.dashboard import inventory
+
+            found = inventory.checkpoints(self._root)
+        except Exception:
+            # No project tree, or a half-written experiments directory. The
+            # pickers still work: they just offer what is already loaded.
+            found = []
+        usable = [c for c in found if not c.get("disabled")
+                  and not c.get("archived")]
+        # Best of each experiment first: with hundreds on disk, "the good one
+        # from each sweep" is what a picker is actually for.
+        ranked = ([c for c in usable if c.get("best_of_experiment")]
+                  + [c for c in usable if not c.get("best_of_experiment")])
+        choices = [{"value": "", "label": "— none —", "group": ""}]
+        seen = set()
+        for c in ranked[:MAX_CHECKPOINT_CHOICES]:
+            path = c["path"]
+            seen.add(os.path.abspath(os.path.join(self._root, path)))
+            star = "★ " if c.get("best_of_experiment") else ""
+            choices.append({"value": path,
+                            "label": f"{star}{c['name']}",
+                            "group": c.get("group", "")})
+        for path in (self._compare.path("a"), self._compare.path("b")):
+            if path and os.path.abspath(path) not in seen:
+                seen.add(os.path.abspath(path))
+                choices.append({"value": path, "label": short_name(path),
+                                "group": "loaded now"})
+        return choices
 
     # ------------------------------------------------------------------ #
     # Values — current setting of every writable control
@@ -143,9 +277,8 @@ class LiveController:
             v["view.show_accum"] = bool(z._show_accum)
             v["view.show_box"] = bool(z._show_box)
             v["view.crop_view"] = bool(z._crop_view)
-            if s is not None:
-                v["model.display"] = int(z._model_display)
         if s is not None:
+            v["model.display"] = self.display_mode
             st = s.settings
             v["model.enabled"] = bool(st.enabled)
             v["model.persist"] = bool(st.persist)
@@ -156,8 +289,13 @@ class LiveController:
             v["region.z_max"] = float(st.z_max)
             v["region.range_max"] = float(st.range_max)
             v["region.max_centers"] = int(st.max_centers)
+            v["outline.link_m"] = float(st.cluster_link_m)
+            v["outline.min_points"] = int(st.cluster_min_points)
+            v["compare.model_a"] = self._compare.path("a")
+            v["compare.model_b"] = self._compare.selected_b
         if self._replay:
             v["replay.position"] = float(self._engine.source.position_sec)
+            v["replay.speed"] = float(self._engine.source.speed)
         return v
 
     # ------------------------------------------------------------------ #
@@ -186,8 +324,12 @@ class LiveController:
 
         if self._replay:
             src = e.source
+            # The rate rides along with "playing": a replay running at 3x that
+            # says only "playing" is how you end up doubting the clock.
+            rate = format_speed(src.speed)
+            playing = "playing" if rate == "1x" else f"playing · {rate}"
             state = "seeking…" if src.seeking else (
-                "playing" if src.playing else "paused")
+                playing if src.playing else "paused")
             text["status.state"] = (f"{src.position_sec:.1f} / "
                                     f"{src.duration_sec:.1f} s · {state}")
             flags["paused"] = not src.playing
@@ -211,6 +353,28 @@ class LiveController:
                                            f"{rec.points_total / 1e6:.1f}M pts")
                 text["record.file"] = os.path.basename(rec.path)
                 flags["recording"] = True
+
+        # -- diagnostics row (additive; the page hides whatever is absent) ---- #
+        # Numbers the pipeline already computes but never surfaced: where the
+        # sensor actually is, how far the levelled frame is off gravity, how
+        # long a batch takes to fuse, and what the ingest path is dropping.
+        pos = e.current_pose()[0]
+        text["status.pose_xyz"] = (
+            f"x{pos[0]:+.2f} y{pos[1]:+.2f} z{pos[2]:+.2f}")
+        residual = e.level_residual_deg()
+        if residual is not None:
+            text["status.level_residual"] = f"{residual:.2f}°"
+        if st.last_add_latency_ms > 0:
+            text["status.latency"] = f"{st.last_add_latency_ms:.1f} ms"
+        drops = getattr(e.source, "packets_dropped", None)
+        if drops is not None:
+            text["status.drops"] = str(int(drops))
+        if e.slam is not None and getattr(e, "_slam_active", False):
+            s = e.slam
+            windows = s.windows_registered + s.windows_skipped
+            text["status.slam_detail"] = (
+                f"{s.windows_registered}/{windows} win · "
+                f"match {s.match_ratio * 100.0:.0f}%")
 
         if self._scorer is not None:
             m = self._scorer.status_dict()
@@ -238,7 +402,60 @@ class LiveController:
             flags["region_empty"] = bool(m["warning"])
             if m["warning"]:
                 text["model.warning"] = m["warning"]
+
+            if not m["enabled"] or not m["ready"]:
+                text["outline.rocks"] = text["outline.noise"] = "—"
+            else:
+                found = self.outlines()
+                text["outline.rocks"] = found.describe()
+                text["outline.noise"] = found.noise_note()
+
+            self._compare_status(text, flags)
         return text, flags
+
+    def _compare_status(self, text: dict, flags: dict) -> None:
+        """The second model's numbers, beside the first model's.
+
+        Deliberately the same lines the Model card shows for window 1, worded
+        the same way: a comparison you have to translate between two formats is
+        not one you can read at a glance.
+        """
+        c = self._compare.status()
+        flags["compare_error"] = c["state"] == "error"
+        flags["compare_caveat"] = bool(c["note"])
+        flags["comparing"] = bool(c["open"])
+        if c["state"] == "loading":
+            text["compare.state"] = c["message"]
+        elif c["state"] == "error":
+            text["compare.state"] = c["message"]
+        elif c["open"]:
+            where = "window 2" if c["windowed"] else "no window (headless)"
+            text["compare.state"] = (f"{c['model_b']} · "
+                                     f"{short_name(c['path_b'])} · {where}")
+        else:
+            text["compare.state"] = "closed"
+        text["compare.caveat"] = c["note"] or "—"
+
+        scorer = self._compare.scorer_b
+        if scorer is None:
+            text["compare.map"] = text["compare.pass"] = "—"
+            text["compare.rocks"] = "—"
+            return
+        m = scorer.status_dict()
+        if not m["enabled"]:
+            text["compare.map"] = text["compare.pass"] = "scoring off"
+            text["compare.rocks"] = "—"
+        elif not m["ready"]:
+            text["compare.map"] = m.get("error") or "warming up…"
+            text["compare.pass"] = "no pass finished yet"
+            text["compare.rocks"] = "—"
+        else:
+            text["compare.map"] = (f"{m['map_centers']:,} centers · "
+                                   f"{m['detections']:,} ≥ thr")
+            cap = " (capped)" if m["capped"] else ""
+            text["compare.pass"] = (f"{m['pass_centers']:,} scored{cap} in "
+                                    f"{m['pass_ms']:.0f} ms")
+            text["compare.rocks"] = self.outlines(scorer).describe()
 
     def snapshot(self) -> dict:
         text, flags = self.status()
@@ -252,6 +469,7 @@ class LiveController:
                 "playing": bool(src.playing),
                 "seeking": bool(src.seeking),
                 "finished": bool(src.finished),
+                "speed": float(src.speed),
             }
         return out
 
@@ -289,6 +507,10 @@ class LiveController:
         out = {
             "bev": scene.encode_raster(raster),
             "detections": scene.detections_payload(self._scorer),
+            # Which of the three prediction views the map should draw, and the
+            # outlines behind the third one.
+            "display": self.display_mode,
+            "rocks": scene.rocks_payload(self.outlines()),
             "sensor": {"x": float(pos[0]), "y": float(pos[1]), "z": float(pos[2]),
                        "yaw_deg": yaw},
             "history": self._history.payload(),
@@ -325,6 +547,13 @@ class LiveController:
         "crop.range_max": "range_max",
         "crop.range_min": "range_min",
     }
+    #: Rock-outline ids -> the ScoreSettings field they own. Display settings
+    #: that happen to live beside the scoring ones, so the viewer holds exactly
+    #: one copy of them.
+    _OUTLINE = {
+        "outline.link_m": "cluster_link_m",
+        "outline.min_points": "cluster_min_points",
+    }
     #: Scoring-region ids -> the ScoreSettings field they own.
     _REGION = {
         "region.z_min": "z_min",
@@ -351,6 +580,9 @@ class LiveController:
             # crop follows when there is no model, so the viewer has to hear
             # about it rather than being left with a stale accumulated cloud.
             self._crop_setting(self._CROP[key], value)
+        elif key in self._OUTLINE:
+            self._scorer_setting(self._OUTLINE[key], value)
+            self._outline_key = None      # the clumping rule changed
         elif key in self._REGION:
             # Region bounds also drive the display crop, so the viewer has to
             # invalidate its recolor cache — _on_setting does both.
@@ -376,14 +608,21 @@ class LiveController:
             self._engine.set_accum_max_points(value)
             self._refresh_accum()
         elif key == "model.display":
-            self.post(lambda: self._viz.set_model_display(value))
-        elif key == "model.threshold":
             if self._viz is not None:
-                # The detections view is drawn *at* the threshold, so moving it
-                # has to invalidate the viewer's recolor cache.
-                self.post(lambda: self._viz.set_threshold(value))
+                self.post(lambda: self._viz.set_model_display(value))
             else:
-                self._scorer.threshold = value
+                self._display = int(value)
+        elif key in ("compare.model_a", "compare.model_b"):
+            self._compare.select("a" if key.endswith("_a") else "b", value)
+        elif key == "model.threshold":
+            # The comparison is the authority: every model in the session
+            # judges at the same cut, whether or not there is a window to
+            # mirror the write through.
+            self._compare.set_threshold(value)
+            if self._viz is not None:
+                # The detections view and the outlines are drawn *at* the
+                # threshold, so moving it has to invalidate the viewer's caches.
+                self.post(lambda: self._viz.set_threshold(value))
         elif key == "model.enabled":
             self._scorer.settings.enabled = value
         elif key == "model.persist":
@@ -392,6 +631,8 @@ class LiveController:
             self._scorer_setting(key.split(".", 1)[1], value)
         elif key == "replay.position":
             self._engine.source.seek(value)
+        elif key == "replay.speed":
+            self._engine.source.set_speed(value)
         else:  # pragma: no cover - the table above covers every settable id
             raise KeyError(key)
 
@@ -421,8 +662,12 @@ class LiveController:
         elif name == "record.toggle":
             self._toggle_recording()
         elif name == "model.clear":
-            self._scorer.clear_map()
+            self._compare.clear_maps()      # both windows, when two are open
             self._refresh_accum()
+        elif name == "compare.open":
+            self._compare.open_comparison()
+        elif name == "compare.close":
+            self._compare.close()
         elif name == "replay.play_pause":
             self._engine.source.toggle_play()
         elif name == "replay.restart":
@@ -443,6 +688,11 @@ class LiveController:
                 return value.lower() in ("1", "true", "yes", "on")
             return bool(value)
         if control.kind == "enum":
+            if control.choices_from:
+                # Discovered at runtime, so the table cannot hold the answer.
+                # Whether the path is real is the loader's call, and it has a
+                # better error than "not one of [...]" for a missing file.
+                return str(value or "")
             allowed = [c.value for c in control.choices]
             if isinstance(allowed[0], int):
                 value = int(value)

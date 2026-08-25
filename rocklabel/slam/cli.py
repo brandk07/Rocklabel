@@ -37,6 +37,11 @@ def add_slam_args(p: argparse.ArgumentParser) -> argparse.ArgumentParser:
     p.add_argument("--force", action="store_true",
                    help="overwrite an existing output file")
     p.add_argument("--quiet", action="store_true", help="no progress bar")
+    p.add_argument("--ros2-stride", type=int, default=4, metavar="N",
+                   help="for ROS 2 bags (competition robot logs) only: solve "
+                        "using every Nth scan. These run for half an hour at "
+                        "~19 Hz, which is denser than the solver needs and more "
+                        "than fits in memory at once (default: 4)")
 
     g = p.add_argument_group("solver")
     d = AltSlamConfig()
@@ -169,7 +174,8 @@ def run(a) -> int:
         t0 = time.time()
         try:
             r = reprocess(src, dst, cfg, progress=_progress(a.quiet),
-                          score=True, write=not a.score_only)
+                          score=True, write=not a.score_only,
+                          ros2_stride=a.ros2_stride)
         except Exception as exc:
             print(f"  failed: {exc}", file=sys.stderr)
             rc = 1

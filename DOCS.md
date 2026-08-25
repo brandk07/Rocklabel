@@ -34,11 +34,18 @@ Dependencies (installed automatically): `numpy`, `scipy`, `open3d`, `pyyaml`,
 rocklabel dash              # opens http://localhost:8765 in your browser
 ```
 
-Everything below can also be driven from one page: a **Commands** view with a
-generated form per command (with what/why explanations, tooltips per flag, and
-the exact command line shown before it runs), a **Live LiDAR** view that says
-whether the sensor is actually streaming, and **Data** / **Models** views over
-every recording, label file, dataset and training run in the project.
+Everything below can also be driven from one page, laid out the way the work
+flows: **Pipeline** is the main loop — where the project stands at each step,
+the commands that move it forward, and one-click launches for the things done
+most often; **Runs** is the training board, ranking every trained setting
+inside its own sweep with per-fold numbers, the conclusions already paid for,
+and notes you can edit; **Data** covers every recording, label file and
+dataset; **Jobs** lists what the dashboard launched with each job's live log;
+**Live** says whether the sensor is actually streaming and embeds a running
+viewer's control panel; **Tools** keeps everything outside the main loop one
+click away, behind a search box and stage filters. Each command opens a
+generated form, with what/why explanations, tooltips per flag, and the exact
+command line shown before it runs.
 
 It is a control surface, not a second implementation — each button shells out
 to the same `rocklabel` / `rocklabel-train` command you would type and streams
@@ -50,7 +57,7 @@ in `.dashboard/logs/`.
 **Live view and Record bring their controls with them.** Launched from here they
 get [`--web-ui`](#0-rocklabel-record--rocklabel-live--the-live-rig)
 automatically — you are already in a browser, so that is where the knobs belong
-— and the **Live LiDAR** view embeds the running job's control panel as soon as
+— and the **Live** view embeds the running job's control panel as soon as
 it is serving. Threshold, scoring region, layers, levelling and the replay
 transport are all right there, while the Open3D window gives the scene its whole
 screen on your other monitor. *Pop out ↗* moves the panel to its own window if
@@ -128,9 +135,9 @@ For ROS 2 robot logs the front of the chain is `inspect` / `trim` instead of
 `record`:
 
 ```
-rocklabel inspect  ->  [rocklabel trim]  ->  rocklabel label  ->  rocklabel driftcheck
-   (find topic/          (shrink huge /         (place sphere        (verify odometry
-    frame names)          salvage broken         labels once)         didn't drift)
+rocklabel inspect  ->  [rocklabel trim]  ->  [rocklabel selfhits]  ->  rocklabel label  ->  rocklabel driftcheck
+   (find topic/          (shrink huge /         (delete the robot        (place sphere        (verify odometry
+    frame names)          salvage broken         the sensor rides on)     labels once)         didn't drift)
                           recordings)
                               -> rocklabel generate  ->  rocklabel preview
                                    (write both              (eyeball what was
@@ -245,6 +252,7 @@ rocklabel record recordings/RUN.mcap --source udp  # explicit output path
 rocklabel record --headless --duration 60          # no GUI, e.g. over SSH
 rocklabel live --source udp                        # view only; S starts/stops a recording
 rocklabel live --play recordings/RUN.mcap          # replay any mcap through the live pipeline
+rocklabel live --play recordings/RUN.mcap --speed 2  # …at 2x (0.25 = slow motion, 0 = as fast as it fuses)
 rocklabel live --source udp --web-ui               # controls in a browser, 3D on its own screen
 ```
 
@@ -271,8 +279,11 @@ rocklabel live --play recordings/RUN.mcap --model best.pt --web-ui
 ```
 
 Same knobs, same help text, plus the live status readouts and the replay
-transport — laid out properly, in `dash`'s theme (it loads the same
-stylesheet). It is a control panel, not a viewer: the points stay in the
+transport — play/pause, a seek bar, and a **Speed** menu from 0.1x slow motion
+up to 4x, plus "max" (no pacing at all, i.e. as fast as the machine can fuse
+the frames). Speed changes take effect immediately and skip nothing; the status
+line says the rate whenever it is not real time. Laid out properly, in `dash`'s theme (it
+loads the same stylesheet). It is a control panel, not a viewer: the points stay in the
 Open3D window, which keeps all its keyboard shortcuts, and changes made there
 show up in the browser within a moment. `--web-port` (default 8770, since
 `dash` owns 8765), `--web-host` and `--no-browser` are there if you need them;
@@ -288,7 +299,7 @@ The page also carries three views the 3D window has no room for:
   the only thing that stands out. Hovering a mark gives its probability and
   position; *Table* lists the strongest.
 * **Prediction confidence** — the distribution of every scored center with the
-  decision threshold drawn on it, above-threshold bars in the same orange the
+  decision threshold drawn on it, above-threshold bars in the same green the
   map paints rocks. This is what makes the threshold slider legible: you can
   see both lobes the model produces and exactly how many centers a given cut
   keeps. Counts default to log, because rocks are rare and a linear axis
@@ -373,6 +384,7 @@ rocklabel live --source udp --model training/experiments/compare/.../best.pt \
     --z-min -1.5 --z-max -0.5 --max-range 8      # or fixed, sensor ~1 m up
 rocklabel record --source udp --model training/experiments/compare/.../best.pt   # record + predict at once
 rocklabel live --play recordings/RUN.mcap --model training/experiments/compare/.../best.pt  # over a replay
+rocklabel live --play recordings/RUN.mcap --model A/best.pt --compare-model B/best.pt --web-ui  # two models, two windows
 ```
 
 Each scoring pass takes the **freshest raw scan** (not the accumulated map —
@@ -389,8 +401,42 @@ there is also a binary detections view at the decision threshold); points
 with no prediction keep dimmed height colors. A per-scan pass runs in tens of
 milliseconds on a GPU — comfortably real time.
 
+**Rock outlines** are the third view, and the one that answers "how many rocks
+are there" instead of "which points are rock". Every detection above the
+threshold is grouped with the ones near it (**Link distance**, default 0.30 m),
+any clump with fewer detections than the **Min points** gate (default 5) is
+thrown away as speckle, and each survivor is wrapped in a polygon — drawn as a
+low prism in the 3D window and as a filled footprint on the web panel's
+overhead map, with the count of what the gate dropped printed beside it so an
+over-strict gate is visible rather than silent. Pick it from the Model card's
+Display dropdown; the two knobs live in the **Rock outlines** card next to it.
+They are display settings: moving one re-draws, it never re-scores.
+
+**Comparing two checkpoints.** `--compare-model OTHER.pt` (on top of
+`--model`) opens a **second Open3D window** on the same scene, scored by a
+second checkpoint. The two windows are not two runs: both scorers read the
+same scans and *share one settings object*, so the region, scan window,
+interval, decision threshold, display mode and rock-outline settings are the
+same numbers in the same place and cannot drift apart. Every control — on the
+web panel, in the docked panel, or a keyboard shortcut in either window — is
+applied to both. The only difference between the two pictures is the model,
+which is what makes it a fair test.
+
+With `--web-ui` there is a **Compare models** card: pick the checkpoint for
+window 1 and window 2 from the same picker the dashboard uses (best of each
+sweep first), press *Open comparison window*, and swap either model at any
+time — the weights load on a background thread, so nothing freezes while they
+do. The card shows window 2's map, pass time and rock count in the same words
+the Model card uses for window 1, and warns when the two checkpoints are not
+directly comparable (trained on different scan windows, or tuned to different
+thresholds — one shared slider cannot be right for both). Closing window 2
+stops only its model; the recording and window 1 carry on. Headless runs can
+compare too: the second model still scores and its numbers still reach the
+panel, there is just nothing to draw. Two models share one GPU, so expect both
+pass times to rise — the readouts say by how much.
+
 Everything about scoring is tunable live in the panel's **Model** section:
-on/off, confidence vs. detections display, decision threshold, update
+on/off, confidence vs. detections vs. rock-outline display, decision threshold, update
 interval (default 0.5 s), scan window (0 = single scan, matching training),
 the region's z band and max range, prediction-map on/off + clear, and the
 max-centers-per-pass cap. "Crop view to region" in the View section also
@@ -451,6 +497,86 @@ rocklabel trim --mcap huge.mcap --out run1.mcap --start-s 120 --end-s 900
 
 Label against the trimmed file and keep using the trimmed file for
 `driftcheck`/`generate` — labels are tied to the recording they were made on.
+
+### 1c. `rocklabel selfhits` — delete the robot the sensor rides on
+
+On a competition run the LiDAR is bolted to the robot, so part of **every**
+sweep lands on the machine carrying it. Those returns sit at a fixed spot in
+sensor coordinates, but once each sweep is placed into the world they smear
+into a long trail that follows wherever the robot drove — sitting right on top
+of the terrain you are trying to look at and label.
+
+Start by measuring, rather than guessing a number:
+
+```bash
+rocklabel selfhits recordings/run.mcap --measure
+```
+
+That bins a sample of scans by direction and asks, per direction, whether a
+return keeps coming back **at the same distance**. Bodywork does, because it is
+bolted on; ground and rocks do not, because they slide past as the robot
+drives. It prints how far the fixed structure reaches and the radius to use.
+Then write the cleaned copy:
+
+```bash
+rocklabel selfhits recordings/run.mcap --out recordings/run.clean.mcap --radius 0.45
+```
+
+- **Why a plain radius works.** The sensor is mounted above the ground (0.57 m
+  on the Lunabotics rig), so real terrain physically cannot come closer than
+  roughly the mount height. Anything inside the sphere can only be the robot.
+  On the competition recordings every persistent return measures under 0.33 m
+  while the closest ground return ever seen is 0.48 m — a clean gap.
+- `--dry-run` reports exactly how much would go without writing a file. Expect a
+  big number: about **40%** of all points on the Lunabotics runs are the robot,
+  because it fills a large part of the sensor's view.
+- `--box x0,x1,y0,y1,z0,z1` (repeatable) removes an extra region in sensor
+  coordinates, for a part that reaches past the radius — a mast, a raised blade.
+- **The input is never modified.** A new recording is written; every topic,
+  message, timestamp and pose is copied through untouched, and only points
+  inside a scan are dropped. Every per-point field the sensor wrote (intensity,
+  range, azimuth, layer, echo, ...) rides along, so the cleaned file drops
+  straight into `label` and `generate`.
+
+### 1d. `rocklabel slam` on a ROS 2 competition bag
+
+The pose solver used to read only native rig recordings (`/lidar/frames`), so
+it could not open a competition log at all. It now reads ROS 2 bags too: the
+points come from the `PointCloud2` topic and the robot's `/tf` pose becomes the
+starting guess the solver refines. `--ros2-stride N` (default 4) solves using
+every Nth scan — these bags run half an hour at ~19 Hz, which is denser than
+the solver needs and more than fits in memory at once.
+
+**But measure before you use it.** On the Lunabotics competition run it makes
+the map *worse*, unlike the volleyball recordings where it is a clear win:
+
+| recording | onboard poses | re-solved | result |
+|---|---|---|---|
+| VolleyBallTest4 | 43.6 mm | 23.1 mm | **1.89x sharper** |
+| competition, early slice | 61.2 mm | 73.8 mm | 0.83x |
+| competition, mid slice | 36.1 mm | 41.1 mm | 0.88x |
+| competition, late slice | 53.1 mm | 126.7 mm | 0.42x |
+
+(Numbers are ground-surface thickness — how much a flat patch of ground smears
+when every scan is stacked. Lower is better.)
+
+The difference is the scene, not the code. The solver's defaults lean on
+distant structure — the fence and tree line 10-25 m out on the volleyball
+court — to pin down sliding across flat ground. The competition arena is only
+about 7 m across, with 84% of points inside 6 m, so that anchor does not exist.
+Meanwhile the robot has treads and real wheel odometry, and its onboard
+trajectory (27.8 mm) is already better than volleyball's *post-reslam* result.
+The failure gets worse later in the run, which fits a surface being reshaped by
+digging: the solver aligns against a map of terrain that is no longer there.
+
+So: **label the competition bags against their own poses.** Use `--score-only`
+to re-check this on any new recording before committing to a re-solve.
+
+> One trap if you measure this yourself: a bag's own poses are in the robot's
+> z-up odometry frame, while the solver works in a sensor-at-startup frame.
+> Scoring both against a single up-vector tilts the ground plane under one of
+> them and invents about 20 mm of thickness that is not real. `--score-only`
+> now handles this per-frame.
 
 ### 2. `rocklabel label` — interactive labeling
 

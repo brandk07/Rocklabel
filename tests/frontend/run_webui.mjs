@@ -192,6 +192,19 @@ if (!slider) {
   live.S.dragging = null;
 }
 
+// The number box beside a slider is an input, not a caption: typing an exact
+// value has to reach the server and move the thumb with it.
+let typedExact = true;
+if (slider) {
+  const node = live.S.nodes[slider.id];
+  const before = posted.length;
+  const want = String(slider.min != null ? slider.min : 0);
+  node.readback.value = want;
+  try { node.readback.onchange(); } catch (e) { fail('type into readback', e); }
+  typedExact = posted.length > before && String(node.input.value) === want;
+}
+await settle();
+
 // Released, the same poll must take effect — otherwise the panel would go deaf
 // to the Open3D window's keyboard shortcuts.
 live.S.pending = {};
@@ -228,6 +241,31 @@ const markSwatches = body.querySelectorAll('#mapLegend .legend-swatch').length;
 click(el0('mapTable'), 'map table toggle');
 const mapTableRows = body.querySelectorAll('#mapTableView tbody tr').length;
 
+// The outline view: the same detections delivered as polygons. Drawn from a
+// second recorded payload, because it is a different picture off the same map.
+const outlineScene = fixtures['/api/scene-outlines'];
+const nRocks = outlineScene.rocks.rows.length;
+const fillsBefore = mapCtx ? mapCtx.calls.fill : 0;
+const strokesBefore = mapCtx ? mapCtx.calls.stroke : 0;
+let outlineErr = null;
+const sceneWas = live.S.scene;
+try {
+  live.S.scene = outlineScene;
+  live.renderViews();
+} catch (e) { outlineErr = (e && e.stack) || String(e); }
+if (outlineErr) fail('renderViews (outlines)', outlineErr);
+// Each rock is a filled shape under a stroked edge — never a fixed-size mark.
+const drewEveryOutline = !!mapCtx
+  && mapCtx.calls.fill - fillsBefore >= nRocks
+  && mapCtx.calls.stroke - strokesBefore >= nRocks;
+const outlineSub = el0('mapSub').textContent;
+const outlineLegend = body.querySelectorAll('#mapLegend .legend-swatch').length;
+// The table follows the mode: one row per rock, not per detection. (It was
+// left toggled on by the map-table click above.)
+const rockTableRows = body.querySelectorAll('#mapTableView tbody tr').length;
+live.S.scene = sceneWas;
+live.renderViews();
+
 const histBars = body.querySelectorAll('#histPlot path').length;
 const histSwatches = body.querySelectorAll('#histLegend .legend-swatch').length;
 const histTableRows = body.querySelectorAll('#histLegend tbody tr').length;
@@ -235,12 +273,17 @@ click(el0('histScale'), 'histogram scale toggle');       // log -> linear
 const histBarsLinear = body.querySelectorAll('#histPlot path').length;
 click(el0('histScale'), 'histogram scale toggle back');
 
-// One plot per series that has data — never two measures on one axis.
-const trendPlots = body.querySelectorAll('#trends .chart-figure').length;
+// One spark per series that has data — never two measures on one axis. The
+// rail sparks are deliberately not full Charts figures: rail-width plots
+// scaled out of a wide viewBox turn their labels into dust.
+const trendSparks = body.querySelectorAll('#trends .spark').length;
 const trendsWithData = scene.history.series.filter(
   (s) => s.values.some((v) => v > 0)).length;
-// A single series carries no legend box; its caption names it.
+// A single series carries no legend box; its header names it.
 const trendLegends = body.querySelectorAll('#trends .legend').length;
+// Every spark prints its latest value in the header — the number you act on
+// should not need a hover.
+const trendVals = body.querySelectorAll('#trends .spark-val').length;
 
 // ------------------------------------------------------------------ checks
 const el = el0;
@@ -250,15 +293,25 @@ const checks = [
   ['a card per non-transport section', cards.length === schema.sections.length - 1],
   ['every settable control rendered', wrote === settable.length],
   ['every carded control with help got a "?"', helps.length === carded.filter((c) => c.help).length],
-  ['every readout filled in', readouts.every((c) => {
+  // Every readout shows exactly what the server sent for it. A placeholder is
+  // a legitimate value (no comparison is open in this fixture), so the check is
+  // "the page renders the payload", not "the payload is interesting" — the
+  // python side already pins that every readout IS in the payload.
+  ['every readout renders its server value', readouts.every((c) => {
+    const n = live.S.nodes[c.id];
+    const want = fixtures['/api/state'].status[c.id];
+    return n && n.out && n.out.textContent === (want == null ? '—' : want);
+  })],
+  ['most readouts carry a real value', readouts.filter((c) => {
     const n = live.S.nodes[c.id];
     return n && n.out && n.out.textContent && n.out.textContent !== '—';
-  })],
+  }).length >= readouts.length - 4],
   ['status strip populated', el('statusStrip').children.length > 0],
   ['transport shown for a replay', el('transport').hidden === false],
   ['transport time rendered', /\d/.test(el('transportTime').textContent)],
   ['posts reached the server', posted.length >= wrote + actions.length + transportBtns.length],
   ['a mid-drag poll does not move the slider', dragHeld],
+  ['an exact value can be typed beside the slider', typedExact],
   ['a released control mirrors the server', mirrored],
   // -- the extra views --
   ['overhead drew the fused terrain', drewTerrain],
@@ -267,12 +320,18 @@ const checks = [
   ['the height ramp is labelled at both ends', rampEnds === 2],
   ['rock and sensor both have named swatches', markSwatches === 2],
   ['the map has a table view with rows', mapTableRows > 0],
+  // -- the outline view --
+  ['overhead drew every rock outline', drewEveryOutline],
+  ['the outline view counts rocks, not dots', /rock/.test(outlineSub)],
+  ['the outline view names its swatches', outlineLegend === 2],
+  ['the outline table has a row per drawn rock', rockTableRows === nRocks],
   ['histogram drew a bar per bin', histBars >= scene.histogram.counts.length],
   ['histogram survives the log/linear toggle', histBarsLinear >= scene.histogram.counts.length],
   ['histogram names both bar classes', histSwatches === 2],
   ['histogram has a table view with a row per bin',
     histTableRows === scene.histogram.counts.length],
-  ['one trend plot per series with data', trendPlots === trendsWithData && trendPlots > 0],
+  ['one trend spark per series with data', trendSparks === trendsWithData && trendSparks > 0],
+  ['every trend spark prints its latest value', trendVals === trendSparks],
   ['single-series trends carry no legend box', trendLegends === 0],
 ];
 checks.forEach(([name, ok]) => { if (!ok) errors.push(`check failed: ${name}`); });
@@ -283,5 +342,5 @@ if (errors.length) {
 }
 console.log(`ok — ${cards.length} cards, ${wrote} settings, ${actions.length} actions, `
           + `${readouts.length} readouts, ${helps.length} help toggles, `
-          + `${posted.length} posts, ${nDet} map marks, ${histBars} hist bars, `
-          + `${trendPlots} trend plots`);
+          + `${posted.length} posts, ${nDet} map marks, ${nRocks} rock outlines, `
+          + `${histBars} hist bars, ${trendSparks} trend sparks`);

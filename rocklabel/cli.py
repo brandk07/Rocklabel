@@ -1,5 +1,5 @@
 """Console entry point: rocklabel {inspect, slam, label, driftcheck, generate,
-trim, preview, record, live, dash}.
+trim, selfhits, preview, record, live, dash}.
 
 Recording paths are positional (``rocklabel label run.mcap``); the old
 ``--mcap``/``--out`` flag spellings still work.
@@ -16,6 +16,7 @@ import sys
 from . import __version__
 from .config import ConfigError, apply_overrides, load_config
 from .profiles import DEFAULT_PROFILE, PROFILES, ProfileError, apply_profile
+from .recording.selfhits import DEFAULT_RADIUS as DEFAULT_SELFHIT_RADIUS
 
 
 def _add_config_arg(p: argparse.ArgumentParser) -> None:
@@ -64,6 +65,18 @@ def _resolve_mcap(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
     if not path:
         parser.error("missing recording path (rocklabel <command> RECORDING.mcap)")
     return path
+
+
+def _parse_box(text: str, parser: argparse.ArgumentParser) -> tuple[float, ...]:
+    """Parse a --box value: six comma-separated meters, x0,x1,y0,y1,z0,z1."""
+    try:
+        vals = tuple(float(v) for v in text.replace(" ", "").split(","))
+    except ValueError:
+        parser.error(f"--box {text!r}: every value must be a number")
+    if len(vals) != 6:
+        parser.error(f"--box {text!r}: expected 6 numbers (x0,x1,y0,y1,z0,z1), "
+                     f"got {len(vals)}")
+    return vals
 
 
 def default_dataset_dir(profile: str, mcap_path: str) -> str:
@@ -157,6 +170,31 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--all-topics", action="store_true",
                    help="keep every topic (trim only by time)")
 
+    p = sub.add_parser(
+        "selfhits",
+        help="write a copy of a recording with the points that hit the robot "
+             "itself removed (the trail a robot-mounted sensor leaves behind)",
+    )
+    _add_mcap_arg(p)
+    p.add_argument("--out", help="output .mcap to write (required unless --measure)")
+    _add_config_arg(p)
+    p.add_argument("--radius", type=float, default=DEFAULT_SELFHIT_RADIUS,
+                   metavar="M",
+                   help="drop every point closer than this to the sensor, in "
+                        "meters. The sensor sits above the ground, so real "
+                        "terrain can never come this close - only the machine "
+                        "the sensor is bolted to "
+                        f"(default: {DEFAULT_SELFHIT_RADIUS})")
+    p.add_argument("--box", action="append", default=[], metavar="X0,X1,Y0,Y1,Z0,Z1",
+                   help="also drop points inside this box in sensor coordinates "
+                        "(meters, repeatable). For a part that reaches past the "
+                        "radius, e.g. a mast or a raised blade")
+    p.add_argument("--measure", action="store_true",
+                   help="do not write anything: report how far the robot's own "
+                        "structure reaches and what --radius to use")
+    p.add_argument("--dry-run", action="store_true",
+                   help="report how much would be removed without writing a file")
+
     from .live.run import add_live_args
 
     p = sub.add_parser(
@@ -246,6 +284,7 @@ def main(argv: list[str] | None = None) -> int:
     from .dataset.generate import ManifestConflict
     from .geometry.leveling import LevelError
     from .recording.mcap_io import McapFormatError
+    from .recording.selfhits import SelfHitError
     from .recording.pose import PoseUnavailable
 
     try:
@@ -286,6 +325,18 @@ def main(argv: list[str] | None = None) -> int:
             from .recording.trim import run_trim
             run_trim(_resolve_mcap(args, parser), args.out, cfg, extra_topics=args.topic,
                      start_s=args.start_s, end_s=args.end_s, all_topics=args.all_topics)
+        elif args.command == "selfhits":
+            from .recording.selfhits import (measure, print_measure,
+                                             run_selfhits)
+            mcap = _resolve_mcap(args, parser)
+            if args.measure:
+                print_measure(measure(mcap, cfg))
+            else:
+                if not args.out and not args.dry_run:
+                    parser.error("selfhits needs --out (or --dry-run/--measure)")
+                run_selfhits(mcap, args.out or "", cfg, radius=args.radius,
+                             boxes=[_parse_box(b, parser) for b in args.box],
+                             dry_run=args.dry_run)
         elif args.command in ("record", "live"):
             from .live.run import run_live
             run_live(args, record_cmd=(args.command == "record"))
@@ -308,7 +359,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {e}", file=sys.stderr)
         return 2
     except (McapFormatError, PoseUnavailable, ManifestConflict, LevelError,
-            FileNotFoundError) as e:
+            SelfHitError, FileNotFoundError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
     return 0

@@ -39,6 +39,11 @@ def add_live_args(p: argparse.ArgumentParser, record_cmd: bool) -> None:
         p.add_argument("--play", metavar="FILE.mcap",
                        help="replay a recording through the live pipeline (transport "
                             "bar with play/pause + seek) instead of a live source")
+        p.add_argument("--speed", type=float, default=1.0, metavar="X",
+                       help="--play only: initial playback rate as a multiple of "
+                            "real time (default 1.0; below 1 is slow motion, 0 = "
+                            "as fast as the engine can fuse). Changeable at any "
+                            "time from the transport bar")
     p.add_argument("--source", choices=["sim", "udp"],
                    help="data source: 'sim' (synthetic terrain, default) or "
                         "'udp' (live SICK multiScan)")
@@ -96,6 +101,13 @@ def add_live_args(p: argparse.ArgumentParser, record_cmd: bool) -> None:
     p.add_argument("--model", metavar="CHECKPOINT.pt",
                    help="trained rocklabel-train checkpoint (best.pt): score the live "
                         "cloud continuously and add the 'model' color mode")
+    p.add_argument("--compare-model", metavar="CHECKPOINT.pt",
+                   help="open a SECOND window scoring the same scans with a "
+                        "second checkpoint, for an A/B comparison. Both windows "
+                        "share one set of settings (region, threshold, display, "
+                        "outlines), so the only difference between them is the "
+                        "model. Needs --model; with --web-ui you can also open, "
+                        "close and re-pick both models while it runs")
     p.add_argument("--device", help="torch device for --model (default: auto)")
     p.add_argument("--score-interval", type=float, default=0.5,
                    help="seconds between live model scoring passes (default 0.5; "
@@ -192,11 +204,12 @@ def _build_config(args: argparse.Namespace, record_cmd: bool) -> AppConfig:
     return cfg
 
 
-def _build_engine(cfg: AppConfig, play_path: str | None) -> IngestEngine:
+def _build_engine(cfg: AppConfig, play_path: str | None,
+                  speed: float = 1.0) -> IngestEngine:
     if play_path:
         from rocklabel.live.recording import McapReplaySource
 
-        source = McapReplaySource(play_path)
+        source = McapReplaySource(play_path, speed=speed)
     else:
         source = make_source(cfg)
     engine = IngestEngine(source, make_surface_builder(cfg), cfg)
@@ -211,6 +224,10 @@ def _build_scorer(args: argparse.Namespace, engine: IngestEngine):
     if not args.model:
         if args.color_mode == "model":
             raise SystemExit("--color-mode model requires --model CHECKPOINT.pt")
+        if getattr(args, "compare_model", None):
+            raise SystemExit(
+                "--compare-model is the SECOND model: give the first with "
+                "--model CHECKPOINT.pt too")
         return None
     try:
         from rocklabel.live.scoring import LiveScorer, ScoreSettings
@@ -245,8 +262,28 @@ def _build_scorer(args: argparse.Namespace, engine: IngestEngine):
     return scorer
 
 
+def _build_comparison(args: argparse.Namespace, cfg: AppConfig,
+                      engine: IngestEngine, scorer, viz=None):
+    """The session's model slots, with slot b pre-selected from the CLI.
+
+    Always built when there is a model, even without ``--compare-model``: the
+    browser panel can open a comparison at any point, and the slots are where
+    "which checkpoint is window 1 running" lives either way.
+    """
+    from rocklabel.live.compare import Comparison
+
+    if scorer is None:
+        return None
+    comparison = Comparison(cfg, engine, scorer=scorer, viz=viz,
+                            device=args.device)
+    wanted = getattr(args, "compare_model", None)
+    if wanted:
+        comparison.selected_b = wanted
+    return comparison
+
+
 def _start_web_ui(args: argparse.Namespace, cfg: AppConfig, engine: IngestEngine,
-                  scorer, viz=None):
+                  scorer, viz=None, comparison=None):
     """Serve the browser control panel; returns the controller (or None).
 
     Started before the viewer's event loop so the URL is on screen while the
@@ -260,7 +297,8 @@ def _start_web_ui(args: argparse.Namespace, cfg: AppConfig, engine: IngestEngine
         raise SystemExit(
             f"--web-ui needs Flask (pip install -e '.[dash]'): {e}"
         )
-    controller = LiveController(cfg, engine, scorer=scorer, viz=viz)
+    controller = LiveController(cfg, engine, scorer=scorer, viz=viz,
+                                comparison=comparison)
     url = start_server(controller, host=args.web_host, port=args.web_port,
                        open_browser=not args.no_browser)
     print(f"[rocklabel] control panel: {url}", flush=True)
@@ -268,12 +306,18 @@ def _start_web_ui(args: argparse.Namespace, cfg: AppConfig, engine: IngestEngine
 
 
 def _run_headless(cfg: AppConfig, args: argparse.Namespace, play_path: str | None) -> None:
-    engine = _build_engine(cfg, play_path)
+    engine = _build_engine(cfg, play_path, getattr(args, "speed", 1.0))
     scorer = _build_scorer(args, engine)
-    _start_web_ui(args, cfg, engine, scorer)
+    comparison = _build_comparison(args, cfg, engine, scorer)
+    _start_web_ui(args, cfg, engine, scorer, comparison=comparison)
     engine.start()
     if scorer is not None:
         scorer.start()
+    if comparison is not None and comparison.selected_b:
+        # No window to draw it in, but the second model still scores and its
+        # numbers still reach the panel — which is the whole comparison when
+        # you are on the other end of an SSH session.
+        comparison.open_comparison()
     if cfg.record.autostart:
         print(f"[rocklabel] recording -> {engine.start_recording()}", flush=True)
     what = play_path if play_path else f"source={cfg.source.kind}"
@@ -284,6 +328,10 @@ def _run_headless(cfg: AppConfig, args: argparse.Namespace, play_path: str | Non
             time.sleep(1.0)
             s = engine.stats
             extra = f" | {scorer.status()}" if scorer is not None else ""
+            if comparison is not None and comparison.open:
+                # The second model's numbers are the whole comparison when
+                # there is no window to look at.
+                extra += f"\n[rocklabel] compare | {comparison.scorer_b.status()}"
             print(
                 f"[rocklabel] {s.points_per_sec()/1e3:6.1f}k pts/s | "
                 f"cells occupied: {s.cells_occupied:6d} | "
@@ -299,6 +347,8 @@ def _run_headless(cfg: AppConfig, args: argparse.Namespace, play_path: str | Non
     except KeyboardInterrupt:
         print("\n[rocklabel] stopping…", flush=True)
     finally:
+        if comparison is not None:
+            comparison.close()
         if scorer is not None:
             scorer.stop()
         path = engine.stop_recording()
@@ -316,8 +366,13 @@ def run_live(args: argparse.Namespace, record_cmd: bool) -> None:
         return
     from rocklabel.live.viz import VizApp  # deferred so --headless needs no GUI
 
-    engine = _build_engine(cfg, play)
+    engine = _build_engine(cfg, play, getattr(args, "speed", 1.0))
     scorer = _build_scorer(args, engine)
     viz = VizApp(cfg, engine, scorer=scorer, web_ui=bool(args.web_ui))
-    _start_web_ui(args, cfg, engine, scorer, viz=viz)
+    comparison = _build_comparison(args, cfg, engine, scorer, viz=viz)
+    _start_web_ui(args, cfg, engine, scorer, viz=viz, comparison=comparison)
+    if comparison is not None and comparison.selected_b:
+        # Deferred until the window exists: the second window is created on the
+        # GUI thread, and there is no GUI thread until run() starts the loop.
+        viz.on_ready = comparison.open_comparison
     viz.run()

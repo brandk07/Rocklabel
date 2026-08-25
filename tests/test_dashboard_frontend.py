@@ -3,8 +3,8 @@
 There is no browser available here (and none that can be driven on a Wayland
 desktop), so `tests/frontend/` ships a minimal DOM instead. These tests boot the
 real ``index.html`` + ``app.js`` + ``charts.js`` against payloads recorded from
-the real Flask app, then exercise every view, tab, command drawer, row expander,
-preset and help toggle.
+the real Flask app, then exercise every view, tab, command drawer, row
+expander, preset and help toggle, plus the runs board's rows and note editor.
 
 That is a render test, not a look test — a human still has to open the page to
 judge the design. What it catches cheaply is the expensive class of bug: a
@@ -57,13 +57,21 @@ def fixtures(tmp_path):
     app.config["TESTING"] = True
     recorded = {}
     with app.test_client() as client:
-        for path in ("/api/catalog", "/api/state", "/api/sensor", "/api/jobs"):
+        for path in ("/api/catalog", "/api/state", "/api/sensor", "/api/jobs",
+                     "/api/board"):
             recorded[path] = client.get(path).get_json()
         rec = recorded["/api/state"]["inventory"]["recordings"][0]["path"]
         recorded["/api/recording"] = client.get(
             "/api/recording", query_string={"path": rec}).get_json()
         recorded["/api/preview"] = client.post(
             "/api/preview", json={"command_id": "live", "values": {"source": "udp"}}
+        ).get_json()
+        # The board's note save is a real round trip against this project —
+        # recording it exercises the route, and the harness replays the answer
+        # as the response to its own note edit.
+        recorded["/api/board/notes"] = client.put(
+            "/api/board/notes",
+            json={"key": "reflectivity/pointnet-geom", "note": "hand-typed during fixture build"},
         ).get_json()
 
     # The page posts these; stub rather than launching real subprocesses.
@@ -116,8 +124,8 @@ def _build_project(root: Path) -> None:
                           "bev_frames": 100, "rock_count": 2,
                           "sample_labels": {"rock": 120, "clear": 380}}},
     }))
-    # Two models x two folds, one of them deliberately unevaluated so the
-    # comparison chart has to cope with a NaN column.
+    # The retired flat compare experiments: still on disk, but the page must
+    # not show them anywhere — the harness asserts their absence.
     for model in ("pointnet", "pointnet2"):
         for fold, evaluated in (("run1", True), ("run2", model == "pointnet")):
             run = (root / "training" / "experiments" / "compare"
@@ -138,26 +146,36 @@ def _build_project(root: Path) -> None:
                     "rock_frac": 0.24, "baseline_accuracy": 0.75,
                     "model": model, "test_run": fold,
                 }))
-    # A sweep mid-flight, so the "training now" panel has something to draw:
-    # one fold finished, one part-way through with a validation curve, and the
-    # rest of the declared matrix not started.
-    for fold, epochs, finished in (("run1", 8, True), ("run2", 3, False)):
-        d = (root / "training" / "experiments" / "reflectivity"
-             / "pointnet-geom" / f"loro_{fold}")
-        d.mkdir(parents=True)
-        (d / "arm.json").write_text(json.dumps(
-            {"arm": "pointnet-geom", "label": "PointNet · shape only",
-             "model": "pointnet", "features": ["dx", "dy", "dz"]}))
-        (d / "config.json").write_text(json.dumps(
-            {"model": "pointnet", "test_run": fold, "epochs": 30}))
-        (d / "best.pt").write_bytes(b"weights")
-        (d / "history.csv").write_text(
-            "epoch,train_loss,val_loss,val_pr_auc\n"
-            + "".join(f"{e},{0.5 / (e + 1)},{0.4 / (e + 1)},{0.5 + e / 40}\n"
-                      for e in range(epochs)))
-        if finished:
-            (d / "test_metrics.json").write_text(json.dumps(
-                {"test_run": fold, "pr_auc": 0.81, "f1": 0.7}))
+    # A sweep mid-flight, so the Training view has something to draw: one fold
+    # finished, one part-way through with a validation curve, one not started,
+    # across two arms — so the board also gets a two-series chart with a fold
+    # only one arm has finished (the NaN column the chart has to cope with).
+    # Each entry is (fold, epochs on disk, evaluated?); epochs 0 = never started.
+    arms = {
+        "pointnet-geom": {"label": "PointNet · shape only", "score": 0.81,
+                          "folds": (("run1", 8, True), ("run2", 3, False))},
+        "pointnet-refl": {"label": "PointNet · with reflectivity", "score": 0.79,
+                          "folds": (("run1", 8, True), ("run2", 0, False))},
+    }
+    for arm, spec in arms.items():
+        for fold, epochs, evaluated in spec["folds"]:
+            d = (root / "training" / "experiments" / "reflectivity" / arm
+                 / f"loro_{fold}")
+            d.mkdir(parents=True)
+            (d / "arm.json").write_text(json.dumps(
+                {"arm": arm, "label": spec["label"],
+                 "model": "pointnet", "features": ["dx", "dy", "dz"]}))
+            (d / "config.json").write_text(json.dumps(
+                {"model": "pointnet", "test_run": fold, "epochs": 30}))
+            if epochs:
+                (d / "best.pt").write_bytes(b"weights")
+                (d / "history.csv").write_text(
+                    "epoch,train_loss,val_loss,val_pr_auc\n"
+                    + "".join(f"{e},{0.5 / (e + 1)},{0.4 / (e + 1)},{0.5 + e / 40}\n"
+                              for e in range(epochs)))
+            if evaluated:
+                (d / "test_metrics.json").write_text(json.dumps(
+                    {"test_run": fold, "pr_auc": spec["score"], "f1": 0.7}))
 
     cache = root / "training" / "caches" / "full-sweep"
     cache.mkdir(parents=True)

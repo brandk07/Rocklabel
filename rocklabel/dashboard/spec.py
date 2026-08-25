@@ -24,11 +24,13 @@ from ..train.ablate import (DEFAULT_REPORT_ROOT as REPORT_ROOT,
                             DEFAULT_ROOT as EXPERIMENTS_ROOT,
                             SUITES as ABLATION_SUITES)
 from ..train.cli import DEFAULT_CACHE, DEFAULT_RUNS_ROOT
+from ..train.models_meta import MODELS as ARCHITECTURES
 
 # Quoted, not copied: the Solve-poses form offers the solver's real defaults, so
 # a knob retuned in rocklabel/slam/config.py moves the form with it. The module
 # is plain dataclass fields with no heavy imports, which keeps spec.py torch-free.
 from ..slam.config import AltSlamConfig as _SlamConfig
+from ..recording.selfhits import DEFAULT_RADIUS as _SELFHIT_RADIUS
 
 _SLAM_DEFAULTS = _SlamConfig()
 
@@ -74,6 +76,10 @@ class Param:
     placeholder: str = ""
     advanced: bool = False         # tucked under "Advanced" in the form
     repeat: bool = False           # repeatable flag (comma-split in the UI)
+    #: What separates the values of a repeatable field in the UI. Defaults to a
+    #: comma; a value that *contains* commas (a --box is six of them) sets this
+    #: to ";" so the parts survive the split.
+    sep: str = ","
     #: With repeat: emit one flag followed by every value (argparse nargs="+")
     #: instead of repeating the flag per value.
     nargs: bool = False
@@ -110,6 +116,10 @@ class Command:
     panel: bool = False
     long_running: bool = False     # progress-bar style job, not instant
     icon: str = "▸"
+    #: "pipeline" = the main loop (record → solve poses → label → dataset →
+    #: train → export/deploy); "tool" = everything else. Presentational only:
+    #: the UI leads with the pipeline and keeps tools a click away.
+    tier: str = "pipeline"
 
     @property
     def cli(self) -> str:
@@ -263,19 +273,33 @@ def _device() -> Param:
     )
 
 
-#: The two architectures, in the order the CLI declares them.
-MODEL_CHOICES = ["pointnet", "pointnet2"]
+#: Every architecture the trainer accepts, in the CLI's own sorted order.
+#: Quoted from the registry rather than retyped so a fourth model shows up
+#: here automatically.
+ARCHITECTURE_CHOICES = sorted(ARCHITECTURES)
+
+#: The two sliding-window classifiers. Deliberately separate from the full
+#: list: Compare and Report exist to put raw scores side by side, and those are
+#: only comparable between models graded on the same candidate spots. The
+#: segmenter is graded per point and gets its fair comparison from
+#: 'Segmenter vs classifier' instead.
+CLASSIFIER_CHOICES = [m for m in ARCHITECTURE_CHOICES if m != "pointnet2_seg"]
+
+# Back-compat alias used by older call sites.
+MODEL_CHOICES = CLASSIFIER_CHOICES
 
 
 def _models(help: str) -> Param:
     """Which architectures a sweep or report covers.
 
     A checkbox pair rather than free text: the vocabulary is closed, and a
-    typo here costs a whole training sweep before anything complains.
+    typo here costs a whole training sweep before anything complaints.
+    Deliberately the two sliding-window classifiers only — see
+    :data:`CLASSIFIER_CHOICES` for why the segmenter stays out of these forms.
     """
     return Param(
         "models", "multi", "Models", arg="--models", repeat=True, nargs=True,
-        choices=MODEL_CHOICES, default=list(MODEL_CHOICES), help=help,
+        choices=CLASSIFIER_CHOICES, default=list(CLASSIFIER_CHOICES), help=help,
     )
 
 
@@ -352,8 +376,10 @@ COMMANDS: list[Command] = [
             "(label, generate, train, replay) reads the native format it writes, "
             "so no conversion step is ever needed.",
         notes=[
-            "Recording starts the moment the window opens. S pauses/resumes it, "
-            "Q quits and finalizes the file.",
+            "Recording starts the moment the window opens. S stops it and "
+            "finalizes the file; pressing S again begins a NEW recording — if "
+            "you named the output explicitly, give each press a fresh name or "
+            "the take is overwritten. There is no pause.",
             "Use 'Live view' instead if you want to look before you commit to "
             "writing a file.",
             "--headless works over SSH: no window, prints throughput once a second.",
@@ -365,14 +391,24 @@ COMMANDS: list[Command] = [
                        "auto-names it recordings/lidar_<timestamp>.mcap."),
             Param("source", "enum", "Source", arg="--source", choices=["sim", "udp"],
                   default="udp",
-                  help="'udp' is the real SICK multiScan. 'sim' generates synthetic "
-                       "terrain so you can exercise the whole pipeline with no "
-                       "hardware attached."),
+                  help="'udp' is the real SICK multiScan; 'sim' generates synthetic "
+                       "terrain so you can exercise the pipeline with no hardware. "
+                       "The command line itself falls back to 'sim' when this flag "
+                       "is omitted — this form pre-selects 'udp' because the real "
+                       "sensor is what Record is for."),
             Param("model", "path", "Live model", arg="--model", source="checkpoints",
                   help="Optional. Score the live cloud with a trained checkpoint "
                        "while recording, so you can see predictions on the rocks "
                        "as you capture them."),
             *_region_params(),
+            Param("floor_band", "text", "Floor band (m)", arg="--floor-band",
+                  repeat=True, nargs=True, placeholder="-0.05, 0.6",
+                  help="Crop band measured from the DETECTED FLOOR instead of "
+                       "the sensor: two numbers, metres below and above ground — "
+                       "'-0.05, 0.6' keeps 5 cm below to 60 cm above the floor. "
+                       "It does not care how high you hold the rig, so it beats "
+                       "the z band whenever the sensor height wanders during a "
+                       "take. Needs levelling, which is on by default."),
             Param("sensor_ip", "text", "Sensor IP", arg="--sensor-ip", advanced=True,
                   placeholder="10.11.10.3",
                   help="Only if the sensor is not at the configured default."),
@@ -419,25 +455,67 @@ COMMANDS: list[Command] = [
             "ever-densifying fused map made predictions decay over time.",
             "Scored centers merge into a persistent per-voxel prediction map, so "
             "coverage builds up as you sweep the room.",
-            "S starts a recording at any moment; V cycles height → reflectivity → "
-            "model coloring.",
+            "The Model card's Display dropdown has three views: raw confidence, "
+            "detections at the threshold, and rock outlines — which groups the "
+            "detections into clumps and draws a polygon around each one, "
+            "ignoring clumps too small to be a rock. Link distance and the "
+            "minimum clump size are live knobs in the panel, on the 3D window "
+            "and in the browser alike.",
+            "When watching the live sensor, S starts a recording at any moment "
+            "(it does nothing while a replay is running). V cycles height → "
+            "reflectivity → stretched reflectivity → model coloring, the last "
+            "only when a checkpoint is loaded.",
         ],
         params=[
             Param("play", "path", "Replay a recording", arg="--play", source="recordings",
                   help="Replay this file instead of reading the sensor. Gives you "
                        "play/pause and a seek bar."),
+            Param("speed", "float", "Playback speed", arg="--speed", unit="x",
+                  default=1.0, min=0.0, max=8.0, step=0.05,
+                  help="Replay only: how fast the file plays, as a multiple of "
+                       "real time. 1 is real time, 2 is twice as fast, 0.25 is "
+                       "quarter-speed slow motion, and 0 means no pacing at "
+                       "all — run as fast as the machine can fuse the frames. "
+                       "Nothing is skipped or repeated at any speed. You can "
+                       "also change it mid-run from the Speed dropdown in the "
+                       "replay transport bar of the live control panel."),
             Param("source", "enum", "Source", arg="--source", choices=["sim", "udp"],
                   default="udp",
                   help="Ignored when replaying. 'udp' is the real sensor; 'sim' is "
-                       "synthetic terrain for testing with no hardware."),
+                       "synthetic terrain for testing with no hardware. The command "
+                       "line itself falls back to 'sim' when this flag is omitted — "
+                       "this form pre-selects 'udp' because the real sensor is what "
+                       "Live view is for."),
             Param("model", "path", "Model checkpoint", arg="--model", source="checkpoints",
                   help="A best.pt from training. Adds the 'model' color mode and "
                        "the whole Model panel in the viewer."),
+            Param("compare_model", "path", "Compare against", arg="--compare-model",
+                  source="checkpoints",
+                  help="Optional SECOND checkpoint. Opens a second window on the "
+                       "same scene scored by this model, so you can watch two "
+                       "checkpoints disagree about the same rock in real time. "
+                       "Both windows share one set of settings — region, "
+                       "threshold, display mode, rock outlines — so the model is "
+                       "the only thing that differs between them. With 'Browser "
+                       "control panel' on you can also open, close and re-pick "
+                       "both models while it is running."),
             *_region_params(),
+            Param("floor_band", "text", "Floor band (m)", arg="--floor-band",
+                  repeat=True, nargs=True, placeholder="-0.05, 0.6",
+                  help="Crop band measured from the DETECTED FLOOR instead of "
+                       "the sensor: two numbers, metres below and above ground. "
+                       "It does not care how high you hold the rig, so it beats "
+                       "the z band whenever the sensor height wanders. Needs "
+                       "levelling, which is on by default."),
             Param("color_mode", "enum", "Initial coloring", arg="--color-mode",
-                  choices=["", "height", "reflectivity", "model"],
-                  help="What points are colored by on open. 'model' needs a "
-                       "checkpoint. V cycles it at runtime either way."),
+                  choices=["", "height", "reflectivity", "reflectivity_stretch",
+                           "model"],
+                  help="What points are colored by on open. 'reflectivity' is the "
+                       "sensor's calibrated full scale, so colors compare across "
+                       "frames; 'reflectivity_stretch' spreads each frame's own "
+                       "brightness range across the ramp — the best rock/ground "
+                       "contrast indoors. 'model' needs a checkpoint. V cycles "
+                       "through all of them at runtime."),
             Param("score_interval", "float", "Scoring interval", arg="--score-interval",
                   unit="s", min=0.1, max=5.0, step=0.1, advanced=True,
                   help="Seconds between scoring passes. A pass costs 9-20 ms on "
@@ -454,12 +532,16 @@ COMMANDS: list[Command] = [
             Param("no_crop", "bool", "Disable crop", arg="--no-crop", advanced=True,
                   help="Keep every point that arrives, including walls and ceiling."),
             Param("headless", "bool", "Headless", arg="--headless", advanced=True),
+            Param("duration", "float", "Duration", arg="--duration", unit="s",
+                  min=0, step=10, advanced=True,
+                  help="Headless only: stop after this many seconds. 0 = until "
+                       "you stop the job."),
         ],
         presets=[_HANDHELD],
     ),
     # ---------------------------------------------------------------- triage
     Command(
-        id="inspect", bin="rocklabel", sub="inspect", stage="triage",
+        id="inspect", bin="rocklabel", sub="inspect", stage="triage", tier="tool",
         icon="🔍",
         title="Inspect",
         tagline="Print topics, fields, TF frames and time span of a recording.",
@@ -479,7 +561,7 @@ COMMANDS: list[Command] = [
         params=[_recording(), _config(advanced=False)],
     ),
     Command(
-        id="trim", bin="rocklabel", sub="trim", stage="triage",
+        id="trim", bin="rocklabel", sub="trim", stage="triage", tier="tool",
         icon="✂",
         title="Trim",
         tagline="Shrink a huge recording, cut a time window, or salvage a broken one.",
@@ -519,6 +601,62 @@ COMMANDS: list[Command] = [
         ],
         long_running=True,
     ),
+    Command(
+        id="selfhits", bin="rocklabel", sub="selfhits", stage="triage", tier="tool",
+        icon="🤖",
+        title="Remove robot self-hits",
+        tagline="Delete the points the LiDAR sees of the robot carrying it.",
+        what="On a competition run the sensor is bolted to the robot, so part of "
+             "every sweep lands on the machine itself. Those returns sit at a "
+             "fixed spot relative to the sensor, but once each sweep is placed "
+             "into the world they smear into a long trail following wherever the "
+             "robot drove. This writes a new recording with them gone, copying "
+             "everything else through untouched.",
+        why="Reach for it on the raw competition recordings, where the robot's "
+            "own body sits on top of the terrain you are trying to look at and "
+            "label. The original file is never modified - you get a clean copy "
+            "to work from.",
+        notes=[
+            "Start with 'Just measure' ticked. It reports how far the robot's own "
+            "structure actually reaches and tells you the radius to use, instead "
+            "of you having to guess.",
+            "The radius works because the sensor is mounted above the ground: real "
+            "terrain physically cannot come closer than the mount height, so "
+            "anything inside the sphere can only be the robot.",
+            "Expect a big number - on the Lunabotics runs about 40% of all points "
+            "are the robot, because it fills a large part of the sensor's view.",
+            "Only points are removed. Every topic, message, timestamp and pose is "
+            "copied through, so the cleaned file drops straight into labelling and "
+            "dataset generation.",
+        ],
+        params=[
+            _recording(),
+            Param("out", "outpath", "Output file", arg="--out",
+                  placeholder="recordings/run.clean.mcap",
+                  help="The new .mcap to write. Never the same path as the input. "
+                       "Not needed when you are only measuring or doing a dry run."),
+            Param("radius", "float", "Robot radius", arg="--radius", unit="m",
+                  default=_SELFHIT_RADIUS, min=0.0, max=5.0, step=0.05,
+                  help="Throw away every point closer than this to the sensor. "
+                       "Anything within it is the machine the sensor is bolted "
+                       "to, because real ground is at least a mount height away."),
+            Param("measure", "bool", "Just measure", arg="--measure",
+                  help="Write nothing. Reports how far the robot's own structure "
+                       "reaches and what radius to use. Run this first."),
+            Param("dry_run", "bool", "Dry run", arg="--dry-run",
+                  help="Write nothing, but report exactly how many points the "
+                       "current radius would remove."),
+            Param("box", "text", "Extra boxes", arg="--box", repeat=True,
+                  sep=";", advanced=True,
+                  placeholder="0.5,1.0,-0.3,0.3,-0.2,0.2",
+                  help="Also remove points inside a box in sensor coordinates, "
+                       "given as x0,x1,y0,y1,z0,z1 in meters. For a part that "
+                       "sticks out past the radius, like a mast or a raised "
+                       "blade. Separate several boxes with a semicolon."),
+            _config(),
+        ],
+        long_running=True,
+    ),
     # ---------------------------------------------------------------- slam
     Command(
         id="slam", bin="rocklabel", sub="slam", stage="slam",
@@ -551,6 +689,9 @@ COMMANDS: list[Command] = [
             "slow to run live, which is why it runs from a file.",
             "Tick 'Score only' to try settings without writing anything — it "
             "prints the surface thickness before and after.",
+            "The parser also takes --output to name a single result file, but it "
+            "is only valid with exactly one input — batch jobs here always use "
+            "the suffix/folder scheme, so the form leaves it out on purpose.",
             "Measured and rejected, so do not reach for them: 0.05 s windows "
             "(diverges badly), voxels above 0.20 m, more than about 2 extra "
             "passes, and locking tilt to the IMU (2x worse on a hand-swept rig).",
@@ -631,6 +772,12 @@ COMMANDS: list[Command] = [
                        "Run1.mcap becomes Run1.reslam.mcap. The rest of the "
                        "project expects '.reslam'."),
             Param("quiet", "bool", "No progress bar", arg="--quiet", advanced=True),
+            Param("ros2_stride", "int", "Bag scan stride", arg="--ros2-stride",
+                  default=4, min=1, max=50, advanced=True,
+                  help="ROS 2 competition bags only: solve using every Nth "
+                       "scan. Those run half an hour at ~19 Hz, which is far "
+                       "denser than the solver needs and more than fits in "
+                       "memory at once. Ignored for native rig recordings."),
         ],
         long_running=True,
     ),
@@ -709,12 +856,14 @@ COMMANDS: list[Command] = [
         ],
     ),
     Command(
-        id="driftcheck", bin="rocklabel", sub="driftcheck", stage="label", gui=True,
+        id="driftcheck", bin="rocklabel", sub="driftcheck", stage="label",
+        tier="tool", gui=True,
         icon="⊕",
         title="Drift check",
         tagline="Overlay the start and end of a run around one rock to catch odometry drift.",
         what="Accumulates only the first 10% (blue) and last 10% (orange) of "
-             "scans, crops both to a 1 m box around the rock you name, and "
+             "scans, crops both to a box around the rock you name — at least "
+             "1 m across, widened for big rocks so they keep context — and "
              "overlays them.",
         why="Label-once-project-everywhere breaks silently if odometry drifts — "
             "you get a dataset where the labels no longer sit on the rocks and no "
@@ -747,12 +896,14 @@ COMMANDS: list[Command] = [
         id="generate", bin="rocklabel", sub="generate", stage="dataset",
         icon="⚙",
         title="Generate dataset",
-        tagline="Turn a labeled recording into both training-dataset formats.",
-        what="Non-interactive. Replays the recording, keeps every frame_stride-th "
-             "scan, transforms it to the odom frame, crops a robot-centered box, "
-             "projects the labels into each frame, and writes both formats: "
-             "point-neighborhood samples (format A, what the classifiers train on) "
-             "and BEV rasters (format B).",
+        tagline="Turn a labeled recording into training data in all three dataset formats.",
+        what="Non-interactive. Replays the recording, transforms it to the odom "
+             "frame, crops a robot-centered box, projects the labels into each "
+             "frame, and writes all three outputs: point-neighborhood samples "
+             "(format A — what the sliding-window classifiers train on), BEV "
+             "rasters (format B), and whole-frame segmentation frames (format C "
+             "— what the segmenter trains on). With the default profile a frame "
+             "is one merged sensor rotation, and every Nth of those frames is kept.",
         why="The bridge from 'a labeled recording' to 'something a model can "
             "train on'. Several recordings accumulate into one dataset directory "
             "as long as they share an identical config.",
@@ -796,7 +947,8 @@ COMMANDS: list[Command] = [
         long_running=True,
     ),
     Command(
-        id="preview", bin="rocklabel", sub="preview", stage="dataset", gui=True,
+        id="preview", bin="rocklabel", sub="preview", stage="dataset",
+        tier="tool", gui=True,
         icon="▦",
         title="Preview dataset",
         tagline="Browse the frames that were actually written, reconstructed from the npz files.",
@@ -905,9 +1057,10 @@ COMMANDS: list[Command] = [
         icon="◈",
         title="Train one fold",
         tagline="Fit one model on one leave-one-run-out fold.",
-        what="Trains a single PointNet or PointNet++ binary rock classifier, "
-             "holding out one whole run for testing and using contiguous tail "
-             "frame blocks for early stopping. Writes config.json, history.csv, "
+        what="Trains one model on one fold — either of the two sliding-window "
+             "classifiers or the whole-frame per-point segmenter — holding out "
+             "one whole run for testing and using contiguous tail frame blocks "
+             "for early stopping. Writes config.json, history.csv, "
              "last.pt/best.pt, test_metrics.json and predictions.npz into "
              f"{DEFAULT_RUNS_ROOT}/<model>_loro_<run>/.",
         why="The quick loop: one fold to see whether a change helps, before "
@@ -922,14 +1075,22 @@ COMMANDS: list[Command] = [
             "directory name (pointnet_loro_run3_dx-dy-dz), so training the same "
             "fold with and without reflectivity gives you two runs to compare "
             "rather than a collision on one directory.",
-            "Class imbalance (~29% rock) is handled with class-weighted BCE — "
-            "read PR-AUC and F1, never bare accuracy.",
+            "Class imbalance (~19% rock overall, but anywhere from ~5% to ~31% "
+            "in a single run) is handled with class-weighted BCE — read PR-AUC "
+            "and F1, never bare accuracy, and never compare raw PR-AUC across "
+            "runs whose rock share differs.",
         ],
         params=[
             Param("model", "enum", "Architecture", arg="--model",
-                  choices=["pointnet", "pointnet2"], default="pointnet", required=True,
+                  choices=ARCHITECTURE_CHOICES, default="pointnet", required=True,
                   help="PointNet is smaller and faster; PointNet++ masks padded "
-                       "points out of FPS and ball queries entirely."),
+                       "points out of FPS and ball queries entirely; "
+                       "pointnet2_seg is the whole-frame segmenter — it labels "
+                       "every point in one pass and reads the cache's "
+                       "segmentation arrays (every cache except the old "
+                       "raw-burst one has them). Its score is per point, so "
+                       "compare it to the classifiers only through 'Segmenter "
+                       "vs classifier'."),
             Param("test_run", "text", "Held-out run", arg="--test-run", required=True,
                   source="cache_runs",
                   help="The run kept out of training and used as the test set. "
@@ -951,15 +1112,49 @@ COMMANDS: list[Command] = [
                   default=0.15, min=0.01, max=0.5, step=0.01, advanced=True),
             Param("gap_frames", "int", "Gap frames", arg="--gap-frames", default=25,
                   min=0, advanced=True,
-                  help="Frames dropped between the train and val blocks so "
-                       "near-duplicate neighborhoods cannot straddle the split."),
+                  help="MINIMUM frames dropped between the train and validation "
+                       "blocks so near-duplicate neighborhoods cannot straddle "
+                       "the split. A seconds-sized buffer (Gap seconds, below) "
+                       "widens this whenever the wall-clock gap is bigger, which "
+                       "at the defaults it always is."),
+            Param("gap_seconds", "float", "Gap seconds",
+                  arg="--gap-seconds", default=TRAIN_DEFAULTS["gap_seconds"],
+                  min=0.0, step=0.5, advanced=True,
+                  help="Wall-clock no-man's-land between the train and "
+                       "validation blocks, in seconds. At ~20 kept frames per "
+                       "second this usually sets the real gap, and Gap frames "
+                       "is only the floor."),
             Param("dropout", "float", "Dropout", arg="--dropout", min=0.0, max=0.9,
                   step=0.05, advanced=True),
             Param("tnet", "bool", "Enable T-Nets", arg="--tnet", advanced=True,
                   help="PointNet input + feature transforms. Off by default "
                        "because the data is already canonicalized."),
+            Param("aug_intensity_gain", "float", "Augment: brightness gain jitter",
+                  arg="--aug-intensity-gain",
+                  default=TRAIN_DEFAULTS["aug_intensity_gain"], min=0.0, max=2.0,
+                  step=0.05, advanced=True,
+                  help="How hard training randomly rescales each neighborhood's "
+                       "brightness spread, so the model cannot memorize exact "
+                       "reflectivity values. Only bites when the intensity "
+                       "channel is ticked."),
+            Param("aug_intensity_shift", "float", "Augment: brightness offset jitter",
+                  arg="--aug-intensity-shift",
+                  default=TRAIN_DEFAULTS["aug_intensity_shift"], min=0.0, max=1.0,
+                  step=0.05, advanced=True,
+                  help="Random whole-neighborhood brightness nudge, on top of "
+                       "the gain jitter — simulates the sensor's exposure-style "
+                       "drift between runs. Only bites with the intensity "
+                       "channel ticked."),
+            Param("aug_thin_min", "float", "Augment: thinning floor",
+                  arg="--aug-thin-min",
+                  default=TRAIN_DEFAULTS["aug_thin_min"], min=0.1, max=1.0,
+                  step=0.05, advanced=True,
+                  help="Training randomly drops points to mimic sparser scans; "
+                       "this is the fraction of points always kept. 0.5 means a "
+                       "neighborhood never loses more than half its points."),
             Param("no_augment", "bool", "Disable augmentation", arg="--no-augment",
-                  advanced=True),
+                  advanced=True,
+                  help="Turn off all three augmentation knobs above."),
             *_seg_geometry(),
             Param("seed", "int", "Seed", arg="--seed", default=42, advanced=True),
             _cache_dir(),
@@ -972,15 +1167,21 @@ COMMANDS: list[Command] = [
     ),
     Command(
         id="train-compare", bin="rocklabel-train", sub="compare", stage="train",
+        tier="tool",
         icon="⊞",
         title="Compare models",
         tagline="Train both architectures on every fold, then render all figures.",
-        what="Loops both models over every leave-one-run-out fold, skipping folds "
-             "that already have test_metrics.json, then renders the full figure "
-             f"set into {REPORT_ROOT}/compare/ — comparison bars, per-fold ROC/PR, "
-             "confusion matrices, threshold sweeps and summary.json.",
+        what="Loops both sliding-window classifiers over every leave-one-run-out "
+             "fold, skipping folds that already have test_metrics.json, then "
+             f"renders the full figure set into {REPORT_ROOT}/compare/ — "
+             "comparison bars, per-fold ROC/PR curves, confusion matrices, "
+             "threshold sweeps and summary.json. A non-default channel selection "
+             "adds a suffix to that folder (compare_dx-dy-dz), so selections "
+             "never overwrite each other's reports.",
         why="The real evaluation. One command produces every number and figure "
-            "you would put in front of the team.",
+            "you would put in front of the team. For 'does this change actually "
+            "help' questions, an Ablation sweep is the stronger tool — this one "
+            "is for establishing the two-architecture baseline.",
         notes=[
             "This is the long one — it is a full training sweep, not a report.",
             "Already-evaluated folds are skipped, so re-running after adding a "
@@ -988,7 +1189,11 @@ COMMANDS: list[Command] = [
         ],
         params=[
             _models("Which architectures to sweep. Both is the point of the "
-                    "command — untick one only to finish a half-done sweep."),
+                    "command — untick one only to finish a half-done sweep. "
+                    "Deliberately no segmenter here: raw scores are only "
+                    "comparable between models graded on the same candidate "
+                    "spots, and the segmenter gets its fair comparison from "
+                    "'Segmenter vs classifier'."),
             _features(),
             Param("epochs", "int", "Epochs", arg="--epochs", default=30, min=1, max=500),
             Param("batch", "int", "Batch size", arg="--batch", default=256, min=8, max=4096),
@@ -996,6 +1201,21 @@ COMMANDS: list[Command] = [
             Param("patience", "int", "Early-stop patience", arg="--patience",
                   default=TRAIN_PATIENCE, min=1),
             *_seg_geometry(),
+            Param("weight_decay", "float", "Weight decay", arg="--weight-decay",
+                  default=TRAIN_DEFAULTS["weight_decay"], step=0.0001, advanced=True),
+            Param("val_frac", "float", "Validation fraction", arg="--val-frac",
+                  default=TRAIN_DEFAULTS["val_frac"], min=0.01, max=0.5, step=0.01,
+                  advanced=True),
+            Param("dropout", "float", "Dropout", arg="--dropout", min=0.0, max=0.9,
+                  step=0.05, advanced=True),
+            Param("tnet", "bool", "Enable T-Nets", arg="--tnet", advanced=True),
+            Param("no_augment", "bool", "Disable augmentation", arg="--no-augment",
+                  advanced=True,
+                  help="Also see the three augmentation knobs on 'Train one "
+                       "fold' — the parser accepts them here too; they are kept "
+                       "off this form to keep it readable."),
+            Param("seed", "int", "Seed", arg="--seed",
+                  default=TRAIN_DEFAULTS["seed"], advanced=True),
             _cache_dir(),
             _device(),
             _gpu_fraction(),
@@ -1023,17 +1243,20 @@ COMMANDS: list[Command] = [
             "unpaired comparison cannot see an effect this small. The report gives "
             "you a per-fold difference, a win/loss count and a significance test.",
         notes=[
-            "This is the longest job in the tool — a full sweep is 100+ trainings. "
-            "Finished folds are skipped, so it picks up where it left off.",
+            "One training per setting per held-out run — 121 for 'reflectivity', "
+            "110 for 'fullsweep', 48 for 'segdense' — so this is the longest job "
+            "in the tool whichever question you pick. Finished folds are skipped, "
+            "so a stopped sweep picks up where it left off.",
             f"Every setting gets its own folder under {EXPERIMENTS_ROOT}/<question>/, so two "
-            "settings that differ only in an augmentation value cannot overwrite "
-            "each other the way Compare would.",
+            "settings that differ only in, say, an augmentation value never "
+            "collide on one folder. Compare's flat <model>_<fold> names would; "
+            "it moves an older different-settings run aside rather than share.",
             "Tick 'Report only' to rebuild the tables and figures from whatever "
             "has already finished — safe to do while the sweep is still running.",
         ],
         params=[
             Param("suite", "enum", "Question to settle", arg="--suite",
-                  choices=sorted(ABLATION_SUITES), default="segdense",
+                  choices=sorted(ABLATION_SUITES), default="reflectivity",
                   help="Which set of settings to run. "
                        + " ".join(f"'{k}': {v['title']} (trains on the "
                                   f"{v['cache']} cache)."
@@ -1062,6 +1285,25 @@ COMMANDS: list[Command] = [
                        "gain. Keep it long enough for the learning-rate schedule "
                        "to finish, or no fold ever sees its fine-tuning phase."),
             *_seg_geometry(),
+            # The rest of the shared training hyperparameters: every one of
+            # these passes through to each arm unless the arm's own definition
+            # overrides it, which is why they sit behind Advanced.
+            Param("lr", "float", "Learning rate", arg="--lr",
+                  default=TRAIN_DEFAULTS["lr"], step=0.0001, advanced=True,
+                  help="Applies to every arm unless the arm's own definition "
+                       "sets one — arm settings win over form values."),
+            Param("weight_decay", "float", "Weight decay", arg="--weight-decay",
+                  default=TRAIN_DEFAULTS["weight_decay"], step=0.0001, advanced=True),
+            Param("val_frac", "float", "Validation fraction", arg="--val-frac",
+                  default=TRAIN_DEFAULTS["val_frac"], min=0.01, max=0.5,
+                  step=0.01, advanced=True),
+            Param("dropout", "float", "Dropout", arg="--dropout", min=0.0,
+                  max=0.9, step=0.05, advanced=True),
+            Param("tnet", "bool", "Enable T-Nets", arg="--tnet", advanced=True),
+            Param("no_augment", "bool", "Disable augmentation", arg="--no-augment",
+                  advanced=True),
+            Param("seed", "int", "Seed", arg="--seed",
+                  default=TRAIN_DEFAULTS["seed"], advanced=True),
             Param("ablate_root", "outdir", "Runs folder", arg="--ablate-root",
                   default=EXPERIMENTS_ROOT, advanced=True,
                   help="Where each setting's trained folds are written, as "
@@ -1076,6 +1318,7 @@ COMMANDS: list[Command] = [
     ),
     Command(
         id="train-matched", bin="rocklabel-train", sub="matched", stage="train",
+        tier="tool",
         icon="⇔",
         title="Segmenter vs classifier",
         tagline="Compare a per-point model against a sliding-window one, fairly.",
@@ -1129,6 +1372,7 @@ COMMANDS: list[Command] = [
     ),
     Command(
         id="train-reflect", bin="rocklabel-train", sub="reflect", stage="train",
+        tier="tool",
         icon="✸",
         title="Reflectivity check",
         tagline="Measure what the brightness channel carries — in seconds, without training.",
@@ -1157,6 +1401,7 @@ COMMANDS: list[Command] = [
     ),
     Command(
         id="train-report", bin="rocklabel-train", sub="report", stage="train",
+        tier="tool",
         icon="▥",
         title="Regenerate report",
         tagline="Rebuild every figure and table from existing runs — no retraining.",
@@ -1191,7 +1436,8 @@ COMMANDS: list[Command] = [
         ],
     ),
     Command(
-        id="train-replay", bin="rocklabel-train", sub="replay", stage="deploy", gui=True,
+        id="train-replay", bin="rocklabel-train", sub="replay", stage="deploy",
+        tier="tool", gui=True,
         icon="▶",
         title="Model replay",
         tagline="Run a checkpoint over any recording — no labels or dataset needed.",
@@ -1227,7 +1473,8 @@ COMMANDS: list[Command] = [
         ],
     ),
     Command(
-        id="train-view", bin="rocklabel-train", sub="view", stage="train", gui=True,
+        id="train-view", bin="rocklabel-train", sub="view", stage="train",
+        tier="tool", gui=True,
         icon="◫",
         title="Confidence view",
         tagline="Replay a generated dataset colored by model confidence, against ground truth.",
@@ -1296,7 +1543,7 @@ def build_argv(cmd: Command, values: dict, panel_port: int | None = None) -> lis
                 raise ValueError(f"{p.label} is required")
             continue
         if p.repeat:
-            parts = [s.strip() for s in str(raw).split(",") if s.strip()]
+            parts = [s.strip() for s in str(raw).split(p.sep) if s.strip()]
             if p.arg is None:
                 positional.extend(parts)
             elif p.nargs:

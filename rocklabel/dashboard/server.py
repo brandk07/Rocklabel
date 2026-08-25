@@ -23,7 +23,7 @@ import webbrowser
 
 from flask import Flask, abort, jsonify, render_template, request, send_from_directory
 
-from . import inventory, netfix, spec, sysinfo
+from . import board, inventory, netfix, spec, sysinfo
 from .jobs import JobManager
 
 
@@ -199,6 +199,29 @@ def create_app(root: str) -> Flask:
         if not full.lower().endswith(".png"):
             abort(403, "only .png figures are served")
         return send_from_directory(os.path.dirname(full), os.path.basename(full))
+
+    # ------------------------------------------------- training-runs board
+    # Deliberately NOT part of /api/state: the board reads every fold's
+    # metrics on disk, which is real work, and it only needs to be fresh when
+    # the Runs screen is open — the page fetches it on entry and on refresh.
+    @app.get("/api/board")
+    def api_board():
+        return jsonify(board.board(root))
+
+    @app.get("/api/board/notes")
+    def api_board_notes():
+        return jsonify({"notes": board.read_notes(root)})
+
+    @app.put("/api/board/notes")
+    def api_board_note_set():
+        body = request.get_json(silent=True) or {}
+        try:
+            return jsonify(board.write_note(root, body.get("key", ""),
+                                            body.get("note", "")))
+        except ValueError as e:
+            abort(400, str(e))
+        except OSError as e:
+            abort(400, f"could not write note: {e}")
 
     # ------------------------------------------------------- housekeeping
     # The two project writes not performed by a launched command. Both refuse

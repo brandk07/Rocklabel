@@ -38,6 +38,13 @@ Color modes (``V`` key or the panel combobox):
   decision threshold; points the model has no prediction for (outside the
   scoring region, or not yet scored) keep dimmed height colors.
 
+The Model panel's "Display" dropdown picks between those last two and a third
+view, **rock outlines**: the above-threshold detections are grouped into clumps
+and each clump big enough to be a rock is wrapped in a polygon
+(:mod:`rocklabel.live.clusters`), drawn as a low prism over the rock. Lone
+detections fall under the clump-size gate and are simply not drawn, which is
+what separates a rock from speckle.
+
 Camera controls are the labeler's (:mod:`rocklabel.gui.camera`): left-drag orbits
 around a pivot, and a double-click moves that pivot onto the clicked point.
 
@@ -70,6 +77,7 @@ from rocklabel.live.colormap import (
     percentile_range,
     reflectivity_values,
 )
+from rocklabel.live.clusters import find_rocks, outline_wireframe
 from rocklabel.live.config import AppConfig
 from rocklabel.live.motion import quat_to_matrix
 from rocklabel.live.pipeline import IngestEngine
@@ -78,6 +86,7 @@ _POINTS_NAME = "raw_points"
 _ACCUM_NAME = "accum_points"
 _MESH_NAME = "surface_mesh"
 _BOX_NAME = "lidar_box"
+_ROCKS_NAME = "rock_outlines"
 
 #: Settle time before a slider drag is applied as a seek (coalesces scrubbing).
 _SEEK_DEBOUNCE_SEC = 0.25
@@ -167,7 +176,7 @@ class VizApp(PivotCamera):
     """
 
     def __init__(self, config: AppConfig, engine: IngestEngine, scorer=None,
-                 web_ui: bool = False) -> None:
+                 web_ui: bool = False, secondary: bool = False) -> None:
         self._cfg = config
         self._engine = engine
         self._scorer = scorer
@@ -175,6 +184,20 @@ class VizApp(PivotCamera):
         #: settings panel so the scene gets the whole window. The keyboard
         #: shortcuts and the replay transport bar stay.
         self._web_ui = bool(web_ui)
+        #: A comparison window: a second view of the same engine under a second
+        #: model. It does not own the pipeline, so closing it stops nothing but
+        #: itself.
+        self._secondary = bool(secondary)
+        #: The other window of a comparison pair, if one is open. Every public
+        #: setter below mirrors to it, which is what makes the two windows one
+        #: experiment instead of two.
+        self._peer: VizApp | None = None
+        #: Guard against a mirrored write bouncing back (a -> b -> a).
+        self._mirroring = False
+        #: Called once the window exists and the event loop is about to start.
+        self.on_ready = None
+        #: Comparison windows only: called after this window has closed.
+        self.on_closed = None
 
         self._show_points = config.display.show_points
         self._show_mesh = config.display.show_mesh
@@ -188,7 +211,14 @@ class VizApp(PivotCamera):
             if config.display.color_mode in self._color_modes
             else "height"
         )
-        self._model_display = 0  # 0 = confidence colormap, 1 = detections @ thr
+        # 0 = confidence colormap, 1 = detections @ thr, 2 = rock outlines
+        self._model_display = 0
+        #: Cache key of the last outline rebuild: clustering the whole
+        #: prediction map and hulling every clump is real work, and only
+        #: a new pass or a moved setting can change the answer.
+        self._rocks_key: tuple | None = None
+        #: Outlines currently drawn, for the panel's readout.
+        self._rocks = None
         #: Contrast window for the fixed reflectivity mode, (low, high) as
         #: fractions of full scale. Absolute, hard-clamped at both ends, and
         #: shared by the raw points, the accumulated cloud and the mesh.
@@ -227,6 +257,7 @@ class VizApp(PivotCamera):
         self._rec_state = self._rec_stats = self._rec_file = None
         self._rec_label: gui.Label | None = None          # alias of _rec_state
         self._model_map = self._model_pass = self._model_region = None
+        self._model_rocks = None
         self._model_warn: gui.Label | None = None
         self._model_label: gui.Label | None = None        # alias of _model_map
 
@@ -268,6 +299,12 @@ class VizApp(PivotCamera):
         self._box_mat.shader = "defaultLit"
         self._box_mat.base_color = (1.0, 1.0, 1.0, 1.0)
 
+        #: Rock outlines. unlitLine keeps them the same brightness whatever the
+        #: scene lighting does — an outline is an annotation, not a surface.
+        self._rock_mat = rendering.MaterialRecord()
+        self._rock_mat.shader = "unlitLine"
+        self._rock_mat.line_width = 2.0
+
     # ------------------------------------------------------------------ #
     # Lifecycle
     # ------------------------------------------------------------------ #
@@ -282,8 +319,40 @@ class VizApp(PivotCamera):
         app = gui.Application.instance
         app.initialize()
 
-        d = self._cfg.display
         title = "rocklabel - live" if not self._replay else "rocklabel - live replay"
+        self._build_window(title)
+
+        # Start ingestion + the display-rate tick that posts updates.
+        self._engine.start()
+        if self._scorer is not None:
+            self._scorer.start()
+        if self._replay:
+            # After engine/source start: the slider limits need the recording's
+            # duration, which the source only knows once it has been started.
+            self._build_transport_bar()
+        if self._cfg.record.autostart and not self._replay:
+            path = self._engine.start_recording()
+            if path:
+                print(f"[rocklabel] recording -> {path}", flush=True)
+        self._start_ticking()
+
+        # Anything that needs a window to exist before it can run — opening a
+        # comparison window from --compare-model — goes here, queued so it
+        # lands on the first turn of the loop rather than before it.
+        if callable(self.on_ready):
+            gui.Application.instance.post_to_main_thread(self._window, self.on_ready)
+
+        app.run()  # blocks on the main thread until the last window closes
+
+    def _build_window(self, title: str) -> None:
+        """Create this instance's window, scene and (optionally) its panel.
+
+        Shared by the primary window and by a comparison window, which is the
+        same class over the same engine with a different scorer — everything
+        below is per-window state, so one more instance is one more view.
+        """
+        app = gui.Application.instance
+        d = self._cfg.display
         self._window = app.create_window(title, d.window_width, d.window_height)
         self._window.set_on_close(self._on_close)
         self._window.set_on_layout(self._on_layout)
@@ -305,29 +374,105 @@ class VizApp(PivotCamera):
         self._add_lidar_box()
         self.reset_camera()
 
-        # Start ingestion + the display-rate tick that posts updates.
-        self._engine.start()
-        if self._scorer is not None:
-            self._scorer.start()
-        if self._replay:
-            # After engine/source start: the slider limits need the recording's
-            # duration, which the source only knows once it has been started.
-            self._build_transport_bar()
-        if self._cfg.record.autostart and not self._replay:
-            path = self._engine.start_recording()
-            if path:
-                print(f"[rocklabel] recording -> {path}", flush=True)
+    def _start_ticking(self) -> None:
         self._tick_thread = threading.Thread(
             target=self._tick_loop, name="viz-tick", daemon=True
         )
         self._tick_thread.start()
 
-        app.run()  # blocks on the main thread until the window closes
+    # -- comparison window ---------------------------------------------- #
+    def open_comparison_window(self, scorer, title: str, on_closed=None):
+        """Open a second window on the same engine, scored by ``scorer``.
+
+        Must be called on the GUI thread (the comparison posts it there). The
+        new window is scene-only — no docked panel, no transport bar — because
+        every control already drives both windows through this one, and two
+        copies of the same panel is two ways to disagree.
+
+        Returns the new :class:`VizApp`, already paired with this one so that a
+        keypress or a panel click in either is applied to both.
+        """
+        peer = VizApp(self._cfg, self._engine, scorer=scorer, web_ui=True,
+                      secondary=True)
+        peer.on_closed = on_closed
+        peer._build_window(title)
+        peer.copy_view_from(self)
+        self.set_peer(peer)
+        peer._start_ticking()      # the scorer is the comparison's to start
+        return peer
+
+    def close_window(self) -> None:
+        """Ask this window to close (GUI thread; runs the close handler)."""
+        if self._window is not None:
+            self._window.close()
+
+    def set_peer(self, other) -> None:
+        """Pair two windows so every setting written to one reaches the other."""
+        self._peer = other
+        if other is not None:
+            other._peer = self
+
+    def copy_view_from(self, other) -> None:
+        """Take every display setting from another window.
+
+        A comparison that starts with different point sizes or a different
+        color mode is not a comparison, so the new window opens as an exact
+        copy of the one it is being compared against.
+        """
+        self._show_points = other._show_points
+        self._show_mesh = other._show_mesh
+        self._show_accum = other._show_accum
+        self._show_box = other._show_box
+        self._crop_view = other._crop_view
+        self._model_display = other._model_display
+        self._refl_range = other._refl_range
+        self._point_mat.point_size = other._point_mat.point_size
+        self._accum_mat.point_size = other._accum_mat.point_size
+        mode = other._color_mode
+        self._color_mode = mode if mode in self._color_modes else "height"
+        self._accum_model_key = None
+        self._rocks_key = None
+        self._post_update()
+
+    def set_scorer(self, scorer) -> None:
+        """Swap the model this window draws (the comparison's model picker).
+
+        Everything cached from the old model — the recolored cloud, the
+        outlines — describes predictions that no longer exist, so all of it is
+        dropped here rather than lingering for a frame under a new name.
+        """
+        self._scorer = scorer
+        self._accum_model_key = None
+        self._rocks_key = None
+        self._rocks = None
+        if self._window is not None and scorer is not None:
+            from rocklabel.live.compare import short_name
+
+            self._window.title = (f"rocklabel · compare · "
+                                  f"{short_name(scorer.checkpoint)}"
+                                  if self._secondary else
+                                  f"rocklabel - live · {scorer.model_name}")
+        self._post_update()
 
     def _on_close(self) -> bool:
         self._tick_stop.set()
         if self._scorer is not None:
             self._scorer.stop()
+        if self._secondary:
+            # A comparison window owns nothing but itself: the engine, the
+            # recording and the other window all outlive it.
+            if self._peer is not None:
+                self._peer._peer = None
+                self._peer = None
+            if callable(self.on_closed):
+                self.on_closed()
+            return True
+        # The primary window is the session: closing it takes the comparison
+        # with it, then tears the pipeline down.
+        if self._peer is not None:
+            peer, self._peer = self._peer, None
+            peer._peer = None
+            peer.close_window()
         path = self._engine.stop_recording()
         if path:
             print(f"[rocklabel] recording saved: {path}", flush=True)
@@ -654,10 +799,13 @@ class VizApp(PivotCamera):
         disp = gui.Combobox()
         disp.add_item("Confidence")
         disp.add_item("Detections @ thr")
+        disp.add_item("Rock outlines")
         disp.set_on_selection_changed(self._on_model_display)
         self._pair(grid, "Display", disp,
                    "Confidence paints the turbo ramp (blue = clear, red = rock). "
-                   "Detections is the binary view at the decision threshold.")
+                   "Detections is the binary view at the decision threshold. "
+                   "Rock outlines groups those detections into clumps and draws "
+                   "a polygon around each one.")
 
         thr = self._make_slider(gui.Slider.DOUBLE, 0.0, 1.0,
                            self._scorer.threshold, self.set_threshold)
@@ -678,6 +826,25 @@ class VizApp(PivotCamera):
                    "on. Raising it densifies the input and drifts out of "
                    "distribution — predictions decay.")
         sec.add_child(grid)
+
+        sec.add_child(self._heading("Rock outlines  (display only)"))
+        ogrid = self._grid(em)
+        link = self._make_number(gui.NumberEdit.DOUBLE, 0.02, 0.5,
+                                 float(s.cluster_link_m),
+                                 lambda v: self.set_score_setting("cluster_link_m", v))
+        self._pair(ogrid, "Link distance (m)", link,
+                   "How close two detected points have to be to belong to the "
+                   "same rock. Too small and one rock breaks into several "
+                   "outlines; too large and neighbouring rocks merge into one. "
+                   "Capped at 0.5 m: past that it is merging, not linking.")
+        minpts = self._make_number(
+            gui.NumberEdit.INT, 1, 200, int(s.cluster_min_points),
+            lambda v: self.set_score_setting("cluster_min_points", int(v)))
+        self._pair(ogrid, "Min points", minpts,
+                   "The noise gate: a clump with fewer detected points than this "
+                   "gets no outline. Raise it until the speckle stops being "
+                   "drawn — the Rocks readout says what it threw away.")
+        sec.add_child(ogrid)
 
         sec.add_child(self._heading("Scoring region  (relative to the sensor)"))
         rgrid = self._grid(em)
@@ -718,6 +885,10 @@ class VizApp(PivotCamera):
         self._model_region = self._readout(
             sgrid, "In region", "Points from the fresh scan that fell inside the "
                                 "scoring region. Zero means the region is wrong.")
+        self._model_rocks = self._readout(
+            sgrid, "Rocks", "Outlines being drawn, and what the noise gate threw "
+                            "away. Only filled in while Display is set to Rock "
+                            "outlines.")
         sec.add_child(sgrid)
 
         #: Shown only when the scorer reports an empty region — a variable-height
@@ -801,6 +972,24 @@ class VizApp(PivotCamera):
     def _post_update(self) -> None:
         self.post(self._update_scene)
 
+    def _mirror(self, method: str, *args) -> None:
+        """Apply the same change to the paired comparison window.
+
+        Called from inside the public setters, so every route into them — a
+        panel widget, a keypress, the browser panel — keeps the two windows
+        identical without any of those three knowing a pair exists. Direct
+        call, not :meth:`post`: both windows live on the one GUI thread, and
+        the mirrored write has to land in the same frame as the original.
+        """
+        peer = self._peer
+        if peer is None or self._mirroring:
+            return
+        peer._mirroring = True
+        try:
+            getattr(peer, method)(*args)
+        finally:
+            peer._mirroring = False
+
     @property
     def color_mode(self) -> str:
         return self._color_mode
@@ -827,6 +1016,7 @@ class VizApp(PivotCamera):
             idx = self._color_modes.index(mode)
             if self._color_combo.selected_index != idx:
                 self._color_combo.selected_index = idx
+        self._mirror("set_color_mode", mode)
         self._post_update()
 
     @property
@@ -850,6 +1040,7 @@ class VizApp(PivotCamera):
         window = clamp_range(lo, hi)
         if window == self._refl_range:
             return
+        self._mirror("set_reflectivity_range", window[0], window[1])
         self._refl_range = window
         set_range = getattr(self._engine.surface, "set_reflectivity_range", None)
         if callable(set_range):
@@ -902,12 +1093,14 @@ class VizApp(PivotCamera):
         cb = self._layer_checks.get(attr)
         if cb is not None:
             cb.checked = bool(value)
+        self._mirror("set_layer", attr, bool(value))
         self._post_update()
 
     def set_point_size(self, value: float) -> None:
         self._point_mat.point_size = float(value)
         self._accum_mat.point_size = max(1.0, float(value) - 1.0)
         self._accum_model_key = None  # rebuild so the new size applies
+        self._mirror("set_point_size", float(value))
         self._post_update()
 
     def _on_accum_frames(self, value: float) -> None:
@@ -928,6 +1121,7 @@ class VizApp(PivotCamera):
         """Force the accumulated cloud to be rebuilt on the next tick."""
         self._accum_model_key = None
         self._tick_count = -1
+        self._mirror("refresh_accum")
         self._post_update()
 
     def _on_score_enabled(self, value: bool) -> None:
@@ -939,18 +1133,33 @@ class VizApp(PivotCamera):
     def set_model_display(self, index: int) -> None:
         self._model_display = int(index)
         self._accum_model_key = None
+        self._rocks_key = None
+        self._mirror("set_model_display", int(index))
         self._post_update()
 
     def set_threshold(self, value: float) -> None:
         self._scorer.threshold = float(value)
-        if self._model_display == 1:
+        # One threshold across a comparison: two models judged at two different
+        # cuts is not a comparison of the models.
+        self._mirror("set_threshold", float(value))
+        if self._model_display >= 1:
+            # Both the detections view and the outlines are drawn *at* the
+            # threshold, so moving it invalidates what is on screen.
             self._accum_model_key = None
+            self._rocks_key = None
         self._post_update()
 
     def set_score_setting(self, name: str, value) -> None:
+        # Paired scorers share one ScoreSettings object, so this write has
+        # already reached the peer's scorer; the mirror is for the peer's
+        # display caches, which are its own.
         setattr(self._scorer.settings, name, value)
+        self._mirror("set_score_setting", name, value)
         if name in ("z_min", "z_max", "range_max"):
             self._accum_model_key = None  # region moved: recolor/crop the cloud
+            self._post_update()
+        elif name.startswith("cluster_"):
+            self._rocks_key = None        # the clumping rule changed: re-outline
             self._post_update()
 
     def set_crop_setting(self, name: str, value) -> None:
@@ -965,6 +1174,7 @@ class VizApp(PivotCamera):
         setattr(self._cfg.crop, name, value)
         self._accum_model_key = None
         self._tick_count = -1
+        self._mirror("set_crop_setting", name, value)
         self._post_update()
 
     def recalibrate_level(self) -> None:
@@ -980,11 +1190,14 @@ class VizApp(PivotCamera):
         self._crop_view = bool(value)
         self._accum_model_key = None
         self._tick_count = -1  # force an accum rebuild next tick
+        self._mirror("set_crop_view", bool(value))
         self._post_update()
 
     def clear_predictions(self) -> None:
         self._scorer.clear_map()
         self._accum_model_key = None
+        self._rocks_key = None
+        self._mirror("clear_predictions")
         self._post_update()
 
     def _view_region_mask(self, pts: np.ndarray) -> np.ndarray | None:
@@ -1116,6 +1329,7 @@ class VizApp(PivotCamera):
             (x0, y0, -2.0), (x0 + sx, y0 + sy, 4.0)
         )
         assert self._widget is not None
+        self._mirror("reset_camera")
         self._widget.setup_camera(60.0, bbox, bbox.get_center())
         # Look down at an angle for a good view of the 2.5D surface.
         center = bbox.get_center()
@@ -1150,6 +1364,9 @@ class VizApp(PivotCamera):
         if self._model_display == 0:
             scored = apply_colormap(probs[matched], "turbo")
         else:
+            # Detections and outlines share the binary coloring: the outline
+            # view adds polygons on top of it rather than replacing it, so you
+            # can still see which points a rock was drawn from.
             thr = self._scorer.threshold
             scored = np.where((probs[matched] >= thr)[:, None], _DET_ROCK, _DET_CLEAR)
         rgb[matched] = scored
@@ -1192,6 +1409,38 @@ class VizApp(PivotCamera):
         if self._scene.has_geometry(name):
             self._scene.remove_geometry(name)
         self._scene.add_geometry(name, pcd, mat)
+
+    def _rebuild_rocks(self) -> None:
+        """Replace the outline geometry from the current prediction map.
+
+        Each rock is drawn as a low prism — its footprint at the bottom and top
+        of the height band its own detections span — so the outline is readable
+        from a low camera angle instead of lying flat in the ground.
+        """
+        assert self._scene is not None
+        if self._scene.has_geometry(_ROCKS_NAME):
+            self._scene.remove_geometry(_ROCKS_NAME)
+        got = self._scorer.detections()
+        if got is None:
+            self._rocks = None
+            return
+        centers, probs = got
+        st = self._scorer.settings
+        self._rocks = find_rocks(
+            centers, probs,
+            link_m=float(st.cluster_link_m),
+            min_points=int(st.cluster_min_points),
+            pad_m=0.5 * self._scorer.center_spacing_m,
+        )
+        pts, lines = outline_wireframe(self._rocks.rocks)
+        if not len(lines):
+            return
+        ls = o3d.geometry.LineSet()
+        ls.points = o3d.utility.Vector3dVector(pts)
+        ls.lines = o3d.utility.Vector2iVector(lines)
+        ls.colors = o3d.utility.Vector3dVector(
+            np.tile(np.array(_DET_ROCK, float), (len(lines), 1)))
+        self._scene.add_geometry(_ROCKS_NAME, ls, self._rock_mat)
 
     def _update_scene(self) -> None:
         """Runs on the GUI (main) thread: refresh geometry + stats."""
@@ -1256,6 +1505,24 @@ class VizApp(PivotCamera):
                 self._last_mesh_data = mesh_data
         elif self._scene.has_geometry(_MESH_NAME):
             self._scene.remove_geometry(_MESH_NAME)
+
+        # --- rock outlines: clumps of above-threshold detections, wrapped in
+        #     a polygon each. Rebuilt only when the scoring pass, the threshold
+        #     or one of the two outline settings moved. ---
+        if self._scorer is not None and self._model_display == 2:
+            st = self._scorer.settings
+            key = (self._scorer.version, round(self._scorer.threshold, 4),
+                   round(float(st.cluster_link_m), 4), int(st.cluster_min_points))
+            # Keyed on the settings alone, never on "is the geometry there":
+            # a map with no rock in it legitimately draws nothing, and that
+            # must not re-run the clustering on every single frame.
+            if key != self._rocks_key:
+                self._rocks_key = key
+                self._rebuild_rocks()
+        elif self._scene.has_geometry(_ROCKS_NAME):
+            self._scene.remove_geometry(_ROCKS_NAME)
+            self._rocks_key = None
+            self._rocks = None
 
         # --- lidar pose box: cheap rigid transform, no geometry rebuild ---
         self._scene.show_geometry(_BOX_NAME, self._show_box)
@@ -1421,6 +1688,18 @@ class VizApp(PivotCamera):
         ):
             self._put(cell, value)
 
+        # The outline cell only means something while the outline view is up —
+        # otherwise no clustering has been done and a stale count would be a
+        # lie about what is on screen.
+        if self._model_display != 2:
+            self._put(self._model_rocks, "off")
+        elif self._rocks is None:
+            self._put(self._model_rocks, "—")
+        else:
+            note = self._rocks.noise_note()
+            self._put(self._model_rocks,
+                      f"{self._rocks.describe()} · noise {note}")
+
         # The warning is the one widget here allowed to wrap, so both its
         # visibility AND its length change the panel's height. Open3D does not
         # re-measure on its own: without this the Legend below keeps its stale
@@ -1474,8 +1753,7 @@ class VizApp(PivotCamera):
             else:
                 self._engine.reset_surface()
             if self._scorer is not None:
-                self._scorer.clear_map()
-                self._accum_model_key = None
+                self.clear_predictions()
         elif key == gui.KeyName.SPACE:
             if self._replay:
                 self._engine.source.toggle_play()

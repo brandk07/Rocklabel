@@ -4,7 +4,6 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>rocklabel live · {{ subtitle }}</title>
-<link rel="stylesheet" href="/theme/app.css">
 <link rel="stylesheet" href="{{ url_for('static', filename='live.css') }}">
 <script defer src="/theme/charts.js"></script>
 <script defer src="{{ url_for('static', filename='views.js') }}"></script>
@@ -12,90 +11,106 @@
 </head>
 <body class="live-body">
 
+<!-- One strip that answers "is it alive and what is it doing" without any
+     scrolling: mode, connection, session, and the four numbers you glance at. -->
 <header class="topbar">
-  <div class="brand">
-    <span class="brand-mark" aria-hidden="true"></span>
-    <div class="brand-text">
-      <strong>rocklabel live</strong>
-      <span class="brand-sub" id="subtitle">{{ subtitle }}</span>
-    </div>
+  <div class="topbar-id">
+    <span class="mode-badge" id="modeBadge">{{ mode | upper }}</span>
+    <span class="link-dot" id="linkState"
+          title="Connection to the live process">●</span>
+    <span class="brand">rocklabel<i>/live</i></span>
+    <span class="subtitle" id="subtitle">{{ subtitle }}</span>
   </div>
-
-  <div class="live-strip" id="statusStrip"></div>
-
-  <div class="topbar-right">
-    <span class="live-mode" id="modeBadge">{{ mode | upper }}</span>
-    <span class="live-link" id="linkState" title="Connection to the live process">●</span>
-    <button class="icon-btn" id="themeToggle" title="Switch light / dark theme" aria-label="Switch theme">◐</button>
-  </div>
+  <div class="readouts" id="statusStrip"></div>
+  <button class="icon-btn" id="themeToggle" title="Switch light / dark theme"
+          aria-label="Switch theme">◐</button>
 </header>
 
+<!-- Every warning the pipeline raises, in one line, or nothing at all. -->
+<div class="alerts" id="alerts" hidden></div>
+
 <main id="main">
-  <!-- Replay transport, pinned above the controls: it is the one thing you
-       reach for mid-scrub, so it must not move as sections re-render. -->
-  <section class="transport" id="transport" hidden>
-    <button class="btn btn-primary" id="playBtn">Play</button>
-    <span class="transport-time" id="transportTime">0.0 / 0.0 s</span>
-    <input class="transport-range" id="transportRange" type="range"
-           min="0" max="1" step="0.01" value="0"
-           aria-label="Playback position">
-    <button class="btn btn-ghost btn-sm" id="restartBtn" title="Back to 0 s and re-fuse the map">Restart</button>
+  <section class="stage">
+    <div class="stage-main">
+
+      <!-- Replay transport, sticky under the top bar: scrubbing is the one
+           thing you reach for while looking at the other monitor. -->
+      <section class="transport" id="transport" hidden>
+        <button class="btn btn-primary" id="playBtn">▶ Play</button>
+        <span class="transport-time" id="transportTime">00:00.0 / 00:00.0</span>
+        <input class="transport-range" id="transportRange" type="range"
+               min="0" max="1" step="0.01" value="0"
+               aria-label="Playback position">
+        <label class="transport-speed" for="speedSelect">
+          <span class="transport-speed-k">Speed</span>
+          <select class="input" id="speedSelect"
+                  title="Playback rate, as a multiple of real time"></select>
+        </label>
+        <button class="btn btn-sm" id="restartBtn"
+                title="Back to 0 s and re-fuse the map">Restart</button>
+      </section>
+
+      <!-- The overhead map is the hero: everything else on this side serves it. -->
+      <section class="panel view-panel" id="mapCard">
+        <div class="panel-head">
+          <h2 class="panel-title">Overhead</h2>
+          <span class="panel-sub" id="mapSub">waiting for the fused surface…</span>
+          <span class="panel-actions">
+            <button class="btn btn-sm" id="mapTable" aria-pressed="false">Table</button>
+          </span>
+        </div>
+        <div class="map-wrap">
+          <canvas id="mapCanvas" role="img"
+                  aria-label="Overhead map of the fused surface with detections"></canvas>
+          <div class="map-overlay" id="mapLegend"></div>
+        </div>
+        <div id="mapTableView" hidden></div>
+      </section>
+
+      <!-- The distribution behind those marks, with the threshold on it. -->
+      <section class="panel" id="histCard" hidden>
+        <div class="panel-head">
+          <h2 class="panel-title">Confidence</h2>
+          <span class="panel-sub" id="histSub"></span>
+          <span class="panel-actions">
+            <button class="btn btn-sm" id="histScale" aria-pressed="true">Log counts</button>
+          </span>
+        </div>
+        <div id="histPlot"></div>
+        <div class="hist-legend" id="histLegend"></div>
+      </section>
+    </div>
+
+    <!-- Right rail: the numbers over time, and the deep diagnostics. -->
+    <aside class="rail">
+      <section class="panel" id="trendCard" hidden>
+        <div class="panel-head">
+          <h2 class="panel-title">Trends</h2>
+          <span class="panel-sub">1 Hz · recent</span>
+        </div>
+        <div class="rail-trends" id="trends"></div>
+      </section>
+
+      <section class="panel" id="diagCard" hidden>
+        <div class="panel-head">
+          <h2 class="panel-title">Diagnostics</h2>
+        </div>
+        <div class="diag-rows" id="diagnostics"></div>
+      </section>
+    </aside>
   </section>
 
-  <!-- The extra views. Above the controls because they are what you look at;
-       the controls are what you reach for once you have looked. -->
-  <section class="views" id="views" hidden>
-    <div class="card view-card view-card-map">
-      <div class="card-head view-head">
-        <div>
-          <h2>Overhead</h2>
-          <p class="card-sub" id="mapSub">The fused surface from above.</p>
-        </div>
-        <div class="view-actions">
-          <button class="btn btn-sm" id="mapTable" aria-pressed="false">Table</button>
-        </div>
-      </div>
-      <div class="map-wrap">
-        <canvas id="mapCanvas" role="img"
-                aria-label="Overhead map of the fused surface with detections"></canvas>
-      </div>
-      <div class="map-legend" id="mapLegend"></div>
-      <div id="mapTableView" hidden></div>
-    </div>
-
-    <div class="card view-card" id="histCard" hidden>
-      <div class="card-head view-head">
-        <div>
-          <h2>Prediction confidence</h2>
-          <p class="card-sub" id="histSub"></p>
-        </div>
-        <div class="view-actions">
-          <button class="btn btn-sm" id="histScale" aria-pressed="true">Log counts</button>
-        </div>
-      </div>
-      <div id="histPlot"></div>
-      <div class="chart-legend" id="histLegend"></div>
-    </div>
-
-    <div class="card view-card view-card-wide" id="trendCard">
-      <div class="card-head">
-        <h2>Trends</h2>
-        <p class="card-sub">One measure per plot, each on its own axis — these
-          have nothing like the same scale, and sharing one would invent a
-          relationship between them.</p>
-      </div>
-      <div class="trend-grid" id="trends"></div>
-    </div>
-  </section>
-
-  <div class="panel-grid" id="panels"></div>
+  <!-- Schema-driven control sections, rendered by live.js into collapsible
+       terminal panels. -->
+  <div class="panels" id="panels"></div>
 
   <p class="live-foot">
     The Open3D window keeps its keyboard shortcuts —
     <b>P</b> points · <b>M</b> mesh · <b>C</b> accumulated · <b>B</b> sensor box ·
     <b>V</b> colors · <b>S</b> record · <b>L</b> re-level · <b>R</b> reset ·
     <b>space</b> pause · <b>←/→</b> seek · <b>Q</b> quit.
-    Changes made there show up here within a moment.
+    Changes made there show up here within a moment. While two models are being
+    compared, a key pressed in either window is applied to both.
   </p>
 </main>
 

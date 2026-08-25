@@ -19,8 +19,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from rocklabel.live.recording import SPEED_CHOICES, format_speed
+
 #: Capability flags a run can have. Everything in the table gates on these.
 CAPABILITIES = ("replay", "live", "scorer", "leveler", "viewer")
+
+
+def _speed_label(v: float) -> str:
+    """'1x' reads better as 'Real time' in a menu you pick from."""
+    if v <= 0.0:
+        return "Max (unpaced)"
+    return "1x (real time)" if v == 1.0 else format_speed(v)
 
 
 @dataclass
@@ -44,6 +53,11 @@ class Control:
     step: float | None = None
     unit: str = ""
     choices: list[Choice] = field(default_factory=list)
+    #: Enums whose options are discovered at runtime (the checkpoints on disk)
+    #: name their source here instead of listing Choices. The controller fills
+    #: them in when it builds the schema; an empty list is a legitimate answer
+    #: and the page shows an empty picker rather than a stale one.
+    choices_from: str = ""
     key: str = ""                   # keyboard shortcut shown beside the label
     style: str = ""                 # "" | "primary" | "danger" — actions only
     #: Readouts only: render the value in the warning color when this is true
@@ -104,6 +118,18 @@ SECTIONS: list[Section] = [
                     help="Scrub through the recording. Seeking backwards rewinds "
                          "the file and re-fuses the map from the top, so it costs "
                          "more than seeking forward."),
+            Control("replay.speed", "enum", "Speed",
+                    help="How fast the recording plays, as a multiple of real "
+                         "time. Changing it takes effect immediately and never "
+                         "moves the playhead — nothing is skipped or repeated, "
+                         "the frames just arrive closer together or further "
+                         "apart. Below 1x is true slow motion, for watching a "
+                         "sweep the model gets wrong frame by frame. Above "
+                         "about 3x the engine (fusing, and scoring if a model "
+                         "is loaded) becomes the limit, so 'max' — no pacing at "
+                         "all — is as fast as this machine can go, and slower "
+                         "than 4x would suggest on a dense recording.",
+                    choices=[Choice(v, _speed_label(v)) for v in SPEED_CHOICES]),
             Control("replay.restart", "action", "Restart", key="R",
                     help="Jump back to 0 s and rebuild the map from scratch."),
         ],
@@ -281,10 +307,13 @@ SECTIONS: list[Section] = [
             Control("model.display", "enum", "Display",
                     "Confidence paints the turbo ramp (blue = clear, red = "
                     "rock). Detections is the binary view at the decision "
-                    "threshold.",
-                    requires="viewer",
+                    "threshold. Rock outlines goes one step further: it groups "
+                    "the detections into clumps and draws a polygon around "
+                    "each one, so you read rocks instead of dots — the two "
+                    "knobs behind it are in the Rock outlines card.",
                     choices=[Choice(0, "Confidence"),
-                             Choice(1, "Detections @ threshold")]),
+                             Choice(1, "Detections @ threshold"),
+                             Choice(2, "Rock outlines")]),
             Control("model.threshold", "float", "Threshold",
                     "Probability above which a center counts as rock. The "
                     "checkpoint's own tuned value is the starting point.",
@@ -311,6 +340,95 @@ SECTIONS: list[Section] = [
                     "Points from the fresh scan that fell inside the scoring "
                     "region. Zero means the region is wrong.",
                     warn_flag="region_empty"),
+        ],
+    ),
+
+    Section(
+        "outline", "Rock outlines",
+        "Detections grouped into objects: clumps of above-threshold points "
+        "become polygons, lone points are dropped as noise. Display only — "
+        "these never change what the model is fed, so moving them is free and "
+        "takes effect on the next redraw. Shown when Display is set to 'Rock "
+        "outlines'.",
+        requires="scorer",
+        controls=[
+            Control("outline.link_m", "float", "Link distance",
+                    "How close two detected points have to be to belong to the "
+                    "same rock. Too small and one rock breaks into several "
+                    "outlines; too large and neighbouring rocks merge into one "
+                    "blob. Start near the size of the gaps between your rocks. "
+                    "It stops at 0.5 m on purpose: past half a metre you are "
+                    "merging rocks, not linking one — so the whole slider is "
+                    "spent on the range that is actually useful, in 1 cm "
+                    "steps. Type into the box beside it for an exact value.",
+                    min=0.02, max=0.5, step=0.01, unit="m"),
+            Control("outline.min_points", "int", "Min points",
+                    "The noise gate: a clump with fewer detected points than "
+                    "this gets no outline. One or two stray points above the "
+                    "threshold are what this exists to throw away. Raise it "
+                    "until the speckle stops being drawn, then check the "
+                    "'Dropped as noise' line below to make sure it is not "
+                    "eating real rocks.",
+                    min=1, max=200, step=1),
+            Control("outline.rocks", "readout", "Rocks",
+                    "Outlines being drawn right now, the detections behind "
+                    "them, and the footprint of the biggest."),
+            Control("outline.noise", "readout", "Dropped as noise",
+                    "Detections the noise gate threw away, and how many "
+                    "separate clumps they formed. If this is large, 'Min "
+                    "points' is probably too high."),
+        ],
+    ),
+
+    Section(
+        "compare", "Compare models",
+        "Run a second checkpoint beside the first, in its own window, on the "
+        "same scans. The two windows share one set of settings — region, "
+        "threshold, display, outlines, everything on this page — so the only "
+        "difference between what you are looking at is the model itself.",
+        requires="scorer",
+        controls=[
+            Control("compare.model_a", "enum", "Window 1 model",
+                    "The checkpoint the main window scores with. Changing it "
+                    "swaps the model live: the old prediction map is dropped "
+                    "and the new model starts filling in from the next pass. "
+                    "Takes a few seconds while the weights load.",
+                    choices_from="checkpoints"),
+            Control("compare.model_b", "enum", "Window 2 model",
+                    "The checkpoint to compare against. Pick one, then press "
+                    "'Open comparison window'. While the comparison is open, "
+                    "picking a different model here swaps window 2 straight "
+                    "away, and picking 'none' closes it.",
+                    choices_from="checkpoints"),
+            Control("compare.open", "action", "Open comparison window",
+                    "Load the Window 2 model and open a second Open3D window "
+                    "on the same scene. Both windows are driven by this page, "
+                    "so any control you touch applies to both — which is what "
+                    "makes the two pictures a fair test.",
+                    style="primary"),
+            Control("compare.close", "action", "Close comparison",
+                    "Close the second window and stop its model. The main "
+                    "window and the recording are untouched.",
+                    style="danger"),
+            Control("compare.state", "readout", "Comparison",
+                    "Whether a second model is running, and which one.",
+                    warn_flag="compare_error"),
+            Control("compare.map", "readout", "Window 2 map",
+                    "Centers held in window 2's prediction map, and how many "
+                    "are above the threshold — the number to read against the "
+                    "Model card's own map line."),
+            Control("compare.pass", "readout", "Window 2 pass",
+                    "Centers scored in window 2's most recent pass and how "
+                    "long it took. Two models sharing one GPU both get slower; "
+                    "this is where you see by how much."),
+            Control("compare.rocks", "readout", "Window 2 rocks",
+                    "Rock outlines window 2 is drawing, under the same link "
+                    "distance and noise gate as window 1."),
+            Control("compare.caveat", "readout", "Not directly comparable",
+                    "Raised when the two checkpoints were trained on different "
+                    "scan windows, or tuned to different thresholds — both "
+                    "cases where one shared setting cannot be right for both.",
+                    warn_flag="compare_caveat"),
         ],
     ),
 
@@ -365,7 +483,7 @@ def sections_for(caps: set[str]) -> list[Section]:
     return out
 
 
-def _control_json(c: Control, caps: set[str]) -> dict:
+def _control_json(c: Control, caps: set[str], found: dict) -> dict:
     d = {"id": c.id, "kind": c.kind, "label": c.label, "help": c.help}
     for name in ("min", "max", "step"):
         if getattr(c, name) is not None:
@@ -373,20 +491,27 @@ def _control_json(c: Control, caps: set[str]) -> dict:
     for name in ("unit", "key", "style", "warn_flag"):
         if getattr(c, name):
             d[name] = getattr(c, name)
-    if c.choices:
+    if c.choices_from:
+        d["choices"] = list(found.get(c.choices_from, []))
+    elif c.choices:
         d["choices"] = [{"value": ch.value, "label": ch.label}
                         for ch in c.choices
                         if not ch.requires or ch.requires in caps]
     return d
 
 
-def to_json(caps: set[str]) -> dict:
-    """The schema payload the page renders from."""
+def to_json(caps: set[str], found: dict | None = None) -> dict:
+    """The schema payload the page renders from.
+
+    ``found`` supplies the options for the runtime-discovered enums (see
+    :attr:`Control.choices_from`) as ``{source: [{"value", "label"}, ...]}``.
+    """
+    found = found or {}
     return {
         "capabilities": sorted(caps),
         "sections": [
             {"id": s.id, "title": s.title, "blurb": s.blurb,
-             "controls": [_control_json(c, caps) for c in s.controls]}
+             "controls": [_control_json(c, caps, found) for c in s.controls]}
             for s in sections_for(caps)
         ],
     }

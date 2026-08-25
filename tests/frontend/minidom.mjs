@@ -44,6 +44,7 @@ export class El {
   blur() {}
   click() { this.onclick && this.onclick({ preventDefault() {}, stopPropagation() {} }); }
   addEventListener(t, fn) { (this._listeners[t] ||= []).push(fn); }
+  dispatchEvent(ev) { (this._listeners[ev.type] || []).forEach((fn) => fn(ev)); }
   getBoundingClientRect() { return { left: 0, top: 0, width: 200, height: 40 }; }
   cloneNode() { const n = new El(this.tagName); n.className = this.className; n.attrs = {...this.attrs}; return n; }
   get firstElementChild() { return this.children.find(c => c.tagName !== '#text') || null; }

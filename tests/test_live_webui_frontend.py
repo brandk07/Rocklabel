@@ -78,8 +78,15 @@ def fixtures(tmp_path, recording) -> Path:
     # draw — a fixture with empty views would let the page render nothing and
     # still pass.
     rng = np.random.default_rng(7)
+    # The above-threshold half is four tight clumps rather than confetti, so
+    # the outline view has real rocks to draw — scattered points would all fall
+    # under the noise gate and let the page render nothing and still pass.
+    clumps = np.vstack([
+        rng.normal(0.0, 0.06, size=(30, 3)) + np.array(c)
+        for c in [(1.5, 1.0, 0.0), (-1.0, 2.0, 0.0), (0.5, -2.0, 0.0), (-2.0, -1.0, 0.0)]
+    ])
     ctl._scorer.attach_result(
-        rng.uniform(-3, 3, size=(500, 3)),
+        np.vstack([rng.uniform(-3, 3, size=(380, 3)), clumps]),
         np.concatenate([rng.uniform(0.0, 0.4, 380), rng.uniform(0.9, 1.0, 120)]),
     )
     for i in range(6):
@@ -94,6 +101,11 @@ def fixtures(tmp_path, recording) -> Path:
             recorded["/api/schema"] = client.get("/api/schema").get_json()
             recorded["/api/state"] = client.get("/api/state").get_json()
             recorded["/api/scene"] = client.get("/api/scene").get_json()
+            # The same scene in the outline view, so the harness can drive both
+            # halves of the map: dots, and the polygons built from them.
+            ctl.set("model.display", 2)
+            recorded["/api/scene-outlines"] = client.get("/api/scene").get_json()
+            ctl.set("model.display", 0)
     finally:
         ctl._engine.source.stop()
 
@@ -111,11 +123,21 @@ def test_page_renders_and_every_control_is_drivable(fixtures):
     assert "ok" in proc.stdout
 
 
+def test_the_outline_fixture_actually_has_rocks_in_it(fixtures):
+    """Guards the fixture: an outline payload with no polygons would let the
+    page draw nothing and still pass the render test."""
+    scene = json.loads(fixtures.read_text())["/api/scene-outlines"]
+    assert scene["display"] == 2
+    assert scene["rocks"]["total"] >= 3
+    assert all(len(r["poly"]) >= 3 for r in scene["rocks"]["rows"])
+
+
 def test_the_recorded_schema_is_the_full_one(fixtures):
     """Guards the fixture itself: a shrunken schema would silently shrink the
     render test's coverage without failing it."""
     schema = json.loads(fixtures.read_text())["/api/schema"]
     ids = {s["id"] for s in schema["sections"]}
-    assert ids == {"status", "replay", "view", "crop", "level", "model", "region"}
+    assert ids == {"status", "replay", "view", "crop", "level", "model",
+                   "outline", "compare", "region"}
     kinds = {c["kind"] for s in schema["sections"] for c in s["controls"]}
     assert kinds >= {"bool", "int", "float", "enum", "action", "readout"}

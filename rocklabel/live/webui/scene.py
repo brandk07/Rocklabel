@@ -9,7 +9,8 @@ Everything here is display data. The overhead terrain goes over the wire as a
 quantized 8-bit image rather than a list of points: a 20 m grid at 5 cm is
 160,000 cells, and the honest way to send a picture is to send a picture. The
 detection list stays as coordinates because it is small, and because the page
-draws each one as a mark you can hover.
+draws each one as a mark you can hover — and the rock outlines built from
+those detections travel the same way, as rings of real world coordinates.
 """
 
 from __future__ import annotations
@@ -29,6 +30,10 @@ BEV_MAX_SIDE = 256
 #: and the page is doing scatter-plot work for pixels nobody can hit; the count
 #: is reported alongside so a truncated view says so.
 MAX_DETECTIONS = 1500
+#: Rock outlines drawn on the overhead map. A room does not hold hundreds of
+#: rocks; past this the setting behind them is wrong, not the drawing, and the
+#: payload says how many were left out.
+MAX_ROCKS = 300
 #: Confidence-histogram resolution. 25 bins over [0, 1] puts a bin edge on every
 #: 0.04 of probability — fine enough to see the shape, coarse enough that each
 #: bar is a real mark rather than a hairline.
@@ -97,6 +102,39 @@ def detections_payload(scorer, limit: int = MAX_DETECTIONS) -> dict:
     rows = [[round(float(c[0]), 3), round(float(c[1]), 3), round(float(c[2]), 3),
              round(float(p), 4)] for c, p in zip(centers, probs)]
     return {"rows": rows, "total": total, "shown": len(rows)}
+
+
+def rocks_payload(outlines, limit: int = MAX_ROCKS) -> dict:
+    """Rock outlines as drawable rings plus the numbers that describe them.
+
+    The polygons go over the wire as plain coordinate lists — a rock is a dozen
+    vertices, so unlike the terrain there is nothing to gain by encoding them,
+    and the page needs the real coordinates to hit-test a hover.
+    """
+    rocks = list(getattr(outlines, "rocks", []))
+    total = len(rocks)
+    shown = rocks[:limit]        # already biggest-first out of find_rocks
+    rows = []
+    for r in shown:
+        rows.append({
+            "poly": [[round(float(x), 3), round(float(y), 3)] for x, y in r.polygon],
+            "n": int(r.points),
+            "prob": round(float(r.prob_mean), 4),
+            "prob_max": round(float(r.prob_max), 4),
+            "area": round(float(r.area_m2), 4),
+            "x": round(float(r.center[0]), 3),
+            "y": round(float(r.center[1]), 3),
+            "z": round(float(r.center[2]), 3),
+        })
+    return {
+        "rows": rows,
+        "total": total,
+        "shown": len(rows),
+        "points": int(sum(r.points for r in rocks)),
+        "noise_points": int(getattr(outlines, "noise_points", 0)),
+        "noise_groups": int(getattr(outlines, "noise_groups", 0)),
+        "input_points": int(getattr(outlines, "input_points", 0)),
+    }
 
 
 def confidence_histogram(scorer, bins: int = HIST_BINS) -> dict | None:
@@ -181,5 +219,6 @@ class History:
             }
 
 
-__all__ = ["BEV_MAX_SIDE", "HIST_BINS", "MAX_DETECTIONS", "History",
-           "confidence_histogram", "detections_payload", "encode_raster"]
+__all__ = ["BEV_MAX_SIDE", "HIST_BINS", "MAX_DETECTIONS", "MAX_ROCKS",
+           "History", "confidence_histogram", "detections_payload",
+           "encode_raster", "rocks_payload"]

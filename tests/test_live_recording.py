@@ -13,8 +13,12 @@ from rocklabel.live.config import AppConfig
 from rocklabel.live.motion import matrix_to_quat, quat_to_matrix
 from rocklabel.live.pipeline import IngestEngine
 from rocklabel.live.recording import (
+    SPEED_MAX,
+    SPEED_MIN,
     McapRecorder,
     McapReplaySource,
+    clamp_speed,
+    format_speed,
     decode_frame,
     encode_frame,
     normalize_recording_path,
@@ -165,6 +169,81 @@ def test_play_pause_and_pacing(tmp_path):
     assert b is not None
     src.pause()
     assert src.read(timeout=0.05) is None
+    src.stop()
+
+
+def test_speed_is_sanitized():
+    assert clamp_speed(1.25) == 1.25
+    assert clamp_speed(0) == 0.0          # 0 is the "max" sentinel, kept as-is
+    assert clamp_speed(-3) == 0.0         # so is anything below it
+    assert clamp_speed(500) == SPEED_MAX  # a runaway number cannot be asked for
+    assert clamp_speed(1e-9) == SPEED_MIN
+    assert clamp_speed(float("nan")) == 1.0
+    assert format_speed(1.0) == "1x"
+    assert format_speed(1.25) == "1.25x"
+    assert format_speed(0.0) == "max"
+
+
+def test_playback_speed_paces_and_max_does_not(tmp_path):
+    """The pacing clock is what speed scales; 'max' removes it entirely.
+
+    Frames in a test recording are written microseconds apart, so the gap is
+    faked here — the point under test is the wait, not the file.
+    """
+    path = tmp_path / "r.mcap"
+    _write_recording(path, n_frames=3)
+
+    src = McapReplaySource(str(path), autoplay=False)
+    src.start()
+    src.play()
+    log_time, data = src._next
+    src._next = (log_time + 2_000_000_000, data)  # next frame is 2 s in
+    src._anchor_wall, src._anchor_log_ns = time.monotonic(), log_time
+
+    assert src.read(timeout=0.05) is None    # 1x: not due for another 2 s
+    src.set_speed(4.0)
+    assert src.speed == 4.0
+    assert src.read(timeout=0.05) is None    # 4x: still 0.5 s out
+    src.set_speed(0.0)
+    assert src.read(timeout=0.5) is not None  # max: no clock at all
+    src.stop()
+
+
+def test_slow_motion_waits_longer_than_real_time(tmp_path):
+    """Below 1x the gap between frames stretches — the same pacing clock, run
+    slower. Nothing is repeated to fill the time."""
+    path = tmp_path / "r.mcap"
+    _write_recording(path, n_frames=3)
+
+    src = McapReplaySource(str(path), autoplay=False, speed=0.25)
+    src.start()
+    assert src.speed == 0.25
+    src.play()
+    log_time, data = src._next
+    src._next = (log_time + 100_000_000, data)  # next frame is 0.1 s in
+    src._anchor_wall, src._anchor_log_ns = time.monotonic(), log_time
+
+    # At 0.25x that 0.1 s of recording takes 0.4 s of wall clock.
+    assert src.read(timeout=0.15) is None
+    assert src.read(timeout=0.6) is not None
+    src.stop()
+
+
+def test_changing_speed_does_not_replay_owed_time(tmp_path):
+    """Re-anchoring on a speed change: without it the new rate would be applied
+    to everything already played and the replay would sprint to catch up."""
+    path = tmp_path / "r.mcap"
+    _write_recording(path, n_frames=3)
+
+    src = McapReplaySource(str(path), autoplay=False)
+    src.start()
+    src.play()
+    src.read(timeout=1.0)                 # deliver one frame, advancing _pos_ns
+    src._anchor_wall -= 30.0              # pretend playback started long ago
+    src.set_speed(2.0)
+
+    assert src._anchor_log_ns == src._pos_ns
+    assert time.monotonic() - src._anchor_wall < 1.0
     src.stop()
 
 

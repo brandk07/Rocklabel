@@ -57,12 +57,18 @@ def replay_recording(tmp_path_factory) -> str:
     return path
 
 
-def _replay_controller(path: str, fuse_sec: float = 0.0) -> LiveController:
+def _replay_controller(path: str, fuse_sec: float = 0.0,
+                       with_model: bool = False) -> LiveController:
     """A controller over a replayed recording.
 
     ``fuse_sec`` runs the pipeline for that long first, so the surface has
     something in it — needed by anything that looks at the overhead view, and
     pointless for the tests that only poke at controls.
+
+    ``with_model`` adds the stand-in scorer and window. They are passed to the
+    constructor rather than bolted on afterwards because the controller builds
+    its model slots from them — a comparison assembled in the wrong order would
+    be holding a scorer nothing else references.
     """
     cfg = AppConfig()
     cfg.slam.enabled = False
@@ -78,7 +84,9 @@ def _replay_controller(path: str, fuse_sec: float = 0.0) -> LiveController:
         src.start()             # re-open: engine.stop() closed the file
     else:
         src.start()             # duration_sec needs the file open
-    return LiveController(cfg, engine)
+    scorer = FakeScorer() if with_model else None
+    viz = FakeViz(scorer, cfg) if with_model else None
+    return LiveController(cfg, engine, scorer=scorer, viz=viz)
 
 
 @pytest.fixture
@@ -127,6 +135,12 @@ class FakeViz:
         self._model_display = 0
         self._scorer = scorer
         self.calls: list[tuple] = []
+        # Comparison bookkeeping: the second window this one opened, and the
+        # callback it reports its own closing through.
+        self.peer = None
+        self.title = "rocklabel - live"
+        self.on_closed = None
+        self.closed = False
 
     # Runs inline and reports "queued", which is what a real window does once
     # it exists. Returning False is the not-yet-built case the controller must
@@ -162,6 +176,22 @@ class FakeViz:
     def set_model_display(self, index):
         self._model_display = int(index)
 
+    # -- the comparison window's surface ------------------------------- #
+    def set_scorer(self, scorer):
+        self._scorer = scorer
+
+    def open_comparison_window(self, scorer, title, on_closed=None):
+        peer = FakeViz(scorer, self._cfg)
+        peer.title = title
+        peer.on_closed = on_closed
+        self.peer = peer
+        return peer
+
+    def close_window(self):
+        self.closed = True
+        if callable(self.on_closed):
+            self.on_closed()
+
     def set_threshold(self, value):
         self._scorer.threshold = float(value)
 
@@ -191,13 +221,30 @@ class FakeScorer:
     """A LiveScorer without torch: settings, a threshold and a status."""
 
     model_name = "pointnet"
+    #: Candidate voxel edge, as LiveScorer reports it — the outline builder
+    #: inflates its polygons by half a cell.
+    center_spacing_m = 0.1
 
-    def __init__(self) -> None:
+    def __init__(self, checkpoint: str = "training/fake/best.pt",
+                 settings=None, model_name: str = "", window_s: float = 0.0
+                 ) -> None:
         from rocklabel.live.scoring import ScoreSettings
 
-        self.settings = ScoreSettings(window_sec=0.0)
+        # A second model is handed the FIRST one's settings object — that
+        # sharing is the contract the comparison rests on, so the stand-in has
+        # to honour it rather than quietly making its own.
+        self.settings = settings if settings is not None \
+            else ScoreSettings(window_sec=0.0)
         self.threshold = 0.89
+        self.tuned_threshold = 0.89
+        self.checkpoint = checkpoint
+        self.frame_window_s = float(window_s)
+        if model_name:
+            self.model_name = model_name
         self.cleared = 0
+        self.version = 1
+        self.started = 0
+        self.stopped = 0
         self._centers = np.empty((0, 3))
         self._probs = np.empty((0,), np.float32)
 
@@ -205,6 +252,7 @@ class FakeScorer:
         """Stand in for a completed scoring pass."""
         self._centers = np.asarray(centers, float)
         self._probs = np.asarray(probs, np.float32)
+        self.version += 1
 
     def detections(self):
         keep = self._probs >= self.threshold
@@ -215,6 +263,12 @@ class FakeScorer:
 
     def clear_map(self) -> None:
         self.cleared += 1
+
+    def start(self) -> None:
+        self.started += 1
+
+    def stop(self) -> None:
+        self.stopped += 1
 
     def status_dict(self) -> dict:
         return {
@@ -228,9 +282,7 @@ class FakeScorer:
 
 def full_controller(path: str, fuse_sec: float = 0.0) -> LiveController:
     """A replay controller with every capability turned on."""
-    ctl = _replay_controller(path, fuse_sec=fuse_sec)
-    ctl._scorer = FakeScorer()
-    ctl._viz = FakeViz(ctl._scorer, ctl._cfg)
+    ctl = _replay_controller(path, fuse_sec=fuse_sec, with_model=True)
     # Levelling defaults to mode="auto", which is what makes it active.
     assert ctl._engine.leveler.active
     return ctl
@@ -260,7 +312,11 @@ def test_numeric_controls_are_bounded_and_enums_have_choices():
             assert c.min < c.max, f"{c.id} has an inverted range"
             assert c.step and c.step > 0, f"{c.id} needs a step"
         if c.kind == "enum":
-            assert c.choices, f"{c.id} is an enum with no choices"
+            # A runtime-discovered enum (the checkpoint pickers) has no static
+            # options — the controller fills them in — but it must say where
+            # they come from, or the page renders an empty dropdown forever.
+            assert c.choices or c.choices_from, \
+                f"{c.id} is an enum with no choices and no source"
 
 
 def test_control_ids_are_unique():
@@ -373,6 +429,39 @@ def test_snapshot_reports_the_transport(replay_ctl):
     assert t["duration_sec"] > 0
     assert t["playing"] is False  # autoplay=False
     assert t["position_sec"] >= 0
+    assert t["speed"] == 1.0
+
+
+def test_playback_speed_is_settable_and_reported(replay_ctl):
+    replay_ctl.set("replay.speed", 2.0)
+    assert replay_ctl._engine.source.speed == 2.0
+    snap = replay_ctl.snapshot()
+    assert snap["values"]["replay.speed"] == 2.0
+    assert snap["transport"]["speed"] == 2.0
+
+    replay_ctl.set("replay.speed", 0.0)  # "max": unpaced
+    assert replay_ctl._engine.source.speed == 0.0
+
+    # Off-menu rates are refused rather than silently clamped, so a stale page
+    # cannot leave the replay running at a rate nothing on screen names.
+    with pytest.raises(ValueError):
+        replay_ctl.set("replay.speed", 7.5)
+
+
+def test_status_line_names_the_playback_rate(replay_ctl):
+    replay_ctl.set("replay.speed", 3.0)
+    replay_ctl._engine.source.play()
+    try:
+        assert "3x" in replay_ctl.status()[0]["status.state"]
+    finally:
+        replay_ctl._engine.source.pause()
+    replay_ctl.set("replay.speed", 1.0)
+    replay_ctl._engine.source.play()
+    try:
+        state = replay_ctl.status()[0]["status.state"]
+        assert "playing" in state and "1x" not in state  # real time is unmarked
+    finally:
+        replay_ctl._engine.source.pause()
 
 
 def test_status_flags_track_the_pipeline(live_ctl):
@@ -484,6 +573,11 @@ def test_every_settable_control_round_trips(full_ctl):
         for c in sec["controls"]:
             control = spec.CONTROLS_BY_ID[c["id"]]
             if control.kind not in probe or control.id == "replay.position":
+                continue
+            # The model pickers are swept in the comparison tests instead:
+            # writing one loads a checkpoint off disk, which is not something a
+            # blind "set every control" pass should be doing.
+            if control.choices_from:
                 continue
             want = probe[control.kind](control, values.get(control.id))
             full_ctl.set(control.id, want)
@@ -756,6 +850,334 @@ def test_detections_are_thinned_by_dropping_the_weakest(fused):
     assert min(kept) == pytest.approx(cutoff, abs=1e-3)
 
 
+# --------------------------------------------------------------------------- #
+# Comparing two models in two windows
+#
+# The loader is stubbed out: what is under test is the wiring — which settings
+# the two models share, what the panel says, and what happens when a window
+# closes — none of which needs torch, a GPU, or a real checkpoint on disk.
+# --------------------------------------------------------------------------- #
+def _fake_checkpoint(tmp_path, name: str = "second/best.pt") -> str:
+    path = tmp_path / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"not really weights")
+    return str(path)
+
+
+def _stub_loader(ctl, **kw):
+    """Make the comparison build stand-in scorers instead of loading torch.
+
+    Keeps the real sharing rule: the second scorer is handed the first one's
+    settings object, exactly as :meth:`Comparison._build` does.
+    """
+    built = []
+
+    def build(checkpoint):
+        anchor = ctl._compare.scorer_a
+        scorer = FakeScorer(checkpoint=checkpoint,
+                            settings=anchor.settings if anchor else None, **kw)
+        built.append(scorer)
+        return scorer
+
+    ctl._compare._build = build
+    return built
+
+
+def _settled(ctl, timeout: float = 3.0) -> str:
+    """Wait for a load to finish — they run on a worker thread by design."""
+    end = time.time() + timeout
+    while time.time() < end and ctl._compare.state == "loading":
+        time.sleep(0.01)
+    return ctl._compare.state
+
+
+def test_the_compare_card_is_offered_whenever_a_model_is_loaded(full_ctl):
+    ids = {c["id"] for s in full_ctl.schema()["sections"] for c in s["controls"]}
+    assert {"compare.model_a", "compare.model_b", "compare.open",
+            "compare.close"} <= ids
+
+
+def test_opening_a_comparison_runs_a_second_model_in_a_second_window(
+        full_ctl, tmp_path):
+    built = _stub_loader(full_ctl)
+    ck = _fake_checkpoint(tmp_path)
+    full_ctl.set("compare.model_b", ck)
+    assert not full_ctl._compare.open, "picking a model must not open by itself"
+
+    full_ctl.action("compare.open")
+    assert _settled(full_ctl) == "open"
+    assert full_ctl._compare.scorer_b is built[0]
+    assert built[0].started == 1, "the second model has to actually score"
+    peer = full_ctl._viz.peer
+    assert peer is not None and "compare" in peer.title
+    assert peer._scorer is built[0]
+    status = full_ctl.snapshot()["status"]
+    assert "window 2" in status["compare.state"]
+    assert "4,210" in status["compare.map"]      # the second model's own numbers
+
+
+def test_the_two_windows_cannot_disagree_about_the_settings(full_ctl, tmp_path):
+    """Not 'kept in sync' — the same object. A comparison where the two halves
+    can drift apart is not evidence of anything."""
+    _stub_loader(full_ctl)
+    full_ctl.set("compare.model_b", _fake_checkpoint(tmp_path))
+    full_ctl.action("compare.open")
+    assert _settled(full_ctl) == "open"
+
+    a, b = full_ctl._compare.scorer_a, full_ctl._compare.scorer_b
+    assert b.settings is a.settings
+    full_ctl.set("region.z_min", -1.25)
+    full_ctl.set("outline.min_points", 9)
+    assert b.settings.z_min == pytest.approx(-1.25)
+    assert b.settings.cluster_min_points == 9
+
+
+def test_one_threshold_drives_both_models(full_ctl, tmp_path):
+    _stub_loader(full_ctl)
+    full_ctl.set("compare.model_b", _fake_checkpoint(tmp_path))
+    full_ctl.action("compare.open")
+    assert _settled(full_ctl) == "open"
+    full_ctl.set("model.threshold", 0.42)
+    assert full_ctl._compare.scorer_a.threshold == pytest.approx(0.42)
+    assert full_ctl._compare.scorer_b.threshold == pytest.approx(0.42)
+
+
+def test_clearing_predictions_clears_both(full_ctl, tmp_path):
+    _stub_loader(full_ctl)
+    full_ctl.set("compare.model_b", _fake_checkpoint(tmp_path))
+    full_ctl.action("compare.open")
+    assert _settled(full_ctl) == "open"
+    full_ctl.action("model.clear")
+    assert full_ctl._compare.scorer_a.cleared == 1
+    assert full_ctl._compare.scorer_b.cleared == 1
+
+
+def test_closing_the_comparison_stops_the_second_model(full_ctl, tmp_path):
+    _stub_loader(full_ctl)
+    full_ctl.set("compare.model_b", _fake_checkpoint(tmp_path))
+    full_ctl.action("compare.open")
+    assert _settled(full_ctl) == "open"
+    second = full_ctl._compare.scorer_b
+
+    full_ctl.action("compare.close")
+    assert full_ctl._compare.open is False
+    assert second.stopped == 1
+    assert full_ctl._viz.peer.closed is True
+    status = full_ctl.snapshot()["status"]
+    assert status["compare.state"] == "closed"
+    assert status["compare.map"] == "—"
+    # The first model is untouched — closing a comparison is not a teardown.
+    assert full_ctl._scorer.stopped == 0
+
+
+def test_the_second_window_closing_itself_reaches_the_panel(full_ctl, tmp_path):
+    """Someone hits the X on window 2. The panel has to notice, or it goes on
+    reporting a model that is not running."""
+    _stub_loader(full_ctl)
+    full_ctl.set("compare.model_b", _fake_checkpoint(tmp_path))
+    full_ctl.action("compare.open")
+    assert _settled(full_ctl) == "open"
+
+    full_ctl._viz.peer.close_window()          # the window's own close handler
+    assert full_ctl._compare.open is False
+    assert full_ctl.snapshot()["status"]["compare.state"] == "closed"
+
+
+def test_picking_a_new_model_swaps_the_window_that_shows_it(full_ctl, tmp_path):
+    built = _stub_loader(full_ctl)
+    full_ctl.set("compare.model_b", _fake_checkpoint(tmp_path, "first/best.pt"))
+    full_ctl.action("compare.open")
+    assert _settled(full_ctl) == "open"
+
+    full_ctl.set("compare.model_b", _fake_checkpoint(tmp_path, "other/best.pt"))
+    assert _settled(full_ctl) == "open"
+    assert len(built) == 2
+    assert full_ctl._compare.scorer_b is built[1]
+    assert built[0].stopped == 1, "the model it replaced must stop scoring"
+    assert full_ctl._viz.peer._scorer is built[1]
+
+
+def test_swapping_window_1_rebinds_everything_that_held_the_old_model(
+        full_ctl, tmp_path):
+    built = _stub_loader(full_ctl)
+    first = full_ctl._scorer
+    full_ctl.set("compare.model_a", _fake_checkpoint(tmp_path, "swapped/best.pt"))
+    assert _settled(full_ctl) == "closed"      # no comparison was open
+    assert full_ctl._scorer is built[0] is not first
+    assert first.stopped == 1
+    assert full_ctl._viz._scorer is built[0]
+    assert full_ctl.snapshot()["values"]["compare.model_a"].endswith(
+        "swapped/best.pt")
+
+
+def test_a_checkpoint_that_is_not_there_is_refused(full_ctl):
+    _stub_loader(full_ctl)
+    with pytest.raises(ValueError):
+        full_ctl.set("compare.model_b", "/nope/does/not/exist.pt")
+    with pytest.raises(ValueError):
+        full_ctl.action("compare.open")        # nothing selected yet
+
+
+def test_a_load_that_fails_is_reported_rather_than_swallowed(full_ctl, tmp_path):
+    """A checkpoint the training code cannot read used to be a traceback in a
+    terminal nobody is watching. It has to land on the page."""
+    def explode(checkpoint):
+        raise KeyError("generator")
+
+    full_ctl._compare._build = explode
+    full_ctl.set("compare.model_b", _fake_checkpoint(tmp_path))
+    full_ctl.action("compare.open")
+    assert _settled(full_ctl) == "error"
+    snap = full_ctl.snapshot()
+    assert "KeyError" in snap["status"]["compare.state"]
+    assert snap["flags"]["compare_error"] is True
+    assert full_ctl._compare.open is False
+
+
+def test_checkpoints_that_cannot_be_compared_say_so(full_ctl, tmp_path):
+    """Two models trained on different scan windows are fed one shared window,
+    so one of them is seeing a density it never trained on."""
+    _stub_loader(full_ctl, window_s=0.05)
+    full_ctl.set("compare.model_b", _fake_checkpoint(tmp_path))
+    full_ctl.action("compare.open")
+    assert _settled(full_ctl) == "open"
+    snap = full_ctl.snapshot()
+    assert "scan window" in snap["status"]["compare.caveat"]
+    assert snap["flags"]["compare_caveat"] is True
+
+
+def test_the_model_pickers_offer_what_is_loaded_now(full_ctl, tmp_path):
+    _stub_loader(full_ctl)
+    ck = _fake_checkpoint(tmp_path, "picked/best.pt")
+    full_ctl.set("compare.model_b", ck)
+    full_ctl.action("compare.open")
+    assert _settled(full_ctl) == "open"
+
+    choices = full_ctl.checkpoint_choices()
+    values = [c["value"] for c in choices]
+    assert "" in values, "there has to be a way to pick no second model"
+    assert ck in values, "a picker must show what is already running"
+    # The cap, plus the "none" row and the two slots' own checkpoints.
+    assert len(choices) <= 3 + _control_max_choices(), "the picker is unbounded"
+    assert all(c["label"] for c in choices)
+
+
+def _control_max_choices() -> int:
+    from rocklabel.live.webui.control import MAX_CHECKPOINT_CHOICES
+
+    return MAX_CHECKPOINT_CHOICES
+
+
+def test_a_run_without_a_model_has_no_compare_card(replay_ctl):
+    sections = {s["id"] for s in replay_ctl.schema()["sections"]}
+    assert "compare" not in sections
+
+
+# --------------------------------------------------------------------------- #
+# Rock outlines: detections grouped into objects
+# --------------------------------------------------------------------------- #
+def _two_rocks_and_a_speck(rng=None):
+    """Two tight clumps of detections, plus one lone point off on its own."""
+    rng = rng or np.random.default_rng(4)
+    a = rng.normal(0.0, 0.05, size=(20, 3)) + np.array([1.0, 1.0, 0.0])
+    b = rng.normal(0.0, 0.05, size=(20, 3)) + np.array([-2.0, 0.5, 0.0])
+    speck = np.array([[5.0, 5.0, 0.0]])
+    centers = np.vstack([a, b, speck])
+    return centers, np.full(len(centers), 0.97, np.float32)
+
+
+def _outline_ctl(fused):
+    engine, cfg = fused
+    scorer = FakeScorer()
+    scorer.attach_result(*_two_rocks_and_a_speck())
+    ctl = LiveController(cfg, engine, scorer=scorer)
+    ctl.set("outline.link_m", 0.3)
+    ctl.set("outline.min_points", 5)
+    return ctl, scorer
+
+
+def test_outline_settings_reach_the_scorer(fused):
+    ctl, scorer = _outline_ctl(fused)
+    assert scorer.settings.cluster_link_m == pytest.approx(0.3)
+    assert scorer.settings.cluster_min_points == 5
+    values = ctl.snapshot()["values"]
+    assert values["outline.link_m"] == pytest.approx(0.3)
+    assert values["outline.min_points"] == 5
+
+
+def test_the_map_draws_polygons_when_the_display_asks_for_them(fused):
+    """Mode 2 is the whole feature: the same detections, delivered as shapes."""
+    ctl, _scorer = _outline_ctl(fused)
+    ctl.set("model.display", 2)
+    sc = ctl.scene()
+    assert sc["display"] == 2
+    rocks = sc["rocks"]
+    assert rocks["total"] == 2, "two clumps should make two rocks"
+    assert rocks["noise_points"] == 1, "the lone point is not a rock"
+    for row in rocks["rows"]:
+        assert len(row["poly"]) >= 3          # a real, drawable ring
+        assert row["n"] >= 5 and row["area"] > 0
+        assert 0.0 <= row["prob"] <= 1.0
+    # Biggest first, so a truncated table keeps the rocks that matter.
+    areas = [r["area"] for r in rocks["rows"]]
+    assert areas == sorted(areas, reverse=True)
+
+
+def test_the_noise_gate_is_the_knob_that_decides(fused):
+    """Raising 'Min points' past a clump's size makes that outline disappear —
+    and the dropped count says so, so the setting can be walked back."""
+    ctl, _scorer = _outline_ctl(fused)
+    assert ctl.scene()["rocks"]["total"] == 2
+    ctl.set("outline.min_points", 100)
+    rocks = ctl.scene()["rocks"]
+    assert rocks["total"] == 0
+    assert rocks["noise_points"] == 41 and rocks["noise_groups"] == 3
+
+
+def test_outline_readouts_report_what_was_drawn_and_dropped(fused):
+    ctl, _scorer = _outline_ctl(fused)
+    status = ctl.snapshot()["status"]
+    assert "2 rocks" in status["outline.rocks"]
+    assert "1 of 41 detections" in status["outline.noise"]
+
+
+def test_the_display_mode_works_without_an_open3d_window(fused):
+    """--headless --web-ui has no viewer to hold the mode, but the overhead map
+    is still a viewer — so the control has to exist and stick."""
+    ctl, _scorer = _outline_ctl(fused)
+    ids = {c["id"] for s in ctl.schema()["sections"] for c in s["controls"]}
+    assert "model.display" in ids and "viewer" not in ctl.capabilities
+    ctl.set("model.display", 2)
+    assert ctl.snapshot()["values"]["model.display"] == 2
+    ctl.set("model.display", 0)
+    assert ctl.scene()["display"] == 0
+
+
+def test_outlines_are_computed_once_per_pass_not_once_per_poll(fused):
+    """The page asks four times a second; clustering a full map is real work."""
+    from rocklabel.live import clusters
+
+    ctl, scorer = _outline_ctl(fused)
+    calls = []
+    real = clusters.find_rocks
+
+    def counted(*a, **kw):
+        calls.append(1)
+        return real(*a, **kw)
+
+    clusters.find_rocks = counted
+    try:
+        for _ in range(5):
+            ctl.snapshot()
+            ctl.scene()
+        assert len(calls) == 1, "the cached outlines were recomputed"
+        scorer.attach_result(*_two_rocks_and_a_speck())   # a new pass landed
+        ctl.scene()
+        assert len(calls) == 2, "a new scoring pass must re-outline"
+    finally:
+        clusters.find_rocks = real
+
+
 def test_history_is_rate_limited_and_bounded():
     from rocklabel.live.webui.scene import History
 
@@ -806,11 +1228,17 @@ def test_page_renders(client):
     res = client.get("/")
     assert res.status_code == 200
     body = res.get_data(as_text=True)
-    assert "live.js" in body and "/theme/app.css" in body
+    assert "live.js" in body and "live.css" in body
+    # Styling is self-contained now: this page must not reach into the
+    # dashboard's stylesheet, which the other surface owns.
+    assert "/theme/app.css" not in body
 
 
-def test_theme_route_serves_the_dashboard_stylesheet(client):
-    assert client.get("/theme/app.css").status_code == 200
+def test_theme_route_serves_only_the_shared_chart_code(client):
+    """The page borrows the dashboard's chart primitives, not its stylesheet."""
+    assert client.get("/theme/charts.js").status_code == 200
+    # live.css carries this panel's own tokens; app.css belongs to `rocklabel dash`.
+    assert client.get("/theme/app.css").status_code == 404
     # Not a general-purpose file server for the package.
     assert client.get("/theme/app.js").status_code == 404
 

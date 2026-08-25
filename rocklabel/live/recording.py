@@ -52,6 +52,32 @@ _FLAG_POSE = 1 << 2
 
 _HEADER = struct.Struct("<HHId4d3d4d")  # version, flags, n, timestamp, quat, pos, pose-quat
 
+#: Playback rate limits, in multiples of real time. Above ~4x the engine (fuse
+#: + SLAM-free reprojection) is the bottleneck rather than the pacing clock, so
+#: asking for more only means "deliver as fast as you can" — which is what 0 is.
+SPEED_MIN = 0.1
+SPEED_MAX = 8.0
+#: What the transport offers, slowest first. Below 1x the pacing clock simply
+#: waits longer between frames, so slow motion is exact — nothing is
+#: interpolated and nothing is repeated. 0 = unpaced: no clock at all.
+SPEED_CHOICES = (0.1, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0, 4.0, 0.0)
+
+
+def clamp_speed(value: float) -> float:
+    """Playback rate, sanitized. Anything <= 0 means unpaced ('max')."""
+    v = float(value)
+    if v != v:  # NaN
+        return 1.0
+    if v <= 0.0:
+        return 0.0
+    return min(max(v, SPEED_MIN), SPEED_MAX)
+
+
+def format_speed(value: float) -> str:
+    """'2x' / '1.25x' / 'max' — the same wording everywhere it is shown."""
+    return "max" if value <= 0.0 else f"{value:g}x"
+
+
 _SCHEMA_DOC = (
     "little-endian: u16 version, u16 flags(1=intensity,2=orientation,4=pose), "
     "u32 n, f64 timestamp, f64[4] imu quat wxyz, f64[3] pose position, "
@@ -338,7 +364,7 @@ class McapReplaySource(PointSource):
     ) -> None:
         self.path = path
         self.on_rewind = on_rewind
-        self._speed = max(1e-3, float(speed))
+        self._speed = clamp_speed(speed)
         self._lock = threading.Lock()
         self._playing = autoplay
         self._seek_target_ns: int | None = None
@@ -549,6 +575,22 @@ class McapReplaySource(PointSource):
         return self._playing
 
     @property
+    def speed(self) -> float:
+        """Playback rate as a multiple of real time; 0 = unpaced."""
+        return self._speed
+
+    def set_speed(self, value: float) -> None:
+        """Change the playback rate mid-run.
+
+        Re-anchoring is the whole point: the pacing clock measures from the last
+        anchor, so without it a switch to 3x would treat everything already
+        played as owed time and sprint to catch up.
+        """
+        with self._lock:
+            self._speed = clamp_speed(value)
+            self._reanchor()
+
+    @property
     def finished(self) -> bool:
         return self._finished
 
@@ -639,6 +681,9 @@ class McapReplaySource(PointSource):
 
             if not playing:
                 return self._sleep_out(deadline)
+
+            if self._speed <= 0.0:  # "max": no pacing clock, same as a seek
+                return self._deliver()
 
             due = self._anchor_wall + (log_time - self._anchor_log_ns) / 1e9 / self._speed
             now = time.monotonic()
