@@ -37,7 +37,12 @@ globalThis.document = {
   addEventListener() {},
   hidden: false,
 };
-globalThis.window = { innerWidth: 1400, innerHeight: 900, scrollTo() {}, open() {} };
+// The page keeps the current view in the address bar, so the stub needs a
+// writable hash and somewhere for the hashchange listener to land.
+globalThis.window = {
+  innerWidth: 1400, innerHeight: 900, scrollTo() {}, open() {},
+  location: { hash: '' }, addEventListener() {},
+};
 globalThis.getComputedStyle = () => ({ getPropertyValue: () => '#3987e5' });
 globalThis.localStorage = { getItem: () => null, setItem() {} };
 globalThis.matchMedia = () => ({ matches: false });
@@ -84,8 +89,13 @@ all('.tile').forEach((b) => click(b, 'stat tile'));
 // back from wherever the tiles jumped to; every handler goes through click()
 // so a render throw becomes a FAILURES entry rather than a dead process
 click(body.querySelector('[data-view="pipeline"]'), 'nav pipeline');
-all('.flow-stage').forEach((b) => click(b, 'flow stage'));  // jumps to tools
-click(all('#stageChips .chip[data-stage="all"]')[0], 'tools chip all');
+// A flow stage now opens that stage's commands further down the same page,
+// rather than jumping to a filtered Tools view.
+all('.flow-stage').forEach((b) => click(b, 'flow stage'));
+click(body.querySelector('#moreToggle'), 'more functions open');
+const moreRows = all('.more-row').length;
+all('.more-row').forEach((r) => click(r, 'more function drawer'));
+click(body.querySelector('#drawerClose'), 'more drawer close');
 
 // ---- tools view: cards for everything else, stage filter, search
 click(body.querySelector('[data-view="tools"]'), 'nav tools');
@@ -119,10 +129,16 @@ click(body.querySelector('[data-view="runs"]'), 'nav runs');
 await settle();
 const suiteChips = all('#suiteChips .chip').length;
 const boardRows = all('.board-row-main').length;
+const scoreboardModels = all('.scoreboard-model').length;
+const runCards = all('.board-run-card').length;
+const studyMethods = all('.study-method').length;
+const scoreOrbits = all('.score-orbit').length;
 if (boardRows) {
   click(all('.board-row-main')[0], 'board row expand');
 }
 const foldChips = all('.fold-chip').length;
+const configPanels = all('.config-panel').length;
+const foldMatrices = all('.fold-matrix').length;
 charts += all('.chart-figure').length;
 // The retired flat compare experiments are still on disk in this fixture;
 // they must not surface anywhere on the board.
@@ -137,8 +153,16 @@ await settle();
 const trainCards = all('.train-run').length;
 const foldTiles = all('.fold-tile').length;
 const epochCharts = all('#trainingBody .chart-figure').length;
-const trainText = (body.querySelector('#trainingBody').textContent || '').toLowerCase();
-if (trainText.includes('compare')) errors.push('retired compare runs still show on Training');
+const campaignCards = all('.campaign').length;
+const campaignScores = all('.camp-score-n').length;
+const campaignProse = all('.camp-block').length;
+const retiredCampaigns = all('.campaign.is-retired').length;
+// The retired flat compares belong in the written history — they are past runs
+// and they taught something — but never as live work, and never without the
+// marker that says their indoor scores are not comparable with the arena's.
+const liveText = all('.train-run').map((n) => n.textContent || '').join(' ').toLowerCase();
+if (liveText.includes('compare')) errors.push('retired compare runs show as a live sweep');
+if (campaignCards && !retiredCampaigns) errors.push('retired campaigns lost their marker');
 
 // Note round trip against the recorded PUT response: open the editor, type,
 // save, and expect the row's note text to become the server's answer.
@@ -162,8 +186,16 @@ if (editBtns.length) {
 click(body.querySelector('[data-view="data"]'), 'nav data');
 for (const t of all('#dataTabs .tab')) {
   click(t, `data tab ${t.dataset.tab}`);
-  for (const e of all('.expander')) { click(e, 'expander'); expanders++; }
+  // Everything is grouped now: open every collection that starts folded, then
+  // every copy inside it. The detail a row reveals is where rename and delete
+  // live, so this has to happen before the round trips below.
+  for (const g of all('.data-group-head')) {
+    if (!g.classList.contains('is-open')) click(g, 'open collection');
+  }
+  for (const r of all('.variant-row')) { click(r, 'row expand'); expanders++; }
 }
+const dataGroups = all('.data-group').length;
+const dataRunCards = all('.data-run-card').length;
 
 // Rename and delete are the only controls that write to the project without a
 // job, and all three data tabs carry them. Drive both round trips on each tab:
@@ -227,6 +259,12 @@ click(body.querySelector('[data-view="jobs"]'), 'nav jobs');
 const history = all('#jobList li');
 click(history[0], 'select the running job');
 const rerunOnRunning = body.querySelector('#jobRerun').hidden;
+// The job restored from the saved history whose process outlived the dashboard:
+// there is nothing to rerun while it is still going, but it can be stopped.
+click(history[2], 'select the job restored from history');
+await settle();
+const rerunOnOrphan = body.querySelector('#jobRerun').hidden;
+const stopOnOrphan = body.querySelector('#jobStop').hidden === false;
 click(history[1], 'select the finished job');
 await settle();
 const rerunOnFinished = body.querySelector('#jobRerun').hidden === false;
@@ -238,9 +276,12 @@ const el = (id) => body.querySelector('#' + id);
 const catalog = fixtures['/api/catalog'];
 const checks = [
   ['7 views wired', all('.nav-item').length === 7],
-  ['every command got a card', pipeCards + toolCards === catalog.commands.length],
-  ['pipeline leads with the main loop',
-    pipeCards === catalog.commands.filter((c) => c.tier !== 'tool').length],
+  ['every command is reachable from the pipeline page',
+    pipeCards + moreRows === catalog.commands.length],
+  ['tools view still lists the specialists',
+    toolCards === catalog.commands.filter((c) => c.tier === 'tool').length],
+  ['pipeline leads with the everyday six',
+    pipeCards === catalog.commands.filter((c) => c.tier === 'core').length],
   ['hero figure filled', el('heroF1').textContent !== '—'],
   ['4 stat tiles', el('tiles').children.length === 4],
   // Read the count off the catalog rather than hardcoding it: adding a stage
@@ -248,10 +289,14 @@ const checks = [
   // that says nothing about what broke.
   ['every pipeline stage drawn',
     el('flow').children.length === catalog.stages.length],
-  ['activity list populated', el('activity').children.length > 0],
   ['command search filters', searchedCards > 0 && searchedCards <= toolCards],
   ['rows expanded', expanders > 0],
   ['board loaded rows', boardRows > 0],
+  ['runs lead with a model scoreboard', scoreboardModels > 0],
+  ['every run is a circular summary card', runCards === boardRows && scoreOrbits >= runCards],
+  ['study methodology is visible', studyMethods > 0],
+  ['expanded runs include their configuration', configPanels >= 2],
+  ['fold comparison uses the compact matrix', foldMatrices > 0],
   ['suite chips match the board',
     suiteChips === 1 + fixtures['/api/board'].suites.length],
   ['fold detail opened', boardRows === 0 || foldChips > 0],
@@ -261,14 +306,20 @@ const checks = [
     panelSrc === fixtures['/api/jobs'].jobs[0].panel_url],
   ['a re-render does not reload the framed panel', !panelReframed],
   ['rename and delete on all three data tabs', renames >= 3 && deletes === renames],
+  ['data view groups runs into collections', dataGroups > 0 && dataRunCards > 0],
   ['training view shows the live sweep', trainCards >= 1 && foldTiles >= 3],
   ['training view drew the epoch curve', epochCharts >= 1],
+  ['training view lists past campaigns', campaignCards >= 2],
+  ['every campaign carries a payoff score', campaignScores === campaignCards],
+  ['campaigns are written up, not just scored', campaignProse >= campaignCards],
   ['runs view drew charts', charts > 0],
   ['help buttons exist', helps > 0],
   ['run form has fields', all('#runForm [data-param]').length > 0],
-  ['job history lists past jobs', history.length === 2],
+  ['job history lists past jobs', history.length === 3],
   ['rerun offered on a finished job', rerunOnFinished],
   ['rerun withheld while the job runs', rerunOnRunning],
+  ['a survivor from an earlier session is stoppable, not rerunnable',
+    rerunOnOrphan && stopOnOrphan],
 ];
 checks.forEach(([name, ok]) => { if (!ok) errors.push(`check failed: ${name}`); });
 

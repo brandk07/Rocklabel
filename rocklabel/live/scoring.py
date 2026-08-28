@@ -72,14 +72,21 @@ class ScoreSettings:
     max_cloud_points: int = 60_000
     #: Candidate centers scored per pass (random subsample above this).
     max_centers: int = 5_000
-    #: Rock outlines. Display only: these two group the detections the model
-    #: already produced into objects (see :mod:`rocklabel.live.clusters`) and
-    #: never change what is fed to the model, so moving them costs no pass.
-    #: ``cluster_link_m`` is how close two detections must be to belong to the
-    #: same rock; ``cluster_min_points`` is the noise gate — smaller clumps get
-    #: no outline.
+    #: Rock outlines. Display only: these group detections the model already
+    #: produced into objects (see :mod:`rocklabel.live.clusters`) and never
+    #: change what is fed to the model, so moving them costs no scoring pass.
+    #: ``legacy`` restores the old single-link + convex-hull path and ignores
+    #: the robust-only density, object-prior, and contour settings.
+    cluster_grouping: str = clusters.DEFAULT_GROUPING
     cluster_link_m: float = clusters.DEFAULT_LINK_M
+    cluster_core_points: int = clusters.DEFAULT_CORE_POINTS
     cluster_min_points: int = clusters.DEFAULT_MIN_POINTS
+    cluster_max_diameter_m: float = clusters.DEFAULT_MAX_DIAMETER_M
+    cluster_max_height_m: float = clusters.DEFAULT_MAX_HEIGHT_M
+    cluster_min_mean_prob: float = clusters.DEFAULT_MIN_MEAN_PROB
+    cluster_contour_m: float = clusters.DEFAULT_CONTOUR_M
+    #: Extra polygon padding.  Zero keeps the automatic half-voxel padding.
+    cluster_padding_m: float = 0.0
 
 
 class _Result:

@@ -112,6 +112,12 @@ def recordings(root: str) -> list[dict]:
                 # This is what separates the live project from four years of
                 # unrelated captures in every picker and list.
                 "group": _group_of(full, os.path.join(root, DIRS["recordings"])),
+                # Which capture this is a copy of, and which copy it is: the
+                # Data view lists one card per run with its variants inside.
+                "collection": _collection_of(
+                    _group_of(full, os.path.join(root, DIRS["recordings"]))),
+                "run": _split_variant(name[:-5])[0],
+                "variant": _split_variant(name[:-5])[1],
                 "size": st["size"],
                 "mtime": st["mtime"],
                 "modified": _iso(st["mtime"]),
@@ -125,6 +131,48 @@ def _group_of(full: str, base: str) -> str:
     """The folder a file sits in, relative to its root ("volleyball/reslam")."""
     rel = os.path.relpath(os.path.dirname(full), base)
     return "" if rel == "." else rel.replace(os.sep, "/")
+
+
+#: Folder names that say which *version* of a capture is inside rather than
+#: which capture it is. ``volleyball/raw`` and ``volleyball/reslam`` hold the
+#: same thirteen runs twice, so the collection both belong to is "volleyball".
+VARIANT_DIRS = ("raw", "reslam", "slam", "fixed", "noselfhits")
+
+#: Filename suffixes with the same meaning: ``VolleyBallTest9.reslam.mcap`` is
+#: run VolleyBallTest9 re-solved, not a run of its own. Stripped off the end
+#: repeatedly, so ``….lidar.noselfhits`` resolves to one run with one variant
+#: name ("lidar+noselfhits").
+VARIANT_SUFFIXES = ("reslam", "noselfhits", "slam", "fixed", "trimmed", "lidar")
+
+
+def _collection_of(group: str) -> str:
+    """The capture session a folder belongs to, ignoring the variant folder.
+
+    ``volleyball/raw`` and ``volleyball/reslam`` are both "volleyball";
+    ``archive/comforter`` stays itself. This is the top level the Data view
+    groups by, so raw and re-solved copies of one run sit together.
+    """
+    parts = [p for p in group.split("/") if p]
+    if len(parts) > 1 and parts[-1] in VARIANT_DIRS:
+        parts = parts[:-1]
+    return "/".join(parts)
+
+
+def _split_variant(stem: str) -> tuple[str, str]:
+    """Split ``VolleyBallTest9.reslam`` into ("VolleyBallTest9", "reslam").
+
+    A stem carrying no known suffix is the original capture, whose variant is
+    called "raw" so every run reads the same way in a list.
+    """
+    parts: list[str] = []
+    while True:
+        head, _, tail = stem.rpartition(".")
+        if head and tail in VARIANT_SUFFIXES:
+            parts.insert(0, tail)
+            stem = head
+        else:
+            break
+    return stem, "+".join(parts) or "raw"
 
 
 def _labels_path_for(root: str, stem: str) -> str | None:
@@ -172,6 +220,9 @@ def labels(root: str) -> list[dict]:
                 # equal to run_id, but the file on disk is the thing that moves.
                 "stem": name[: -len(".labels.json")],
                 "group": _group_of(full, base),
+                "collection": _collection_of(_group_of(full, base)),
+                "run": _split_variant(name[: -len(".labels.json")])[0],
+                "variant": _split_variant(name[: -len(".labels.json")])[1],
                 "run_id": data.get("run_id", name.replace(".labels.json", "")),
                 "mcap_file": data.get("mcap_file", ""),
                 "rock_count": len(rocks),

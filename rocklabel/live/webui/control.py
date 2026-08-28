@@ -176,17 +176,14 @@ class LiveController:
         st = scorer.settings
         key = (int(getattr(scorer, "version", 0)), int(len(probs)),
                round(float(scorer.threshold), 4),
-               round(float(st.cluster_link_m), 4), int(st.cluster_min_points))
+               *clusters.outline_settings_key(st))
         cached = self._outline_cache.get(id(scorer))
         if cached is not None and cached[0] == key:
             return cached[1]
         found = clusters.find_rocks(
             centers, probs,
-            link_m=float(st.cluster_link_m),
-            min_points=int(st.cluster_min_points),
-            # Detections sit on the candidate voxel grid, so each one stands
-            # for half a cell of ground in every direction.
-            pad_m=0.5 * float(getattr(scorer, "center_spacing_m", 0.0)),
+            **clusters.outline_options(
+                st, float(getattr(scorer, "center_spacing_m", 0.0))),
         )
         self._outline_cache[id(scorer)] = (key, found)
         return found
@@ -290,7 +287,14 @@ class LiveController:
             v["region.range_max"] = float(st.range_max)
             v["region.max_centers"] = int(st.max_centers)
             v["outline.link_m"] = float(st.cluster_link_m)
+            v["outline.grouping"] = str(st.cluster_grouping)
+            v["outline.core_points"] = int(st.cluster_core_points)
             v["outline.min_points"] = int(st.cluster_min_points)
+            v["outline.max_diameter_m"] = float(st.cluster_max_diameter_m)
+            v["outline.max_height_m"] = float(st.cluster_max_height_m)
+            v["outline.min_mean_prob"] = float(st.cluster_min_mean_prob)
+            v["outline.contour_m"] = float(st.cluster_contour_m)
+            v["outline.padding_m"] = float(st.cluster_padding_m)
             v["compare.model_a"] = self._compare.path("a")
             v["compare.model_b"] = self._compare.selected_b
         if self._replay:
@@ -551,8 +555,15 @@ class LiveController:
     #: that happen to live beside the scoring ones, so the viewer holds exactly
     #: one copy of them.
     _OUTLINE = {
+        "outline.grouping": "cluster_grouping",
         "outline.link_m": "cluster_link_m",
+        "outline.core_points": "cluster_core_points",
         "outline.min_points": "cluster_min_points",
+        "outline.max_diameter_m": "cluster_max_diameter_m",
+        "outline.max_height_m": "cluster_max_height_m",
+        "outline.min_mean_prob": "cluster_min_mean_prob",
+        "outline.contour_m": "cluster_contour_m",
+        "outline.padding_m": "cluster_padding_m",
     }
     #: Scoring-region ids -> the ScoreSettings field they own.
     _REGION = {

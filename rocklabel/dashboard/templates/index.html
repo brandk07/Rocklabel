@@ -39,7 +39,8 @@
   <section class="view is-active" id="view-pipeline">
     <div class="view-head">
       <h1>// PIPELINE</h1>
-      <p class="lede">Record → solve poses → label → generate → train → deploy. The main loop, in order.</p>
+      <p class="lede">Record → label → generate → build cache → train → live. The commands you run on
+        nearly every pass, in order. Everything else is under More functions below.</p>
     </div>
 
     <div class="hero-row">
@@ -62,21 +63,16 @@
 
     <div id="pipelineGroups"></div>
 
-    <div class="grid-2">
-      <div class="card">
-        <div class="card-head">
-          <h2>// QUICK ACTIONS</h2>
-          <p class="card-sub">The things you do most, one click away.</p>
-        </div>
-        <div class="quick" id="quickActions"></div>
-      </div>
-      <div class="card">
-        <div class="card-head">
-          <h2>// ACTIVITY</h2>
-          <p class="card-sub">Newest files this project produced.</p>
-        </div>
-        <ul class="activity" id="activity"></ul>
-      </div>
+    <div class="card more-card">
+      <button class="more-head" id="moreToggle" aria-expanded="false" aria-controls="moreGroups">
+        <span class="more-caret" aria-hidden="true">▸</span>
+        <span class="more-titles">
+          <span class="more-title">// MORE FUNCTIONS</span>
+          <span class="card-sub">Everything else this project can do, in the order it comes up
+            in the pipeline. <span id="moreCount"></span></span>
+        </span>
+      </button>
+      <div class="more-body" id="moreGroups" hidden></div>
     </div>
   </section>
 
@@ -89,7 +85,7 @@
     </div>
     <div class="alert-line" id="boardAlert">
       <b>Ranking rule:</b> models are only ranked inside the same study. Different studies used different
-      training data and test populations, so the all-studies scoreboard shows each study’s champion—not a false global ranking.
+      training data and test populations, so the all-studies scoreboard shows each study’s leader—not a false global ranking.
     </div>
     <div class="filter-row">
       <div class="chips" id="suiteChips"></div>
@@ -102,8 +98,9 @@
   <section class="view" id="view-training">
     <div class="view-head">
       <h1>// TRAINING</h1>
-      <p class="lede">What is running on the GPU right now — fold by fold, epoch by epoch. A sweep
-        started from a terminal shows up here too.</p>
+      <p class="lede">The GPU's logbook. What is training right now — fold by fold, epoch by
+        epoch, a sweep started from a terminal included — and under it every sweep this project
+        has run, with what it cost, where it fell down, and what it left behind.</p>
     </div>
     <div id="trainingBody"><div class="muted" style="padding:30px">checking the experiment folders…</div></div>
   </section>
@@ -133,7 +130,11 @@
     </div>
     <div class="grid-jobs">
       <div class="card job-list-card">
-        <div class="card-head"><h2>// HISTORY</h2></div>
+        <div class="card-head">
+          <h2>// HISTORY</h2>
+          <p class="card-sub">Everything you have launched here, kept across restarts.
+            Pick one to read its output again.</p>
+        </div>
         <ul class="job-list" id="jobList"></ul>
       </div>
       <div class="card job-log-card">

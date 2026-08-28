@@ -111,7 +111,8 @@ def test_rocks_come_back_biggest_first():
     pts = np.vstack([_blob(0.0, 0.0, n=8, spread=0.05, seed=9),
                      _blob(4.0, 0.0, n=30, spread=0.3, seed=10)])
     probs = np.full(len(pts), 0.9)
-    rocks = find_rocks(pts, probs, link_m=0.4, min_points=4).rocks
+    rocks = find_rocks(pts, probs, link_m=0.4, min_points=4,
+                       max_diameter_m=0.0).rocks
     assert len(rocks) == 2
     assert rocks[0].area_m2 >= rocks[1].area_m2
 
@@ -159,3 +160,75 @@ def test_the_wireframe_closes_every_ring():
 def test_no_rocks_means_no_wireframe():
     verts, lines = outline_wireframe([])
     assert verts.shape == (0, 3) and lines.shape == (0, 2)
+
+
+def test_robust_density_does_not_let_a_sparse_chain_stretch_a_rock():
+    """Single-link lets one point relay the next forever. Robust grouping may
+    keep one border layer, but the rest of the chain has no dense core and is
+    reported as sparse instead of becoming a metre-wide rock."""
+    blob = _blob(0.0, 0.0, n=18, spread=0.025, seed=14)
+    chain = np.column_stack([
+        np.arange(0.14, 1.13, 0.14),
+        np.zeros(8),
+        np.zeros(8),
+    ])
+    pts = np.vstack([blob, chain])
+    probs = np.full(len(pts), 0.95)
+    legacy = find_rocks(pts, probs, grouping="legacy", link_m=0.15,
+                        min_points=4)
+    robust = find_rocks(pts, probs, grouping="robust", link_m=0.15,
+                        core_points=4, min_points=4,
+                        max_diameter_m=0.0, max_height_m=0.0)
+    assert len(legacy.rocks) == len(robust.rocks) == 1
+    assert legacy.rocks[0].points == len(pts)
+    assert robust.rocks[0].points < len(pts)
+    assert robust.sparse_points > 0
+    assert np.ptp(robust.rocks[0].polygon[:, 0]) < 0.6
+
+
+def test_robust_object_priors_reject_furniture_scale_clumps():
+    pts = _blob(0.0, 0.0, n=30, spread=0.35, seed=15)
+    probs = np.full(len(pts), 0.98)
+    found = find_rocks(pts, probs, link_m=0.6, core_points=3,
+                       min_points=5, max_diameter_m=0.5,
+                       max_height_m=0.0)
+    assert found.rocks == []
+    assert found.oversize_points == len(pts)
+    assert "too wide" in found.noise_note()
+
+
+def test_robust_confidence_and_height_gates_have_distinct_readouts():
+    tall = _blob(0.0, 0.0, n=10, spread=0.02, seed=16)
+    tall[:, 2] = np.linspace(0.0, 0.8, len(tall))
+    low = _blob(2.0, 0.0, n=10, spread=0.02, seed=17)
+    pts = np.vstack([tall, low])
+    probs = np.concatenate([np.full(10, 0.99), np.full(10, 0.72)])
+    found = find_rocks(pts, probs, link_m=0.2, core_points=2,
+                       min_points=4, max_diameter_m=0.0,
+                       max_height_m=0.4, min_mean_prob=0.8)
+    assert found.rocks == []
+    assert found.overheight_points == 10
+    assert found.weak_points == 10
+
+
+def test_tight_contour_does_not_fill_the_empty_corner_of_an_l_shape():
+    x = np.arange(0.0, 1.01, 0.1)
+    horizontal = np.vstack([
+        np.column_stack([x, np.zeros_like(x)]),
+        np.column_stack([x, np.full_like(x, 0.08)]),
+    ])
+    y = np.arange(0.1, 1.01, 0.1)
+    vertical = np.vstack([
+        np.column_stack([np.zeros_like(y), y]),
+        np.column_stack([np.full_like(y, 0.08), y]),
+    ])
+    xy = np.vstack([horizontal, vertical])
+    pts = np.column_stack([xy, np.zeros(len(xy))])
+    probs = np.full(len(pts), 0.95)
+    legacy = find_rocks(pts, probs, grouping="legacy", link_m=0.15,
+                        min_points=1)
+    tight = find_rocks(pts, probs, grouping="robust", link_m=0.15,
+                       core_points=1, min_points=1, contour_m=0.16,
+                       max_diameter_m=0.0, max_height_m=0.0)
+    assert len(legacy.rocks) == len(tight.rocks) == 1
+    assert tight.rocks[0].area_m2 < legacy.rocks[0].area_m2 * 0.6

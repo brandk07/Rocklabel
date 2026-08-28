@@ -279,6 +279,43 @@ def project(tmp_path):
     return tmp_path
 
 
+def test_a_run_and_its_re_solved_copy_group_together(tmp_path):
+    """The Data view lists one card per capture, so raw/ and reslam/ copies of
+    the same run must land in one collection under one run name."""
+    raw = tmp_path / "recordings" / "volleyball" / "raw"
+    slam = tmp_path / "recordings" / "volleyball" / "reslam"
+    raw.mkdir(parents=True)
+    slam.mkdir(parents=True)
+    (raw / "VolleyBallTest9.mcap").write_bytes(b"x")
+    (slam / "VolleyBallTest9.reslam.mcap").write_bytes(b"x")
+    recs = {r["name"]: r for r in inventory.recordings(str(tmp_path))}
+    assert {r["collection"] for r in recs.values()} == {"volleyball"}
+    assert {r["run"] for r in recs.values()} == {"VolleyBallTest9"}
+    assert recs["VolleyBallTest9.mcap"]["variant"] == "raw"
+    assert recs["VolleyBallTest9.reslam.mcap"]["variant"] == "reslam"
+
+
+@pytest.mark.parametrize("stem, run, variant", [
+    ("VolleyBallTest9", "VolleyBallTest9", "raw"),
+    ("VolleyBallTest9.reslam", "VolleyBallTest9", "reslam"),
+    ("lance_0.lidar.noselfhits", "lance_0", "lidar+noselfhits"),
+    # A dot that is not a known suffix is part of the run's own name.
+    ("run.v2", "run.v2", "raw"),
+])
+def test_variant_suffixes_split_off_the_run_name(stem, run, variant):
+    assert inventory._split_variant(stem) == (run, variant)
+
+
+@pytest.mark.parametrize("group, collection", [
+    ("volleyball/raw", "volleyball"),
+    ("volleyball/reslam", "volleyball"),
+    ("archive/comforter", "archive/comforter"),
+    ("", ""),
+])
+def test_variant_folders_do_not_start_a_collection_of_their_own(group, collection):
+    assert inventory._collection_of(group) == collection
+
+
 def test_snapshot_links_recordings_to_their_labels(project):
     snap = inventory.snapshot(str(project))
     assert snap["totals"]["recordings"] == 1
@@ -531,6 +568,85 @@ def test_rerun_replays_the_same_command_as_a_separate_job(tmp_path):
     # The short spelling survives, so the history does not sprout absolute paths.
     assert second.command_line == first.command_line == "rocklabel echo again"
     assert second.status == "ok" and any("again" in line for line in second.lines)
+
+
+def test_history_survives_a_restart(tmp_path):
+    first = JobManager(str(tmp_path))
+    job = _wait(first.launch(["echo", "remember me"], command_id="t", title="Echo",
+                             display="rocklabel echo"))
+    assert os.path.exists(os.path.join(str(tmp_path), ".dashboard", "jobs.json"))
+
+    # A brand new manager, as if the dashboard had been closed and reopened.
+    second = JobManager(str(tmp_path))
+    back = second.get(job.id)
+    assert back is not None and back.restored is True
+    assert back.status == "ok" and back.returncode == 0
+    assert back.command_line == "rocklabel echo"
+    assert [j["id"] for j in second.list()] == [job.id]
+
+
+def test_a_restored_job_reads_its_output_back_from_its_log(tmp_path):
+    first = JobManager(str(tmp_path))
+    job = _wait(first.launch(["sh", "-c", "echo one; echo two"],
+                             command_id="t", title="t"))
+    back = JobManager(str(tmp_path)).get(job.id)
+    tail = back.tail(0)
+    assert any("one" in line for line in tail["lines"])
+    assert any("two" in line for line in tail["lines"])
+    # The log file stops where the process did; the ending is added back.
+    assert "exited with code 0" in tail["lines"][-1]
+    assert tail["cursor"] == len(tail["lines"])
+    assert back.tail(tail["cursor"])["lines"] == []
+
+
+def test_a_restored_job_does_not_reuse_an_old_job_number(tmp_path):
+    first = JobManager(str(tmp_path))
+    old = _wait(first.launch(["echo", "old"], command_id="t", title="t"))
+    fresh = _wait(JobManager(str(tmp_path)).launch(["echo", "new"],
+                                                   command_id="t", title="t"))
+    assert fresh.id != old.id and fresh.log_path != old.log_path
+    assert "old" in open(old.log_path).read()
+
+
+def test_a_job_still_running_at_shutdown_is_remembered_as_interrupted(tmp_path):
+    jm = JobManager(str(tmp_path))
+    job = _wait(jm.launch(["echo", "hi"], command_id="t", title="Echo"))
+    # The record a dashboard killed outright leaves behind: still marked
+    # running, pointing at a process id that is long gone.
+    history = tmp_path / ".dashboard" / "jobs.json"
+    data = json.loads(history.read_text())
+    data["jobs"][0] |= {"status": "running", "finished": None,
+                        "returncode": None, "pid": 999999}
+    history.write_text(json.dumps(data))
+
+    back = JobManager(str(tmp_path)).get(job.id)
+    assert back.status == "interrupted"
+    # That process id is not this job any more, so it must not claim to be live.
+    assert back.orphan is False and back.alive is False
+    assert "dashboard closed" in back.tail(0)["lines"][-1]
+
+
+def test_a_job_that_outlived_the_dashboard_is_still_stoppable(tmp_path):
+    jm = JobManager(str(tmp_path))
+    job = jm.launch(["sleep", "60"], command_id="t", title="sleep")
+    time.sleep(0.3)
+
+    # The history still says "running", because the job is: this is what a
+    # second dashboard opening on the same project sees.
+    back = JobManager(str(tmp_path)).get(job.id)
+    assert back.status == "interrupted"
+    assert back.orphan is True and back.alive is True
+    assert back.stop() is True and back.status == "stopped"
+    _wait(job)
+    assert jobs_mod._still_running(back.pid, back.argv) is False
+
+
+def test_a_corrupt_history_file_does_not_stop_the_dashboard(tmp_path):
+    JobManager(str(tmp_path))        # creates .dashboard/
+    (tmp_path / ".dashboard" / "jobs.json").write_text("{not json at all")
+    jm = JobManager(str(tmp_path))
+    assert jm.list() == []
+    assert _wait(jm.launch(["echo", "fine"], command_id="t", title="t")).status == "ok"
 
 
 def test_a_missing_binary_fails_the_job_rather_than_the_server(tmp_path):

@@ -345,13 +345,23 @@ SECTIONS: list[Section] = [
 
     Section(
         "outline", "Rock outlines",
-        "Detections grouped into objects: clumps of above-threshold points "
-        "become polygons, lone points are dropped as noise. Display only — "
-        "these never change what the model is fed, so moving them is free and "
-        "takes effect on the next redraw. Shown when Display is set to 'Rock "
-        "outlines'.",
+        "Configure the object grouping and the polygon separately from the "
+        "model. Robust mode removes sparse chains and implausible object sizes "
+        "before drawing a tight contour; Legacy restores the original "
+        "single-link + convex-hull result. Display only — these never change "
+        "what the model is fed, so moving them is free and takes effect on the "
+        "next redraw. Shown when Display is set to 'Rock outlines'.",
         requires="scorer",
         controls=[
+            Control("outline.grouping", "enum", "Grouping",
+                    "Robust density + tight contour is the new pipeline: only "
+                    "locally dense points can grow a rock, object-size gates "
+                    "remove furniture-scale detections, and the polygon can "
+                    "follow concavities. Legacy links + convex hull exactly "
+                    "restores the previous grouping and ignores every new "
+                    "robust-only control below, for a clean A/B comparison.",
+                    choices=[Choice("robust", "Robust density + tight contour"),
+                             Choice("legacy", "Legacy links + convex hull")]),
             Control("outline.link_m", "float", "Link distance",
                     "How close two detected points have to be to belong to the "
                     "same rock. Too small and one rock breaks into several "
@@ -362,6 +372,13 @@ SECTIONS: list[Section] = [
                     "spent on the range that is actually useful, in 1 cm "
                     "steps. Type into the box beside it for an exact value.",
                     min=0.02, max=0.5, step=0.01, unit="m"),
+            Control("outline.core_points", "int", "Core neighbours",
+                    "Robust mode only. A detected point needs at least this "
+                    "many detections in its Link distance (including itself) "
+                    "before it can grow a component. Non-core points may form "
+                    "one fringe layer but cannot relay a sparse chain. Raise "
+                    "this first when thin streaks or scattered speckle remain.",
+                    min=1, max=30, step=1),
             Control("outline.min_points", "int", "Min points",
                     "The noise gate: a clump with fewer detected points than "
                     "this gets no outline. One or two stray points above the "
@@ -370,6 +387,36 @@ SECTIONS: list[Section] = [
                     "'Dropped as noise' line below to make sure it is not "
                     "eating real rocks.",
                     min=1, max=200, step=1),
+            Control("outline.max_diameter_m", "float", "Max diameter",
+                    "Robust mode only. Reject a component when the diagonal of "
+                    "its xy bounding box exceeds this size. It removes the "
+                    "large chair and wall-like false positives a point-count "
+                    "minimum cannot remove. Set 0 to disable the gate.",
+                    min=0.0, max=3.0, step=0.05, unit="m"),
+            Control("outline.max_height_m", "float", "Max height",
+                    "Robust mode only. Reject a component whose detected points "
+                    "span more vertical distance than this. This is an object "
+                    "shape prior, separate from the scoring region. Set 0 to "
+                    "disable it.",
+                    min=0.0, max=2.0, step=0.05, unit="m"),
+            Control("outline.min_mean_prob", "float", "Mean confidence",
+                    "Robust mode only. After the main point threshold, require "
+                    "the average probability of the whole component to reach "
+                    "this value. This removes clumps made mostly of marginal "
+                    "detections. Set 0 to disable the extra gate.",
+                    min=0.0, max=1.0, step=0.01),
+            Control("outline.contour_m", "float", "Contour gap",
+                    "Robust mode only. Delaunay triangles with an edge longer "
+                    "than this are treated as bridges over empty ground and "
+                    "left out of the polygon. Lower values hug detections more "
+                    "tightly; raise it when a real rock contour breaks apart.",
+                    min=0.04, max=0.6, step=0.01, unit="m"),
+            Control("outline.padding_m", "float", "Polygon padding",
+                    "Robust mode only. Inflate the final footprint by this "
+                    "safety margin. Zero selects the automatic half-voxel "
+                    "padding, normally about 2.5 cm. This changes only the "
+                    "drawn boundary, never which detections form the object.",
+                    min=0.0, max=0.2, step=0.005, unit="m"),
             Control("outline.rocks", "readout", "Rocks",
                     "Outlines being drawn right now, the detections behind "
                     "them, and the footprint of the biggest."),

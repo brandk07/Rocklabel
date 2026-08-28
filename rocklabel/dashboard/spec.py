@@ -116,9 +116,12 @@ class Command:
     panel: bool = False
     long_running: bool = False     # progress-bar style job, not instant
     icon: str = "▸"
-    #: "pipeline" = the main loop (record → solve poses → label → dataset →
-    #: train → export/deploy); "tool" = everything else. Presentational only:
-    #: the UI leads with the pipeline and keeps tools a click away.
+    #: How prominently the UI shows this command. Presentational only.
+    #: "core" = the handful of commands run on nearly every pass (record,
+    #: label, generate, cache, train, live) — these are the cards the Pipeline
+    #: view leads with; "pipeline" = the rest of the main loop, folded into
+    #: the Pipeline view's "More functions" list; "tool" = specialists, which
+    #: live in that same list and in the Tools view.
     tier: str = "pipeline"
 
     @property
@@ -364,6 +367,7 @@ COMMANDS: list[Command] = [
     # ---------------------------------------------------------------- capture
     Command(
         id="record", bin="rocklabel", sub="record", stage="capture", gui=True,
+        tier="core",
         panel=True,
         icon="●",
         title="Record",
@@ -438,6 +442,7 @@ COMMANDS: list[Command] = [
     ),
     Command(
         id="live", bin="rocklabel", sub="live", stage="deploy", gui=True,
+        tier="core",
         panel=True,
         icon="◉",
         title="Live view",
@@ -784,6 +789,7 @@ COMMANDS: list[Command] = [
     # ---------------------------------------------------------------- label
     Command(
         id="label", bin="rocklabel", sub="label", stage="label", gui=True,
+        tier="core",
         icon="◆",
         title="Label",
         tagline="Fuse every scan into one cloud and mark the rocks by hand.",
@@ -894,6 +900,7 @@ COMMANDS: list[Command] = [
     # ---------------------------------------------------------------- dataset
     Command(
         id="generate", bin="rocklabel", sub="generate", stage="dataset",
+        tier="core",
         icon="⚙",
         title="Generate dataset",
         tagline="Turn a labeled recording into training data in all three dataset formats.",
@@ -1025,6 +1032,7 @@ COMMANDS: list[Command] = [
     # ---------------------------------------------------------------- train
     Command(
         id="train-cache", bin="rocklabel-train", sub="cache", stage="train",
+        tier="core",
         icon="▤",
         title="Build cache",
         tagline="Pool dataset runs into a flat .npy cache for training.",
@@ -1054,6 +1062,7 @@ COMMANDS: list[Command] = [
     ),
     Command(
         id="train-train", bin="rocklabel-train", sub="train", stage="train",
+        tier="core",
         icon="◈",
         title="Train one fold",
         tagline="Fit one model on one leave-one-run-out fold.",

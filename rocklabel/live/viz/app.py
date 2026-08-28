@@ -77,7 +77,12 @@ from rocklabel.live.colormap import (
     percentile_range,
     reflectivity_values,
 )
-from rocklabel.live.clusters import find_rocks, outline_wireframe
+from rocklabel.live.clusters import (
+    find_rocks,
+    outline_options,
+    outline_settings_key,
+    outline_wireframe,
+)
 from rocklabel.live.config import AppConfig
 from rocklabel.live.motion import quat_to_matrix
 from rocklabel.live.pipeline import IngestEngine
@@ -829,6 +834,18 @@ class VizApp(PivotCamera):
 
         sec.add_child(self._heading("Rock outlines  (display only)"))
         ogrid = self._grid(em)
+        grouping = gui.Combobox()
+        grouping.add_item("Robust density + tight contour")
+        grouping.add_item("Legacy links + convex hull")
+        grouping.selected_index = 0 if s.cluster_grouping == "robust" else 1
+        grouping.set_on_selection_changed(
+            lambda _text, idx: self.set_score_setting(
+                "cluster_grouping", "robust" if int(idx) == 0 else "legacy"))
+        self._pair(ogrid, "Grouping", grouping,
+                   "Robust rejects sparse chains, implausibly large/tall clumps, "
+                   "and draws a tight contour. Legacy restores the previous "
+                   "single-link clustering and convex hull, ignoring the extra "
+                   "controls below.")
         link = self._make_number(gui.NumberEdit.DOUBLE, 0.02, 0.5,
                                  float(s.cluster_link_m),
                                  lambda v: self.set_score_setting("cluster_link_m", v))
@@ -837,6 +854,13 @@ class VizApp(PivotCamera):
                    "same rock. Too small and one rock breaks into several "
                    "outlines; too large and neighbouring rocks merge into one. "
                    "Capped at 0.5 m: past that it is merging, not linking.")
+        core = self._make_number(
+            gui.NumberEdit.INT, 1, 30, int(s.cluster_core_points),
+            lambda v: self.set_score_setting("cluster_core_points", int(v)))
+        self._pair(ogrid, "Core neighbours", core,
+                   "Robust mode only. A detected point needs this many nearby "
+                   "detections (including itself) before it can grow a rock. "
+                   "Raise this to stop thin chains and scattered speckle.")
         minpts = self._make_number(
             gui.NumberEdit.INT, 1, 200, int(s.cluster_min_points),
             lambda v: self.set_score_setting("cluster_min_points", int(v)))
@@ -844,6 +868,40 @@ class VizApp(PivotCamera):
                    "The noise gate: a clump with fewer detected points than this "
                    "gets no outline. Raise it until the speckle stops being "
                    "drawn — the Rocks readout says what it threw away.")
+        diameter = self._make_number(
+            gui.NumberEdit.DOUBLE, 0.0, 3.0, float(s.cluster_max_diameter_m),
+            lambda v: self.set_score_setting("cluster_max_diameter_m", v))
+        self._pair(ogrid, "Max diameter (m)", diameter,
+                   "Robust mode only. Reject a clump whose xy bounding-box "
+                   "diagonal is larger than this. This is the furniture-scale "
+                   "false-positive gate. 0 disables it.")
+        height = self._make_number(
+            gui.NumberEdit.DOUBLE, 0.0, 2.0, float(s.cluster_max_height_m),
+            lambda v: self.set_score_setting("cluster_max_height_m", v))
+        self._pair(ogrid, "Max height (m)", height,
+                   "Robust mode only. Reject a clump spanning more vertical "
+                   "distance than a plausible rock. 0 disables it.")
+        mean_prob = self._make_number(
+            gui.NumberEdit.DOUBLE, 0.0, 1.0, float(s.cluster_min_mean_prob),
+            lambda v: self.set_score_setting("cluster_min_mean_prob", v))
+        self._pair(ogrid, "Mean confidence", mean_prob,
+                   "Robust mode only. The whole clump must average at least this "
+                   "probability after the main threshold. 0 disables this extra "
+                   "object-level confidence gate.")
+        contour = self._make_number(
+            gui.NumberEdit.DOUBLE, 0.04, 0.6, float(s.cluster_contour_m),
+            lambda v: self.set_score_setting("cluster_contour_m", v))
+        self._pair(ogrid, "Contour gap (m)", contour,
+                   "Robust mode only. Delaunay triangles spanning more empty "
+                   "ground than this are left out of the polygon. Lower is "
+                   "tighter; raise it if a real rock outline has gaps.")
+        padding = self._make_number(
+            gui.NumberEdit.DOUBLE, 0.0, 0.2, float(s.cluster_padding_m),
+            lambda v: self.set_score_setting("cluster_padding_m", v), precision=3)
+        self._pair(ogrid, "Padding (m)", padding,
+                   "Extra skin around a robust polygon. 0 uses half one "
+                   "candidate voxel automatically; raise it for a larger safety "
+                   "margin. Legacy mode keeps its original automatic padding.")
         sec.add_child(ogrid)
 
         sec.add_child(self._heading("Scoring region  (relative to the sensor)"))
@@ -1428,9 +1486,7 @@ class VizApp(PivotCamera):
         st = self._scorer.settings
         self._rocks = find_rocks(
             centers, probs,
-            link_m=float(st.cluster_link_m),
-            min_points=int(st.cluster_min_points),
-            pad_m=0.5 * self._scorer.center_spacing_m,
+            **outline_options(st, self._scorer.center_spacing_m),
         )
         pts, lines = outline_wireframe(self._rocks.rocks)
         if not len(lines):
@@ -1512,7 +1568,7 @@ class VizApp(PivotCamera):
         if self._scorer is not None and self._model_display == 2:
             st = self._scorer.settings
             key = (self._scorer.version, round(self._scorer.threshold, 4),
-                   round(float(st.cluster_link_m), 4), int(st.cluster_min_points))
+                   *outline_settings_key(st))
             # Keyed on the settings alone, never on "is the geometry there":
             # a map with no rock in it legitimately draws nothing, and that
             # must not re-run the clustering on every single frame.

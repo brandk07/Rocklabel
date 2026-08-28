@@ -34,6 +34,13 @@ const S = {
   boardSuite: 'all',    // which sweep is expanded ('all' = every suite)
   boardLoading: false,
   noteEditing: null,    // row key whose note editor is open
+  moreOpen: false,      // Pipeline's "More functions" list expanded?
+  groupOpen: {},        // Data view: which collections are folded open
+  dataSearch: '',       // Data view: the name filter
+  campaigns: null,      // [{...}] from /api/campaigns — the Training history
+  campaignScale: '',    // what the 1-10 payoff score means
+  campaignSig: null,    // inventory signature the campaigns were read under
+  campaignsLoading: false,
 };
 
 /* ------------------------------------------------------------------ utils */
@@ -109,10 +116,15 @@ function toast(msg, kind, action) {
 }
 
 /* ---------------------------------------------------------------- routing */
+/** The seven view names, which are also the URL fragments they answer to. */
+const VIEWS = ['pipeline', 'runs', 'training', 'data', 'jobs', 'live', 'tools'];
+
 function setView(name) {
   S.view = name;
   $$('.nav-item').forEach((b) => b.classList.toggle('is-active', b.dataset.view === name));
   $$('.view').forEach((v) => v.classList.toggle('is-active', v.id === `view-${name}`));
+  // The page you are on survives a reload, and a view can be linked to.
+  if (window.location.hash.slice(1) !== name) window.location.hash = name;
   window.scrollTo({ top: 0, behavior: 'instant' });
   render();
 }
@@ -170,38 +182,77 @@ function renderPipeline() {
     b.appendChild(h('div', 'flow-count', fmtNum(c.n)));
     b.appendChild(h('div', 'flow-blurb', c.unit || st.blurb));
     b.title = st.blurb;
-    b.onclick = () => { S.stageFilter = st.id; setView('tools'); };
+    // Every stage's commands are on this page now, so a stage click opens the
+    // list below rather than throwing you into a filtered Tools view.
+    b.onclick = () => jumpToStage(st.id);
     flow.appendChild(b);
   });
 
-  // ---- the pipeline's own commands, grouped by stage in loop order
-  renderCommandGroups($('#pipelineGroups'), pipelineCommands(), true);
+  // ---- the commands run on nearly every pass, in loop order
+  renderCommandGroups($('#pipelineGroups'), coreCommands(), true);
 
-  // ---- quick actions
-  const qbox = $('#quickActions');
-  qbox.innerHTML = '';
-  [['live', 'Open the live view', 'Watch the sensor, with or without a model.'],
-   ['record', 'Record a run', 'Capture straight to an .mcap.'],
-   ['label', 'Label a recording', 'Place rock labels on the fused cloud.'],
-   ['generate', 'Generate a dataset', 'Turn labels into training data.'],
-  ].forEach(([id, title, desc]) => qbox.appendChild(quickButton(id, title, desc)));
+  // ---- everything else, folded away under one disclosure
+  renderMoreFunctions();
+}
 
-  // ---- recent activity
-  const items = [];
-  S.inv.recordings.slice(0, 5).forEach((r) => items.push({ kind: 'recording', name: r.name, ts: r.mtime }));
-  S.inv.labels.slice(0, 5).forEach((l) => items.push({ kind: 'labels', name: `${l.name} · ${l.rock_count} rocks`, ts: l.mtime }));
-  S.inv.datasets.forEach((d) => items.push({ kind: 'dataset', name: d.name, ts: d.mtime }));
-  items.sort((a, b) => b.ts - a.ts);
-  const list = $('#activity');
-  list.innerHTML = '';
-  if (!items.length) list.appendChild(h('li', 'muted', 'Nothing here yet — start with a recording.'));
-  items.slice(0, 9).forEach((it) => {
-    const li = h('li');
-    li.appendChild(h('span', 'act-kind', it.kind));
-    li.appendChild(h('span', 'act-name', it.name));
-    li.appendChild(h('span', 'act-when', fmtAgo(it.ts)));
-    list.appendChild(li);
+/** Open "More functions" at one stage. Stages whose only commands are the
+ *  everyday ones (capture, say) have nothing extra to show, so those scroll to
+ *  the cards at the top instead of opening an empty list. */
+function jumpToStage(stage) {
+  const target = moreCommands().some((c) => c.stage === stage)
+    ? (S.moreOpen = true, renderMoreFunctions(), $(`.more-group[data-stage="${stage}"]`))
+    : $('#pipelineGroups');
+  if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+/** The rest of the catalog, listed compactly under "More functions". Ignores
+ *  the search box and the stage filter on purpose: this is the full index of
+ *  what the project can do, so it must never quietly hide a command. */
+function renderMoreFunctions() {
+  const wrap = $('#moreGroups');
+  const toggle = $('#moreToggle');
+  const cmds = moreCommands();
+  $('#moreCount').textContent = `${cmds.length} commands.`;
+
+  if (!toggle.dataset.wired) {
+    toggle.dataset.wired = '1';
+    toggle.onclick = () => { S.moreOpen = !S.moreOpen; renderMoreFunctions(); };
+  }
+  toggle.setAttribute('aria-expanded', S.moreOpen ? 'true' : 'false');
+  toggle.classList.toggle('is-open', S.moreOpen);
+  wrap.hidden = !S.moreOpen;
+  if (!S.moreOpen) return;
+
+  wrap.innerHTML = '';
+  S.catalog.stages.forEach((stage) => {
+    const here = cmds.filter((c) => c.stage === stage.id);
+    if (!here.length) return;
+    const group = h('section', 'more-group');
+    group.dataset.stage = stage.id;
+    const head = h('div', 'more-group-head');
+    head.appendChild(h('h3', null, stage.title));
+    head.appendChild(h('span', null, stage.blurb));
+    group.appendChild(head);
+    here.forEach((c) => group.appendChild(moreRow(c)));
+    wrap.appendChild(group);
   });
+}
+
+/** One command as a compact row: what it is called, what it does, what it costs. */
+function moreRow(c) {
+  const row = h('button', 'more-row');
+  row.appendChild(h('div', 'more-icon', c.icon));
+  const txt = h('div', 'more-text');
+  const names = h('div', 'more-names');
+  names.appendChild(h('span', 'more-name', c.title));
+  names.appendChild(h('span', 'more-cli', c.cli));
+  if (c.gui) names.appendChild(h('span', 'flag gui', 'opens a window'));
+  if (c.long_running) names.appendChild(h('span', 'flag slow', 'long running'));
+  txt.appendChild(names);
+  txt.appendChild(h('div', 'more-desc', c.tagline));
+  row.appendChild(txt);
+  row.onclick = () => openDrawer(c.id);
+  return row;
 }
 
 function quickButton(cmdId, title, desc, prefill) {
@@ -217,9 +268,13 @@ function quickButton(cmdId, title, desc, prefill) {
 }
 
 /* ====================================================== COMMAND GROUPINGS */
-/** The ten main-loop commands, in workflow order. */
-function pipelineCommands() {
-  return S.catalog.commands.filter((c) => c.tier !== 'tool');
+/** The six commands run on nearly every pass, in workflow order. */
+function coreCommands() {
+  return S.catalog.commands.filter((c) => c.tier === 'core');
+}
+/** Everything else — the rest of the main loop plus the specialists. */
+function moreCommands() {
+  return S.catalog.commands.filter((c) => c.tier !== 'core');
 }
 /** The specialist rest. */
 function toolCommands() {
@@ -373,181 +428,337 @@ function renderBoard() {
     return;
   }
 
+  body.appendChild(boardLeaderboard(shown));
   shown.forEach((suite) => {
     const rows = S.board.rows.filter((r) => r.suite === suite.name);
     body.appendChild(boardSuiteCard(suite, rows));
   });
 }
 
-/* One sweep's section: header, the contrasts already measured, the per-fold
- * chart, then every arm ranked best first. */
+/* ---------------------------------------------------------------------------
+ * Runs board v2: a contextual podium, circular score summaries, roomy run
+ * cards, and a fold matrix that stays folded until somebody asks for it.
+ * Keeping the data/notes path unchanged makes this a presentation-only change.
+ * ------------------------------------------------------------------------ */
+function boardScore(row) {
+  return row.norm_pr_auc != null ? row.norm_pr_auc : row.pr_auc;
+}
+
+function fmtRunDate(ts) {
+  if (!ts) return 'Not trained yet';
+  return new Date(ts * 1000).toLocaleDateString(undefined, {
+    year: 'numeric', month: 'short', day: 'numeric',
+  });
+}
+
+function modelLabel(model) {
+  const names = {
+    pointnet: 'PointNet classifier',
+    pointnet2: 'PointNet++ classifier',
+    pointnet2_seg: 'PointNet++ segmenter',
+  };
+  return names[model] || model || 'Unknown architecture';
+}
+
+function featureLabel(features) {
+  const f = features || [];
+  const hasGeom = f.some((x) => ['dx', 'dy', 'dz'].includes(x));
+  const hasRefl = f.includes('intensity');
+  if (hasGeom && hasRefl) return 'Geometry + reflectivity';
+  if (hasRefl) return 'Reflectivity only';
+  if (hasGeom) return 'Geometry only';
+  return f.join(' + ') || 'Inputs not recorded';
+}
+
+function scoreOrbit(row, size = 'normal') {
+  const score = boardScore(row);
+  const ring = h('div', `score-orbit ${size}${score == null ? ' is-empty' : ''}`);
+  ring.style.setProperty('--score-angle', `${Math.max(0, Math.min(1, score || 0)) * 360}deg`);
+  ring.title = score == null ? 'This run has no evaluated folds yet.'
+    : `${row.norm_pr_auc != null ? 'Normalized PR-AUC' : 'Mean PR-AUC'} ${score.toFixed(3)}`;
+  const core = h('div', 'score-orbit-core');
+  core.appendChild(h('strong', null, fmtScore(score)));
+  core.appendChild(h('span', null, row.norm_pr_auc != null ? 'NORM PR-AUC' : 'PR-AUC'));
+  ring.appendChild(core);
+  return ring;
+}
+
+/** In All, show one champion per study. Inside a filter, show its top three. */
+function boardLeaderboard(suites) {
+  const allStudies = S.boardSuite === 'all';
+  let entries = [];
+  suites.forEach((suite) => {
+    const ranked = S.board.rows
+      .filter((r) => r.suite === suite.name && boardScore(r) != null)
+      .sort((a, b) => (a.rank || 999) - (b.rank || 999));
+    if (allStudies) {
+      if (ranked[0]) entries.push({ row: ranked[0], suite, place: null });
+    } else {
+      entries = ranked.slice(0, 3).map((row, i) => ({ row, suite, place: i + 1 }));
+    }
+  });
+  const board = h('section', 'model-scoreboard');
+  const head = h('div', 'scoreboard-head');
+  const title = h('div');
+  title.appendChild(h('div', 'eyebrow', allStudies ? 'HALL OF MODELS' : 'CURRENT PODIUM'));
+  title.appendChild(h('h2', null, allStudies ? 'Study leaders' : 'Best-performing training runs'));
+  head.appendChild(title);
+  head.appendChild(h('p', null, allStudies
+    ? 'One leader from each study with evaluated models. Scores stay in their original study context.'
+    : 'Ranked against the same data, folds, and scoring method.'));
+  board.appendChild(head);
+
+  const grid = h('div', `scoreboard-grid${entries.length === 1 ? ' is-single' : ''}`);
+  entries.forEach(({ row, suite, place }) => {
+    const card = h('article', `scoreboard-model${place === 1 ? ' is-winner' : ''}`);
+    card.appendChild(h('div', 'scoreboard-rank', place == null
+      ? 'STUDY LEADER' : place === 1 ? '#1 · BEST' : `#${place}`));
+    card.appendChild(scoreOrbit(row, 'large'));
+    card.appendChild(h('h3', null, row.label));
+    const source = h('div', 'scoreboard-source');
+    source.appendChild(h('span', null, 'TRAINING RUN'));
+    source.appendChild(h('code', null, row.key));
+    card.appendChild(source);
+    card.appendChild(h('p', 'scoreboard-method', row.what || featureLabel(row.features)));
+    const foot = h('div', 'scoreboard-foot');
+    foot.appendChild(h('span', null, suite.title));
+    foot.appendChild(h('time', null, fmtRunDate(row.completed_at || row.last_activity)));
+    card.appendChild(foot);
+    grid.appendChild(card);
+  });
+  if (!entries.length) grid.appendChild(h('div', 'empty', 'No evaluated models yet.'));
+  board.appendChild(grid);
+  return board;
+}
+
+/* This later declaration replaces the legacy table renderer above. */
 function boardSuiteCard(suite, rows) {
-  const sec = h('section', 'board-suite');
+  const sec = h('section', 'card board-suite board-suite-v2');
+  rows = [...rows].sort((a, b) => (a.rank || 999) - (b.rank || 999));
 
   const head = h('div', 'board-suite-head');
-  head.appendChild(h('h2', null, suite.title));
-  const meta = [`${suite.arms} setting${suite.arms === 1 ? '' : 's'}`];
-  if (suite.folds) meta.push(`${suite.folds} folds`);
-  if (suite.noise_floor != null) meta.push(`noise floor ±${suite.noise_floor.toFixed(3)}`);
-  head.appendChild(h('span', 'board-suite-meta', meta.join(' · ')));
+  const name = h('div');
+  name.appendChild(h('div', 'eyebrow', `TRAINING STUDY · ${suite.name}`));
+  name.appendChild(h('h2', null, suite.title));
+  head.appendChild(name);
+  const stamp = h('div', 'board-suite-stamp');
+  stamp.appendChild(h('span', null, 'LAST TRAINED'));
+  stamp.appendChild(h('time', null, fmtRunDate(suite.last_activity)));
+  head.appendChild(stamp);
   sec.appendChild(head);
-  if (suite.blurb) sec.appendChild(h('p', 'board-suite-blurb', suite.blurb));
 
-  // Contrasts: the paired comparisons the report already ran, phrased as the
-  // question they answer. Delta sign follows variant minus baseline.
-  (suite.contrasts || []).forEach((c) => {
-    if (!c.metric || c.metric.mean_delta == null) return;
-    const line = h('div', 'contrast-line');
-    const d = c.metric.mean_delta;
-    const cls = Math.abs(d) < 1e-9 ? 'flat' : d > 0 ? 'pos' : 'neg';
-    line.appendChild(h('span', 'contrast-delta ' + cls,
-      `${d > 0 ? '+' : ''}${d.toFixed(3)}`));
-    line.appendChild(h('span', null,
-      `${c.variant} vs ${c.baseline} over ${c.n_folds} folds`
-      + (c.metric.p_value != null ? ` (p=${c.metric.p_value.toFixed(3)})` : '')
-      + (c.using_norm ? ', rock-share-normalized' : '')
-      + ` — ${c.question}`));
-    sec.appendChild(line);
+  const methodology = h('div', 'study-method');
+  const methodCopy = h('div');
+  methodCopy.appendChild(h('div', 'stat-label', 'METHODOLOGY'));
+  methodCopy.appendChild(h('p', null, suite.blurb || 'No study description was recorded.'));
+  methodology.appendChild(methodCopy);
+  const stats = h('div', 'study-stat-grid');
+  [
+    ['SETTINGS', suite.arms],
+    ['EVALUATION FOLDS', suite.folds || '—'],
+    ['TRAINING DATA', suite.cache || 'custom'],
+    ['REPEAT VARIATION', suite.noise_floor == null ? '—' : `±${suite.noise_floor.toFixed(3)}`],
+  ].forEach(([label, value]) => {
+    const stat = h('div');
+    stat.appendChild(h('span', null, label));
+    stat.appendChild(h('strong', null, String(value)));
+    stats.appendChild(stat);
   });
+  methodology.appendChild(stats);
+  sec.appendChild(methodology);
 
-  // Per-fold columns, one series per arm, so shape differences across folds
-  // are visible at a glance. Missing folds are NaN — the chart draws gaps.
+  const findings = (suite.contrasts || []).filter((c) => c.metric && c.metric.mean_delta != null);
+  if (findings.length) sec.appendChild(studyFindings(suite, findings));
+
+  const atlasHead = h('div', 'run-atlas-head');
+  const atlasTitle = h('div');
+  atlasTitle.appendChild(h('div', 'eyebrow', 'RUN ATLAS'));
+  atlasTitle.appendChild(h('h3', null, 'Every model setting in this study'));
+  atlasHead.appendChild(atlasTitle);
+  atlasHead.appendChild(h('p', null, 'Click a card for the complete configuration and fold results.'));
+  sec.appendChild(atlasHead);
+  const atlas = h('div', 'run-atlas');
+  rows.forEach((row, i) => atlas.appendChild(boardRow(row, i)));
+  sec.appendChild(atlas);
+
   const scored = rows.filter((r) => r.per_fold.some((f) => f.pr_auc != null));
-  if (scored.length > 1) {
-    const folds = [...new Set(scored.flatMap((r) => r.per_fold.map((f) => f.fold)))].sort();
-    sec.appendChild(window.Charts.groupedColumns({
-      categories: folds,
-      series: scored.map((r) => ({
-        name: r.label,
-        values: folds.map((f) => {
-          const pf = r.per_fold.find((x) => x.fold === f);
-          return pf ? (pf.norm_pr_auc != null ? pf.norm_pr_auc : pf.pr_auc) : NaN;
-        }),
-      })),
-      max: 1,
-      caption: `${suite.title}: per-fold scores, rock-share-normalized where the fold's rock share is known.`,
-    }));
+  if (scored.length) {
+    const compare = h('details', 'suite-compare');
+    const summary = h('summary');
+    summary.appendChild(h('span', null, 'EXPLORE FOLD-BY-FOLD COMPARISON'));
+    summary.appendChild(h('small', null, 'Circle color and value show performance on the same held-out recording.'));
+    compare.appendChild(summary);
+    compare.appendChild(foldMatrix(suite, scored));
+    sec.appendChild(compare);
   }
-
-  const tbl = h('table');
-  const thead = h('thead');
-  const hr = h('tr');
-  // Column order matches boardRow's cells exactly.
-  ['#', 'Setting', 'Score', '', 'Folds', 'Range', 'Note', ''].forEach((label, i) => {
-    hr.appendChild(h('th', i === 4 || i === 5 ? 'num' : '', label));
-  });
-  thead.appendChild(hr);
-  tbl.appendChild(thead);
-  const tbody = h('tbody');
-  rows.forEach((row, i) => {
-    const [trMain, detail] = boardRow(row, i);
-    tbody.appendChild(trMain);
-    tbody.appendChild(detail);
-  });
-  tbl.appendChild(tbody);
-
-  const wrap = h('div', 'table-wrap');
-  wrap.appendChild(tbl);
-  sec.appendChild(wrap);
   return sec;
 }
 
-/** One arm row plus its detail line, returned as [mainTr, detailTr] for the
- *  tbody. The whole main row toggles the detail; the note button must not.
- *  The detail is built eagerly (it is cheap, all numbers are already in hand)
- *  and the note editor is appended whenever this row is the one being edited —
- *  opening or closing an editor re-renders the board, so no lazy filling is
- *  needed here. Keys go through S.openRows so expansion survives the poll's
- *  re-render, same as the Data tables. */
+function studyFindings(suite, findings) {
+  const details = h('details', 'study-findings');
+  const summary = h('summary');
+  summary.appendChild(h('span', null, 'WHAT THIS STUDY LEARNED'));
+  summary.appendChild(h('small', null, `${findings.length} measured comparison${findings.length === 1 ? '' : 's'}`));
+  details.appendChild(summary);
+  const grid = h('div', 'finding-grid');
+  findings.forEach((c) => {
+    const d = c.metric.mean_delta;
+    const withinNoise = suite.noise_floor != null && Math.abs(d) <= suite.noise_floor;
+    const cls = withinNoise ? 'flat' : d > 0 ? 'pos' : 'neg';
+    const card = h('article', `finding-card ${cls}`);
+    const top = h('div', 'finding-result');
+    top.appendChild(h('strong', null, `${d > 0 ? '+' : ''}${d.toFixed(3)}`));
+    top.appendChild(h('span', null, withinNoise ? 'WITHIN REPEAT VARIATION'
+      : d > 0 ? 'VARIANT IMPROVED' : 'VARIANT DECLINED'));
+    card.appendChild(top);
+    card.appendChild(h('p', null, c.question));
+    card.appendChild(h('code', null, `${c.variant} vs ${c.baseline}`));
+    card.appendChild(h('small', null, `${c.n_folds || '?'} paired folds`
+      + (c.metric.p_value != null ? ` · p=${c.metric.p_value.toFixed(3)}` : '')
+      + (c.using_norm ? ' · normalized' : '')));
+    grid.appendChild(card);
+  });
+  details.appendChild(grid);
+  return details;
+}
+
+function shortFold(name) {
+  return String(name).replace(/\.reslam$/i, '').replace(/^VolleyBallTest/i, 'VB');
+}
+
+function foldMatrix(suite, rows) {
+  const folds = [...new Set(rows.flatMap((r) => r.per_fold.map((f) => f.fold)))].sort();
+  const fig = h('figure', 'chart-figure fold-matrix');
+  const scroll = h('div', 'fold-matrix-scroll');
+  const header = h('div', 'fold-matrix-row fold-matrix-header');
+  header.style.gridTemplateColumns = `minmax(220px, 1fr) repeat(${folds.length}, 42px)`;
+  header.appendChild(h('span', null, 'MODEL SETTING'));
+  folds.forEach((fold) => {
+    const cell = h('span', null, shortFold(fold));
+    cell.title = fold;
+    header.appendChild(cell);
+  });
+  scroll.appendChild(header);
+  rows.forEach((row) => {
+    const line = h('div', 'fold-matrix-row');
+    line.style.gridTemplateColumns = `minmax(220px, 1fr) repeat(${folds.length}, 42px)`;
+    const label = h('div', 'fold-matrix-label');
+    label.appendChild(h('strong', null, `#${row.rank || '—'} ${row.label}`));
+    label.appendChild(h('code', null, row.arm));
+    line.appendChild(label);
+    folds.forEach((fold) => {
+      const pf = row.per_fold.find((f) => f.fold === fold);
+      const value = pf && (pf.norm_pr_auc != null ? pf.norm_pr_auc : pf.pr_auc);
+      const cell = h('div', 'fold-matrix-cell');
+      const dot = h('span', `fold-score-dot${value == null ? ' missing'
+        : value >= 0.7 ? ' high' : value >= 0.4 ? ' mid' : ' low'}`,
+      value == null ? '—' : String(Math.round(value * 100)));
+      dot.title = value == null ? `${fold}: not evaluated`
+        : `${fold}: ${value.toFixed(3)} ${pf.norm_pr_auc != null ? 'normalized PR-AUC' : 'PR-AUC'}`;
+      dot.setAttribute('aria-label', dot.title);
+      cell.appendChild(dot);
+      line.appendChild(cell);
+    });
+    scroll.appendChild(line);
+  });
+  fig.appendChild(scroll);
+  fig.appendChild(h('figcaption', null,
+    `${suite.title} · values are percentages; normalized where rock prevalence is known.`));
+  return fig;
+}
+
+/* This later declaration replaces the legacy table-row renderer above. */
 function boardRow(row, index) {
-  const trMain = h('tr', 'board-row board-row-main');
-  const detail = h('tr', 'row-detail');
-  const td = h('td');
-  td.colSpan = 99;
+  const card = h('article', `board-row board-run-card${index === 0 ? ' is-best' : ''}`);
+  const main = h('div', 'board-row-main');
+  main.setAttribute('role', 'button');
+  main.setAttribute('tabindex', '0');
+  const detail = h('div', 'row-detail');
   const inner = h('div', 'row-detail-inner');
-  td.appendChild(inner);
-  detail.appendChild(td);
+  detail.appendChild(inner);
 
   const key = `board:${row.key}`;
-  const caret = h('button', 'expander', '▸');
+  const caret = h('button', 'expander run-expand', '▸');
   caret.setAttribute('aria-label', `Details for ${row.label}`);
   const apply = (open) => {
     detail.hidden = !open;
-    trMain.classList.toggle('is-open', open);
+    card.classList.toggle('is-open', open);
     caret.textContent = open ? '▾' : '▸';
+    caret.setAttribute('aria-expanded', open ? 'true' : 'false');
     if (open) S.openRows.add(key);
     else S.openRows.delete(key);
   };
 
-  // -- rank
-  trMain.appendChild(h('td', 'board-rank', String(index + 1)));
-  // -- arm identity
-  const armTd = h('td', 'board-arm');
-  const nameEl = h('div', 'board-arm-name', row.label);
-  nameEl.appendChild(h('span', `kind-badge ${row.kind === 'segmenter' ? 'seg' : 'cls'}`,
+  const top = h('div', 'run-card-top');
+  top.appendChild(h('span', 'board-rank', index === 0 ? '#1 BEST IN STUDY' : `#${index + 1} IN STUDY`));
+  const status = row.folds_total && row.folds_done >= row.folds_total ? 'COMPLETE'
+    : row.folds_done ? 'PARTIAL' : 'PLANNED';
+  top.appendChild(h('span', `run-status ${status.toLowerCase()}`, status));
+  main.appendChild(top);
+
+  const overview = h('div', 'run-card-overview');
+  overview.appendChild(scoreOrbit(row));
+  const arm = h('div', 'board-arm');
+  const name = h('h3', 'board-arm-name', row.label);
+  name.appendChild(h('span', `kind-badge ${row.kind === 'segmenter' ? 'seg' : 'cls'}`,
     row.kind === 'segmenter' ? 'SEG' : 'CLS'));
-  armTd.appendChild(nameEl);
-  armTd.appendChild(h('div', 'board-arm-sub', (row.features || []).join(' ')));
-  trMain.appendChild(armTd);
-  // -- score: normalized when the fold populations allow it, raw otherwise
-  const useNorm = row.norm_pr_auc != null;
-  const scoreVal = useNorm ? row.norm_pr_auc : row.pr_auc;
-  const scoreTd = h('td', 'board-score');
-  const num = h('div', `board-score-num${index === 0 ? ' best' : ''}`, fmtScore(scoreVal));
-  num.title = useNorm
-    ? 'Rock-share-normalized mean: guessing scores 0, perfect scores 1.'
-    : 'Mean PR-AUC across finished folds.';
-  scoreTd.appendChild(num);
-  scoreTd.appendChild(h('div', 'board-score-lbl', useNorm ? 'normalized' : 'PR-AUC'));
-  const bar = h('div', 'bar');
-  const barFill = h('div', 'bar-fill');
-  barFill.style.width = `${Math.max(0, Math.min(1, scoreVal || 0)) * 100}%`;
-  bar.appendChild(barFill);
-  scoreTd.appendChild(bar);
-  trMain.appendChild(scoreTd);
-  // -- spacer column matching the header's ''
-  trMain.appendChild(h('td'));
-  // -- folds done
-  const foldsTd = h('td', 'board-folds');
-  foldsTd.appendChild(h('span', 'done', String(row.folds_done)));
-  foldsTd.appendChild(document.createTextNode(
-    `/${row.folds_total || '?'}` + (row.reported ? ' ✓' : '')));
-  trMain.appendChild(foldsTd);
-  // -- best…worst spread
-  const rangeTd = h('td', 'board-range');
-  rangeTd.textContent = row.best_fold_pr_auc != null
-    ? `${fmtScore(row.best_fold_pr_auc)} … ${fmtScore(row.worst_fold_pr_auc)}`
-    : '—';
-  rangeTd.title = row.best_fold
-    ? `best ${row.best_fold}, worst ${row.worst_fold}` : '';
-  trMain.appendChild(rangeTd);
-  // -- note: seeded conclusions italic until typed over
-  const noteTd = h('td', 'board-note' + (row.note_source === 'seed' ? ' seed' : ''));
-  const noteWrap = h('div', 'note-text', row.note || '');
-  noteWrap.title = row.note_source === 'seed'
+  arm.appendChild(name);
+  arm.appendChild(h('code', 'run-id', row.key));
+  arm.appendChild(h('p', 'run-method', row.what || 'No methodology description recorded.'));
+  const tags = h('div', 'run-tags');
+  [modelLabel(row.model), featureLabel(row.features),
+    `seed ${row.seed == null ? 'default' : row.seed}`].forEach((tag) => tags.appendChild(h('span', null, tag)));
+  arm.appendChild(tags);
+  overview.appendChild(arm);
+  main.appendChild(overview);
+
+  const metrics = h('div', 'run-metrics');
+  [
+    ['TRAINED', fmtRunDate(row.completed_at || row.last_activity)],
+    ['FOLDS', `${row.folds_done}/${row.folds_total || '?'}`],
+    ['BEST FOLD', row.best_fold_pr_auc == null ? '—' : fmtScore(row.best_fold_pr_auc)],
+    ['WORST FOLD', row.worst_fold_pr_auc == null ? '—' : fmtScore(row.worst_fold_pr_auc)],
+  ].forEach(([label, value]) => {
+    const item = h('div');
+    item.appendChild(h('span', null, label));
+    item.appendChild(h('strong', null, value));
+    metrics.appendChild(item);
+  });
+  main.appendChild(metrics);
+
+  const note = h('div', 'board-note' + (row.note_source === 'seed' ? ' seed' : ''));
+  note.appendChild(h('div', 'stat-label', row.note_source === 'seed' ? 'MEASURED TAKEAWAY' : 'RUN NOTE'));
+  const noteText = h('div', 'note-text', row.note || 'No takeaway recorded yet.');
+  noteText.title = row.note_source === 'seed'
     ? 'Measured conclusion from the sweep report — edit to override.' : '';
-  noteTd.appendChild(noteWrap);
+  note.appendChild(noteText);
   const editBtn = h('button', 'note-edit-btn', row.note ? 'edit' : '+ note');
   editBtn.onclick = (e) => {
     e.stopPropagation();
     S.noteEditing = S.noteEditing === row.key ? null : row.key;
+    if (S.noteEditing) S.openRows.add(key);
     renderBoard();
   };
-  noteTd.appendChild(editBtn);
-  trMain.appendChild(noteTd);
-  // -- caret
-  const caretTd = h('td');
-  caretTd.appendChild(caret);
-  trMain.appendChild(caretTd);
+  note.appendChild(editBtn);
+  main.appendChild(note);
 
-  caretTd.onclick = (e) => { e.stopPropagation(); apply(detail.hidden); };
-  trMain.onclick = () => apply(detail.hidden);
+  const foot = h('div', 'run-card-foot');
+  foot.appendChild(h('span', null, 'INSPECT CONFIGURATION & FOLD RESULTS'));
+  foot.appendChild(caret);
+  main.appendChild(foot);
+
+  caret.onclick = (e) => { e.stopPropagation(); apply(detail.hidden); };
+  main.onclick = () => apply(detail.hidden);
+  main.onkeydown = (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); apply(detail.hidden); }
+  };
 
   fillDetail(inner, row);
   if (S.noteEditing === row.key) inner.appendChild(noteEditor(row));
   apply(S.openRows.has(key));
-
-  return [trMain, detail];
+  card.appendChild(main);
+  card.appendChild(detail);
+  return card;
 }
 
 /* The note editor: textarea prefilled with the current text (seed text too —
@@ -610,16 +821,42 @@ function noteEditor(row) {
   return box;
 }
 
-/** The detail under an arm row: settings, per-fold chips. */
+function prettyParam(key, value) {
+  const labels = {
+    epochs: 'Epoch cap', batch: 'Batch size', lr: 'Learning rate',
+    weight_decay: 'Weight decay', patience: 'Early-stop patience',
+    augment: 'Augmentation', gap_frames: 'Validation gap (frames)',
+    gap_seconds: 'Validation gap (seconds)', tnet: 'T-Net', dropout: 'Dropout',
+    training_runs: 'Training recordings', aug_intensity_gain: 'Intensity gain jitter',
+    aug_intensity_shift: 'Intensity shift jitter', levels: 'Neighborhood levels',
+  };
+  const shown = value === true ? 'on' : value === false ? 'off'
+    : value == null ? 'none' : String(value);
+  return [labels[key] || key.replaceAll('_', ' '), shown];
+}
+
+/** Full run specification and fold evidence, revealed from the roomy card. */
 function fillDetail(inner, row) {
+  const head = h('div', 'run-detail-head');
+  const title = h('div');
+  title.appendChild(h('div', 'eyebrow', 'RUN SPECIFICATION'));
+  title.appendChild(h('h4', null, row.key));
+  head.appendChild(title);
+  head.appendChild(h('span', null, row.completed_at
+    ? `Completed ${fmtRunDate(row.completed_at)}`
+    : `Last activity ${fmtRunDate(row.last_activity)}`));
+  inner.appendChild(head);
+
   const grid = h('div', 'detail-grid');
-  grid.appendChild(detailItem('Model', row.model || '—'));
-  grid.appendChild(detailItem('Channels', (row.features || []).join(' ') || '—'));
-  const ov = Object.entries(row.overrides || {});
-  grid.appendChild(detailItem('Overrides', ov.length
-    ? ov.map(([k, v]) => `${k}=${v}`).join(', ') : 'none'));
-  grid.appendChild(detailItem('Seed', row.seed == null ? 'default' : String(row.seed)));
-  grid.appendChild(detailItem('Last activity', fmtAgo(row.last_activity)));
+  grid.appendChild(detailItem('Architecture', modelLabel(row.model)));
+  grid.appendChild(detailItem('Input methodology', featureLabel(row.features)));
+  grid.appendChild(detailItem('Exact channels', (row.features || []).join(', ') || '—'));
+  grid.appendChild(detailItem('Random seed', row.seed == null ? 'default' : String(row.seed)));
+  grid.appendChild(detailItem('Mean raw PR-AUC', fmtScore(row.pr_auc)));
+  grid.appendChild(detailItem('Mean normalized PR-AUC', fmtScore(row.norm_pr_auc)));
+  grid.appendChild(detailItem('Mean F1', fmtScore(row.f1)));
+  grid.appendChild(detailItem('Precision / recall', row.precision == null && row.recall == null
+    ? '—' : `${fmtScore(row.precision)} / ${fmtScore(row.recall)}`));
   if (row.best_fold) {
     grid.appendChild(detailItem('Best / worst fold',
       `${row.best_fold} (${fmtScore(row.best_fold_pr_auc)}) / `
@@ -627,12 +864,43 @@ function fillDetail(inner, row) {
   }
   inner.appendChild(grid);
 
+  const configs = h('div', 'config-columns');
+  [
+    ['TRAINING PARAMETERS', Object.entries(row.training || {})],
+    ['CHANGES FROM STUDY DEFAULT', Object.entries(row.overrides || {})],
+  ].forEach(([label, entries]) => {
+    const panel = h('div', 'config-panel');
+    panel.appendChild(h('div', 'stat-label', label));
+    const list = h('dl');
+    if (!entries.length) {
+      const empty = h('div', 'config-empty', label.startsWith('CHANGES')
+        ? 'None — this used the study defaults.' : 'No training configuration was recorded.');
+      panel.appendChild(empty);
+    } else {
+      entries.forEach(([key, value]) => {
+        const [name, shown] = prettyParam(key, value);
+        list.appendChild(h('dt', null, name));
+        list.appendChild(h('dd', null, shown));
+      });
+      panel.appendChild(list);
+    }
+    configs.appendChild(panel);
+  });
+  inner.appendChild(configs);
+
+  const foldsHead = h('div', 'fold-detail-head');
+  foldsHead.appendChild(h('div', 'stat-label', 'HELD-OUT FOLD RESULTS'));
+  foldsHead.appendChild(h('span', null, 'Each fold is a recording the model never saw during training.'));
+  inner.appendChild(foldsHead);
   const chips = h('div', 'board-fold-chips');
   row.per_fold.forEach((f) => {
     const c = h('span', `fold-chip${f.pr_auc == null ? ' missing' : ''}`);
-    c.appendChild(document.createTextNode(`${f.fold} `));
-    c.appendChild(h('b', null, fmtScore(f.pr_auc)));
-    if (f.norm_pr_auc != null) c.appendChild(document.createTextNode(` · norm ${f.norm_pr_auc.toFixed(3)}`));
+    c.appendChild(h('span', 'fold-chip-name', f.fold));
+    const value = h('span', 'fold-chip-score');
+    value.appendChild(h('b', null, fmtScore(f.norm_pr_auc != null ? f.norm_pr_auc : f.pr_auc)));
+    value.appendChild(h('small', null, f.norm_pr_auc != null ? 'normalized' : 'PR-AUC'));
+    c.appendChild(value);
+    if (f.f1 != null) c.appendChild(h('span', 'fold-chip-f1', `F1 ${f.f1.toFixed(3)}`));
     if (!f.on_disk) c.title = 'Planned but not trained yet.';
     chips.appendChild(c);
   });
@@ -648,16 +916,18 @@ function detailItem(label, value) {
 }
 
 /* =================================================================== TRAINING */
-/* What is on the GPU right now.
+/* The GPU's logbook: what is on it now, and every sweep that came before.
  *
- * Reads only what training already writes to disk — history.csv per epoch,
- * test_metrics.json when a fold ends — so it works for a sweep started from a
- * terminal just as well as one launched from here. Both of the long sweeps
- * this project has run were started from a terminal.
+ * Two halves, and the split is the point. The top half is live — read from
+ * what training already writes to disk (history.csv per epoch, test_metrics
+ * .json when a fold ends), so a sweep started from a terminal shows up exactly
+ * like one started here. The bottom half is history: one card per campaign,
+ * with a written verdict and a payoff score out of ten.
  *
- * Per experiment, top to bottom: a status line in words, the four numbers you
- * act on, one bar for the whole sweep, the live validation curve of the fold
- * in flight, then every fold as a tile colored by where it stands. */
+ * Campaigns are the coarse unit on purpose. The Runs page goes one row per
+ * arm with fold-level evidence; this page answers "what have we already tried,
+ * and how did it go" without making you read a table to find out. */
+
 function renderTraining() {
   const body = $('#trainingBody');
   body.innerHTML = '';
@@ -670,33 +940,100 @@ function renderTraining() {
     return tb - ta;
   });
 
-  if (!active.length) {
-    body.appendChild(emptyState('Nothing training right now',
-      'Train one fold to check a setting works, or start an ablation sweep '
-      + 'for the full matrix overnight. Finished sweeps land on the Runs page.'));
+  // A sweep with folds left over but nothing moving for hours is not "queued".
+  // Both of this project's unfinished sweeps were stopped deliberately, and a
+  // panel promising "~26h remaining" for work nobody intends to run is the
+  // single most misleading thing this page used to say.
+  const isLive = (t) => t.counts.running > 0 || t.counts.stalled > 0;
+  const live = active.filter(isLive);
+  const idle = active.filter((t) => !isLive(t));
+
+  body.appendChild(sectionHead('On the GPU now',
+    live.length
+      ? 'Fold by fold, epoch by epoch. A sweep started from a terminal shows up here too.'
+      : (idle.length
+        ? 'Nothing is training. One sweep has folds left unrun — see below for why.'
+        : 'Nothing is training.')));
+
+  if (live.length) {
+    live.forEach((t) => body.appendChild(trainCard(t)));
+  } else {
+    body.appendChild(emptyState('Nothing is training right now',
+      'Train one fold to check a setting works, or start an ablation sweep for '
+      + 'the full matrix overnight. Only one job at a time on this GPU — two at '
+      + 'once slow each other by about nine times.'));
     const q = h('div', 'quick');
     q.style.marginTop = '16px';
     q.appendChild(quickButton('train-cache', 'Build cache', 'Pool datasets for training.'));
     q.appendChild(quickButton('train-train', 'Train one fold', 'One setting, one held-out run.'));
     q.appendChild(quickButton('train-ablate', 'Ablation sweep', 'The full matrix, overnight.'));
     body.appendChild(q);
-    return;
   }
-  active.forEach((t) => body.appendChild(trainCard(t)));
+
+  // Sweeps with folds still unrun, but stopped. Named honestly and given the
+  // reason from the campaign write-up when there is one.
+  idle.forEach((t) => body.appendChild(unfinishedCard(t)));
+
+  body.appendChild(historySection());
 }
 
-/** One experiment's monitor card. */
+/** A titled divider between the two halves of the page. */
+function sectionHead(title, sub) {
+  const d = h('div', 'train-section');
+  d.appendChild(h('h2', null, title));
+  if (sub) d.appendChild(h('p', 'card-sub', sub));
+  return d;
+}
+
+/** A sweep that has unrun folds but has not moved in hours. */
+function unfinishedCard(t) {
+  const c = t.counts;
+  const upd = t.updated ? Date.parse(t.updated) / 1000 : null;
+  const card = h('section', 'card train-idle');
+  const head = h('div', 'train-head');
+  const idBox = h('div', 'train-id');
+  const title = h('h2', 'train-title', t.experiment);
+  title.appendChild(h('span', 'train-state idle', 'stopped'));
+  idBox.appendChild(title);
+  idBox.appendChild(h('div', 'train-path', t.path));
+  head.appendChild(idBox);
+  if (upd) head.appendChild(h('span', 'train-updated', `last fold ${fmtAgo(upd)}`));
+  card.appendChild(head);
+
+  // Deliberately no time-remaining estimate: nothing is going to run.
+  card.appendChild(h('p', 'train-idle-line',
+    `${c.done} of ${t.folds_total} folds ran, then it stopped. `
+    + `${c.pending} were never started`
+    + (c.stalled ? ` and ${c.stalled} stopped partway` : '')
+    + '. Nothing has moved since, so there is no time estimate here — this is '
+    + 'not a queue waiting its turn.'));
+
+  // The reason the queue was abandoned, when the write-up records one. That is
+  // a different question from what the finished folds showed, so it falls back
+  // to nothing rather than to the results summary.
+  const why = (S.campaigns || []).find((x) => x.name === t.experiment);
+  if (why && why.stopped_reason) {
+    const box = h('div', 'train-why');
+    box.appendChild(h('div', 'stat-label', 'Why it stopped'));
+    box.appendChild(h('p', null, why.stopped_reason));
+    card.appendChild(box);
+  }
+  card.appendChild(foldGrid(t));
+  return card;
+}
+
+/** One experiment's live monitor card. */
 function trainCard(t) {
   const c = t.counts;
   const live = c.running;
-  const stateWord = live ? 'training now' : c.stalled ? 'stalled' : 'queued';
+  const stateWord = live ? 'training now' : 'stalled';
 
   const card = h('section', 'card train-run');
   const head = h('div', 'train-head');
   const idBox = h('div', 'train-id');
   const title = h('h2', 'train-title', t.experiment);
   title.appendChild(h('span',
-    `train-state${live ? ' live' : ''}${!live && c.stalled ? ' stall' : ''}`, stateWord));
+    `train-state${live ? ' live' : ' stall'}`, stateWord));
   idBox.appendChild(title);
   idBox.appendChild(h('div', 'train-path', t.path));
   head.appendChild(idBox);
@@ -726,7 +1063,7 @@ function trainCard(t) {
   stats.appendChild(trainStat(
     'In flight', live ? String(live) : '—',
     live ? (t.in_flight[0] ? `holding out ${t.in_flight[0].fold}` : '')
-      : (c.stalled ? 'nothing has moved recently' : 'not started yet')));
+      : 'nothing has moved recently'));
   stats.appendChild(trainStat(
     'Arms', String(t.arms.length), t.arms.join(', ') || '—'));
   card.appendChild(stats);
@@ -739,7 +1076,8 @@ function trainCard(t) {
   card.appendChild(meter);
 
   // The fold actually in flight: its own epoch progress plus the validation
-  // curve, which is the difference between "working" and "working well".
+  // curve. Worth a warning — on this data the validation curve rises while
+  // the held-out score falls, so it says "still learning", not "getting better".
   t.in_flight.forEach((f) => {
     const box = h('div', 'train-fold-live');
     const label = h('div', 'card-sub');
@@ -767,16 +1105,23 @@ function trainCard(t) {
           { name: 'val PR-AUC', values: pts.map((r) => r.val_pr_auc) },
           { name: 'val loss', values: pts.map((r) => r.val_loss) },
         ],
-        caption: 'How well this fold scores on data held back from its own training, '
-               + 'after each pass over the data. A curve that has gone flat means the '
-               + 'fold is about to stop early.',
+        caption: 'Scored on data held back from this fold’s own training, after '
+               + 'each pass. A flat curve means the fold is about to stop early. '
+               + 'It does NOT say the change is working: the held-back slice comes '
+               + 'from recordings the model has already seen, and it has risen '
+               + 'here while the held-out score fell.',
       }));
     }
     card.appendChild(box);
   });
 
-  // Every fold as a tile: fill = score, color = status. The whole story of
-  // the sweep in one glance — which recordings were hard, where it stopped.
+  card.appendChild(foldGrid(t));
+  return card;
+}
+
+/** Every fold as a tile: fill = score, colour = status, plus its legend. */
+function foldGrid(t) {
+  const wrap = h('div');
   const grid = h('div', 'fold-grid');
   t.folds.forEach((f) => {
     const tile = h('button', `fold-tile fs-${f.status}`);
@@ -794,8 +1139,7 @@ function trainCard(t) {
     tile.appendChild(foot);
     grid.appendChild(tile);
   });
-  card.appendChild(grid);
-  // The tiles are colored, so say what each color means right under them.
+  wrap.appendChild(grid);
   const lg = h('div', 'legend train-legend');
   [['fs-done', 'finished'], ['fs-running', 'running'],
    ['fs-stalled', 'stopped partway'], ['fs-pending', 'not started']]
@@ -805,8 +1149,8 @@ function trainCard(t) {
       it.appendChild(document.createTextNode(word));
       lg.appendChild(it);
     });
-  card.appendChild(lg);
-  return card;
+  wrap.appendChild(lg);
+  return wrap;
 }
 
 function trainStat(label, value, sub) {
@@ -817,7 +1161,157 @@ function trainStat(label, value, sub) {
   return d;
 }
 
-/* =================================================================== DATA */
+/* -------------------------------------------------------- campaign history */
+
+/** Read the history if it has never been read, or if folds have landed since.
+ *  It walks every fold directory, so like the board it stays off the 5 s poll. */
+function ensureCampaigns() {
+  if (S.campaignsLoading) return;
+  if (!S.campaigns || S.campaignSig !== S.invSig) loadCampaigns();
+}
+
+async function loadCampaigns() {
+  if (S.campaignsLoading) return;
+  S.campaignsLoading = true;
+  try {
+    const d = await api('/api/campaigns');
+    S.campaigns = d.campaigns;
+    S.campaignScale = d.scale;
+    S.campaignSig = S.invSig;
+  } catch (e) {
+    toast(`Could not read the campaign history: ${e.message}`, 'err');
+  } finally {
+    S.campaignsLoading = false;
+    if (S.view === 'training') renderTraining();
+  }
+}
+
+/** The written history: one card per sweep, newest first. */
+function historySection() {
+  const wrap = h('div', 'train-history');
+  wrap.appendChild(sectionHead('Every sweep so far',
+    'What each one asked, what it cost, where it fell down, and what it left behind.'));
+
+  if (!S.campaigns) {
+    wrap.appendChild(h('div', 'muted', 'reading the experiment folders…'));
+    return wrap;
+  }
+  if (!S.campaigns.length) {
+    wrap.appendChild(emptyState('No sweeps have run yet',
+      'Finished sweeps land here with a write-up and a score.'));
+    return wrap;
+  }
+
+  // The scale has to be stated. Without it a "4 out of 10" reads as the
+  // model's accuracy, which is exactly the wrong idea.
+  wrap.appendChild(h('p', 'alert-line', S.campaignScale || ''));
+  S.campaigns.forEach((c) => wrap.appendChild(campaignCard(c)));
+  return wrap;
+}
+
+/** Where a payoff score sits, for colouring the chip. */
+function scoreBand(n) {
+  if (n == null) return 'none';
+  if (n >= 8) return 'high';
+  if (n >= 6) return 'mid';
+  if (n >= 4) return 'low';
+  return 'poor';
+}
+
+function campaignCard(c) {
+  const card = h('section', `card campaign${c.retired ? ' is-retired' : ''}`);
+
+  const head = h('div', 'camp-head');
+  const chip = h('div', `camp-score band-${scoreBand(c.score)}`);
+  chip.appendChild(h('span', 'camp-score-n', c.score == null ? '—' : String(c.score)));
+  chip.appendChild(h('span', 'camp-score-d', '/10'));
+  chip.title = 'Payoff out of ten — what this sweep bought, not the model’s accuracy.';
+  head.appendChild(chip);
+
+  const titles = h('div', 'camp-titles');
+  const line = h('h3', 'camp-title', c.title);
+  if (c.retired) line.appendChild(h('span', 'camp-tag', 'retired'));
+  titles.appendChild(line);
+  if (c.verdict) titles.appendChild(h('p', 'camp-verdict', c.verdict));
+  titles.appendChild(h('div', 'train-path', c.path));
+  head.appendChild(titles);
+  card.appendChild(head);
+
+  // What it cost, measured off disk every time rather than written down.
+  const meta = h('div', 'camp-meta');
+  const when = c.finished
+    ? new Date(c.finished * 1000).toLocaleDateString()
+    : '—';
+  [['Folds trained', String(c.folds_done)],
+   ['Settings tried', String(c.arms.length)],
+   ['GPU time', c.gpu_hours != null ? `${c.gpu_hours}h` : '—'],
+   ['Last ran', when]].forEach(([k, v]) => {
+    const cell = h('div', 'camp-meta-cell');
+    cell.appendChild(h('span', 'stat-label', k));
+    cell.appendChild(h('span', 'camp-meta-v', v));
+    meta.appendChild(cell);
+  });
+  card.appendChild(meta);
+
+  if (c.retired) {
+    card.appendChild(h('p', 'camp-retired-note',
+      'Kept off the Runs board on purpose. This ran on the old indoor '
+      + 'recordings, where rocks were a much larger share of every sample — '
+      + 'its scores are not comparable with anything from the volleyball court.'));
+  }
+
+  // The write-up. Four fixed questions, always in the same order, so two
+  // campaigns can be read against each other without hunting.
+  const prose = h('div', 'camp-prose');
+  [['What it asked', c.asked],
+   ['What happened', c.happened],
+   ['Where it fell down', c.failure],
+   ['What it taught', c.learned]].forEach(([k, v]) => {
+    if (!v) return;
+    const block = h('div', 'camp-block');
+    block.appendChild(h('div', 'stat-label', k));
+    block.appendChild(h('p', null, v));
+    prose.appendChild(block);
+  });
+  if (!c.documented) {
+    prose.appendChild(h('p', 'muted',
+      'No write-up for this one yet — it is listed because its folds are on '
+      + 'disk. Add it to rocklabel/dashboard/campaigns.py.'));
+  }
+  card.appendChild(prose);
+
+  // The settings it ran, so the Runs page can be reached knowing what to open.
+  if (c.arms.length) {
+    const arms = h('div', 'camp-arms');
+    arms.appendChild(h('span', 'stat-label', 'Settings'));
+    c.arms.forEach((a) => arms.appendChild(h('span', 'camp-arm', a)));
+    card.appendChild(arms);
+  }
+  return card;
+}
+
+/* ==================================================================== DATA
+ *
+ * Three tabs, one shape. Everything on disk is grouped the way it was made:
+ * a collection (volleyball, archive/comforter) folds open into one card per
+ * run, and a run card holds every copy of that capture — the raw one, the
+ * re-solved one, the one with the robot's own reflections removed. The flat
+ * tables this replaced repeated the same folder path down 53 consecutive rows;
+ * here the path is said once per section and the run name once per card.
+ *
+ * Open/closed state lives in S.groupOpen and S.openRows, keyed by name rather
+ * than position, because the 5 s inventory poll rebuilds these panels wholesale.
+ */
+
+/** raw first, then the re-solved copy, then anything more exotic. */
+const VARIANT_RANK = { raw: 0, reslam: 1, slam: 1 };
+const variantRank = (v) => (VARIANT_RANK[v] != null ? VARIANT_RANK[v] : 5);
+/** One CSS class per kind of copy, so the tag colour carries the meaning. */
+const variantClass = (v) => (v === 'raw' ? 'raw' : (v === 'reslam' || v === 'slam' ? 'slam' : 'other'));
+const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+/** VolleyBallTest2 before VolleyBallTest13 — plain sorting puts 13 first. */
+const byName = (a, b) => String(a).localeCompare(String(b), undefined, { numeric: true });
+
 function renderData() {
   $$('#dataTabs .tab').forEach((t) => {
     t.classList.toggle('is-active', t.dataset.tab === S.dataTab);
@@ -857,12 +1351,8 @@ function table(headers) {
   return { wrap, tbody, cols: headers.length };
 }
 
-/** Expandable row: owns the detail <tr>, the caret glyph, and the open-set entry.
- *
- * `S.openRows` is keyed by path/name rather than row index so a row survives a
- * re-render — the poll rebuilds these tables whenever the inventory moves.
- * `fill` runs at most once per built row.
- */
+/** Expandable table row: owns the detail <tr>, the caret glyph, and the
+ *  open-set entry. Still used by the runs board and the dataset detail. */
 function expandable(tbody, tr, key, fill, caret) {
   const detail = h('tr', 'row-detail');
   const td = h('td');
@@ -890,213 +1380,456 @@ function expandable(tbody, tr, key, fill, caret) {
   return toggle;
 }
 
+/** A card whose row is open gets the full width of the grid, so a detail panel
+ *  is read in one column instead of a 340px slot. */
+function syncCardWidth(el) {
+  const card = el && el.closest ? el.closest('.data-run-card') : null;
+  if (card) card.classList.toggle('has-open', Boolean(card.querySelector('.variant-row.is-open')));
+}
+
+/** The same idea outside a table: a clickable row that reveals `detail`.
+ *  `fill` runs at most once, the first time the row is actually opened. */
+function openable(key, row, detail, caret, fill) {
+  let filled = false;
+  const apply = (open) => {
+    detail.hidden = !open;
+    row.classList.toggle('is-open', open);
+    if (caret) caret.textContent = open ? '▾' : '▸';
+    if (open) {
+      S.openRows.add(key);
+      if (!filled) { filled = true; fill(detail); }
+    } else S.openRows.delete(key);
+    syncCardWidth(row);
+  };
+  const toggle = () => apply(detail.hidden);
+  apply(S.openRows.has(key));
+  row.tabIndex = 0;
+  row.setAttribute('role', 'button');
+  row.onclick = toggle;
+  row.onkeydown = (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); }
+  };
+  return toggle;
+}
+
 function hint(text) {
   const d = h('div', 'hint');
   d.textContent = text;
   return d;
 }
 
+/* ------------------------------------------------------ grouping the disk */
+/** Collections → runs → copies, for any list carrying collection/run/variant.
+ *
+ * Runs sort by name so VolleyBallTest1…13 read in order (the old listing sorted
+ * by modification time, which shuffled them). Archived collections sink to the
+ * bottom whatever their age — they are last year's captures, not the work. */
+function byRun(items) {
+  const cols = new Map();
+  items.forEach((it) => {
+    const key = it.collection || '(loose files)';
+    if (!cols.has(key)) cols.set(key, new Map());
+    const runs = cols.get(key);
+    if (!runs.has(it.run)) runs.set(it.run, []);
+    runs.get(it.run).push(it);
+  });
+  const out = [];
+  cols.forEach((runs, name) => {
+    const grouped = [];
+    runs.forEach((list, run) => {
+      list.sort((a, b) => variantRank(a.variant) - variantRank(b.variant) || byName(a.name, b.name));
+      grouped.push({ run, items: list, mtime: Math.max(...list.map((i) => i.mtime)) });
+    });
+    grouped.sort((a, b) => byName(a.run, b.run));
+    out.push({
+      name,
+      runs: grouped,
+      files: grouped.reduce((a, g) => a + g.items.length, 0),
+      size: grouped.reduce((a, g) => a + g.items.reduce((x, i) => x + (i.size || 0), 0), 0),
+      mtime: Math.max(...grouped.map((g) => g.mtime)),
+      archived: name.startsWith('archive'),
+    });
+  });
+  out.sort((a, b) => (a.archived - b.archived) || b.mtime - a.mtime);
+  return out;
+}
+
+/** A collection's title bar plus the body it folds away. `fill` is deferred
+ *  until the section is first opened, so a closed archive costs nothing. */
+function groupSection(key, opts, fill) {
+  const sec = h('section', `data-group${opts.archived ? ' is-archived' : ''}`);
+  const head = h('button', 'data-group-head');
+  const caret = h('span', 'data-group-caret', '▸');
+  head.appendChild(caret);
+  const titles = h('div', 'data-group-titles');
+  titles.appendChild(h('div', 'data-group-title', opts.title));
+  if (opts.sub) titles.appendChild(h('div', 'data-group-sub', opts.sub));
+  head.appendChild(titles);
+  const stats = h('div', 'data-group-stats');
+  (opts.stats || []).forEach((s) => stats.appendChild(h('span', 'data-group-stat', s)));
+  head.appendChild(stats);
+  const body = h('div', 'data-group-body');
+  sec.appendChild(head);
+  sec.appendChild(body);
+
+  let filled = false;
+  const apply = (open) => {
+    S.groupOpen[key] = open;
+    body.hidden = !open;
+    caret.textContent = open ? '▾' : '▸';
+    head.classList.toggle('is-open', open);
+    head.setAttribute('aria-expanded', open ? 'true' : 'false');
+    if (open && !filled) { filled = true; fill(body); }
+  };
+  head.onclick = () => apply(body.hidden);
+  apply(key in S.groupOpen ? S.groupOpen[key] : opts.defaultOpen);
+  return sec;
+}
+
+/** The bar above every Data tab: what is here, a filter, and open/close all. */
+function dataHeader(opts) {
+  const card = h('div', 'card data-head');
+  const top = h('div', 'data-head-top');
+  const titles = h('div');
+  titles.appendChild(h('h2', null, opts.title));
+  titles.appendChild(h('p', 'card-sub', opts.sub));
+  top.appendChild(titles);
+
+  const tools = h('div', 'data-head-tools');
+  const search = h('input', 'input data-search');
+  search.type = 'search';
+  search.placeholder = 'filter by name…';
+  search.value = S.dataSearch;
+  search.setAttribute('aria-label', 'Filter by name');
+  search.oninput = () => { S.dataSearch = search.value; renderData(); moveCaretToEnd(); };
+  tools.appendChild(search);
+  const setAll = (open) => {
+    opts.keys.forEach((k) => { S.groupOpen[k] = open; });
+    renderData();
+  };
+  tools.appendChild(button('btn btn-sm', 'Expand all', () => setAll(true)));
+  tools.appendChild(button('btn btn-sm', 'Collapse all', () => setAll(false)));
+  top.appendChild(tools);
+  card.appendChild(top);
+
+  const stats = h('div', 'data-stats');
+  opts.stats.forEach(([value, label]) => {
+    const s = h('div', 'data-stat');
+    s.appendChild(h('div', 'data-stat-value', value));
+    s.appendChild(h('div', 'stat-label', label));
+    stats.appendChild(s);
+  });
+  card.appendChild(stats);
+  return card;
+}
+
+/** The filter box is rebuilt on every keystroke (the whole tab re-renders),
+ *  so put the cursor back where it was. */
+function moveCaretToEnd() {
+  const box = $('.data-search');
+  if (!box) return;
+  box.focus();
+  const n = box.value.length;
+  try { box.setSelectionRange(n, n); } catch (e) { /* search inputs may refuse */ }
+}
+
+/** Filter on the run name, the file name and the folder, so typing "reslam",
+ *  "volleyball" or "test13" all narrow the list the way you would expect. */
+function dataMatches(it) {
+  const q = S.dataSearch.trim().toLowerCase();
+  if (!q) return true;
+  return `${it.run} ${it.name} ${it.collection} ${it.variant}`.toLowerCase().includes(q);
+}
+
+function noMatches(what) {
+  return emptyState('Nothing matches that filter',
+    `No ${what} whose name contains “${S.dataSearch.trim()}”.`);
+}
+
+/* ------------------------------------------------------------- recordings */
 function renderRecordings() {
   const panel = $('#tab-recordings');
   panel.innerHTML = '';
-  const recs = S.inv.recordings;
-  if (!recs.length) {
+  const all = S.inv.recordings;
+  if (!all.length) {
     panel.appendChild(emptyState('No recordings yet',
       'Drop an .mcap into recordings/, or run Record to capture one.'));
     return;
   }
+  const recs = all.filter(dataMatches);
+  const groups = byRun(recs);
+  const runs = groups.reduce((a, g) => a + g.runs.length, 0);
 
-  const card = h('div', 'card');
-  const head = h('div', 'card-head');
-  head.appendChild(h('h2', null, `${recs.length} recordings · ${fmtBytes(recs.reduce((a, r) => a + r.size, 0))}`));
-  head.appendChild(h('p', 'card-sub',
-    'Click a row to read its index: format, duration, topics and point density. '
-    + 'Labels are matched by filename, so Rename moves the label file with the '
-    + 'recording and rewrites the run id inside it. Delete removes only the '
-    + 'recording.'));
+  panel.appendChild(dataHeader({
+    title: 'Recordings',
+    sub: 'Grouped by the run they came from: one card per capture, one row per '
+       + 'copy of it. Open a copy to read its index — format, duration, topics, '
+       + 'point density — or to rename it (labels move with it) and delete it. '
+       + 'The buttons on a row appear when you point at it.',
+    stats: [
+      [String(all.length), 'recordings'],
+      [String(runs), 'runs'],
+      [fmtBytes(all.reduce((a, r) => a + r.size, 0)), 'on disk'],
+      [String(all.filter((r) => r.labels).length), 'labeled'],
+    ],
+    keys: groups.map((g) => `rec:${g.name}`),
+  }));
+  if (!recs.length) { panel.appendChild(noMatches('recordings')); return; }
+
+  groups.forEach((g) => {
+    const labeled = g.runs.reduce((a, r) => a + r.items.filter((i) => i.labels).length, 0);
+    panel.appendChild(groupSection(`rec:${g.name}`, {
+      title: g.name,
+      sub: `recordings/${g.name}/`,
+      archived: g.archived,
+      stats: [plural(g.runs.length, 'run'), plural(g.files, 'file'), fmtBytes(g.size),
+        `${labeled} labeled`, fmtAgo(g.mtime)],
+      defaultOpen: !g.archived || Boolean(S.dataSearch.trim()),
+    }, (body) => {
+      const grid = h('div', 'data-run-grid');
+      g.runs.forEach((run, i) => grid.appendChild(recordingCard(run, i)));
+      body.appendChild(grid);
+    }));
+  });
+}
+
+/** "7 rocks" green, "0 rocks" amber, "unlabeled" grey. `count` null = no
+ *  label file at all. */
+function rocksPill(count, small) {
+  const sm = small ? ' sm' : '';
+  if (count == null) return h('span', `pill dim${sm}`, 'unlabeled');
+  if (!count) return h('span', `pill warn${sm}`, '0 rocks');
+  return h('span', `pill rock${sm}`, `${count} rocks`);
+}
+
+function recordingCard(g, index) {
+  const card = h('article', `data-run-card${index % 2 ? ' alt' : ''}`);
+  const head = h('div', 'data-run-head');
+  head.appendChild(h('span', 'data-run-name', g.run));
+  const labs = g.items.map((r) => (r.labels ? S.inv.labels.find((l) => l.path === r.labels) : null));
+  const rocks = Math.max(0, ...labs.map((l) => (l ? l.rock_count : 0)));
+  // Three states, not two: never labelled, labelled but empty (worth seeing —
+  // it means a labelling session was never finished), and labelled.
+  head.appendChild(rocksPill(labs.some(Boolean) ? rocks : null));
+  head.appendChild(h('span', 'data-run-meta',
+    `${g.items.length} file${g.items.length === 1 ? '' : 's'} · `
+    + fmtBytes(g.items.reduce((a, r) => a + r.size, 0))));
   card.appendChild(head);
+  g.items.forEach((r, i) => card.appendChild(recordingVariant(r, labs[i])));
+  syncCardWidth(card.firstChild);
+  return card;
+}
 
-  const { wrap, tbody } = table([
-    { label: '', width: '28px' }, { label: 'Recording' }, { label: 'Size', num: true },
-    { label: 'Modified', num: true }, { label: 'Labels' }, { label: 'Actions' },
-  ]);
+/** One copy of one capture: the compact row, and the index it reads on demand. */
+function recordingVariant(r, lab) {
+  const box = h('div', 'variant');
+  const row = h('div', `variant-row v-${variantClass(r.variant)}`);
+  const caret = h('span', 'expander', '▸');
+  row.appendChild(caret);
+  row.appendChild(h('span', 'variant-tag', r.variant));
+  row.appendChild(h('span', 'variant-size', fmtBytes(r.size)));
+  row.appendChild(h('span', 'variant-age', fmtAgo(r.mtime)));
+  if (lab) row.appendChild(rocksPill(lab.rock_count, true));
 
-  recs.forEach((r) => {
-    const tr = h('tr');
-    const expTd = h('td');
-    const exp = h('button', 'expander', '▸');
-    expTd.appendChild(exp);
-    tr.appendChild(expTd);
+  const acts = h('div', 'row-actions hover-actions');
+  [['label', 'Label', { mcap: r.path }],
+   ['generate', 'Generate', { mcap: r.path, out: `datasets/${r.stem}` }],
+   ['live', 'Replay', { play: r.path }],
+  ].forEach(([id, label, pre]) => {
+    acts.appendChild(button('btn btn-sm', label, () => openDrawer(id, pre)));
+  });
+  row.appendChild(acts);
+  box.appendChild(row);
 
-    const nameTd = h('td');
-    const nameBox = h('div');
-    nameBox.appendChild(h('div', null, r.name));
-    nameBox.appendChild(h('div', 'muted mono', r.path));
-    nameTd.appendChild(nameBox);
-    tr.appendChild(nameTd);
-    tr.appendChild(h('td', 'num', fmtBytes(r.size)));
-    tr.appendChild(h('td', 'num nowrap', fmtAgo(r.mtime)));
-
-    const labTd = h('td');
-    const lab = r.labels ? S.inv.labels.find((l) => l.path === r.labels) : null;
-    if (lab) {
-      labTd.appendChild(h('span', 'pill rock', `${lab.rock_count} rocks`));
-    } else {
-      labTd.appendChild(h('span', 'muted', 'unlabeled'));
-    }
-    tr.appendChild(labTd);
-
-    const actTd = h('td');
-    const acts = h('div', 'row-actions');
-    [['inspect', 'Inspect', { mcap: r.path }],
-     ['label', 'Label', { mcap: r.path }],
-     ['generate', 'Generate', { mcap: r.path, out: `datasets/${r.stem}` }],
-     ['live', 'Replay', { play: r.path }],
-    ].forEach(([id, label, pre]) => {
-      const b = h('button', 'btn btn-sm', label);
-      b.onclick = (e) => { e.stopPropagation(); openDrawer(id, pre); };
-      acts.appendChild(b);
-    });
+  const detail = h('div', 'variant-detail');
+  openable(`rec:${r.path}`, row, detail, caret, (inner) => {
+    inner.appendChild(h('div', 'mono muted path-line', r.path));
+    const house = h('div', 'row-actions house-actions');
+    house.appendChild(button('btn btn-sm', 'Inspect', () => openDrawer('inspect', { mcap: r.path })));
     // Renaming a recording carries its labels along — see inventory._target.
     const keep = itemControls({
       kind: 'recording', name: r.stem, path: r.path,
       warn: `${fmtBytes(r.size)} goes for good; you cannot re-label or `
-          + `re-generate from it afterwards.`
+          + 're-generate from it afterwards.'
           + (r.labels ? ' Its label file stays behind.' : ''),
-    }, nameBox);
-    keep.triggers.forEach((b) => acts.appendChild(b));
-    keep.panels.forEach((p) => nameTd.appendChild(p));
-    actTd.appendChild(acts);
-    tr.appendChild(actTd);
+    }, house);
+    keep.triggers.forEach((b) => house.appendChild(b));
+    inner.appendChild(house);
+    keep.panels.forEach((p) => inner.appendChild(p));
 
-    const toggle = expandable(tbody, tr, `rec:${r.path}`, (inner) => {
-      inner.appendChild(h('div', 'muted', 'reading index…'));
-      api(`/api/recording?path=${encodeURIComponent(r.path)}`).then((info) => {
-        inner.innerHTML = '';
-        if (!info.ok) {
-          inner.appendChild(h('div', 'status status-bad', `unreadable: ${info.error}`));
-          if (info.hint) inner.appendChild(hint(info.hint));
-          const b = h('button', 'btn btn-sm', 'Open Trim to salvage it');
-          b.style.marginTop = '10px';
-          b.onclick = () => openDrawer('trim', { mcap: r.path, out: `recordings/${r.stem}.fixed.mcap`, all_topics: true });
-          inner.appendChild(b);
-          return;
-        }
-        const grid = h('div', 'detail-grid');
-        grid.appendChild(detailItem('Format', info.format));
-        grid.appendChild(detailItem('Duration', `${info.duration_s.toFixed(1)} s`));
-        grid.appendChild(detailItem('Messages', info.messages.toLocaleString()));
-        grid.appendChild(detailItem('Recorded', (info.start || '').replace('T', ' ').replace('+00:00', ' UTC')));
-        if (info.points_per_frame != null) {
-          grid.appendChild(detailItem('Points / frame', info.points_per_frame.toLocaleString()));
-          grid.appendChild(detailItem('Reflectivity', info.reflectivity ? `yes (peak ${info.reflectivity_peak})` : 'no'));
-          grid.appendChild(detailItem('Poses', info.poses ? 'yes' : 'NO — SLAM never locked'));
-        }
-        inner.appendChild(grid);
+    const facts = h('div', 'muted', 'reading index…');
+    inner.appendChild(facts);
+    api(`/api/recording?path=${encodeURIComponent(r.path)}`).then((info) => {
+      facts.innerHTML = '';
+      facts.className = '';
+      if (!info.ok) {
+        facts.appendChild(h('div', 'status status-bad', `unreadable: ${info.error}`));
+        if (info.hint) facts.appendChild(hint(info.hint));
+        facts.appendChild(button('btn btn-sm', 'Open Trim to salvage it', () => openDrawer('trim', {
+          mcap: r.path, out: `recordings/${r.stem}.fixed.mcap`, all_topics: true,
+        })));
+        return;
+      }
+      const grid = h('div', 'detail-grid');
+      grid.appendChild(detailItem('Format', info.format));
+      grid.appendChild(detailItem('Duration', `${info.duration_s.toFixed(1)} s`));
+      grid.appendChild(detailItem('Messages', info.messages.toLocaleString()));
+      grid.appendChild(detailItem('Recorded', (info.start || '').replace('T', ' ').replace('+00:00', ' UTC')));
+      if (info.points_per_frame != null) {
+        grid.appendChild(detailItem('Points / frame', info.points_per_frame.toLocaleString()));
+        grid.appendChild(detailItem('Reflectivity', info.reflectivity ? `yes (peak ${info.reflectivity_peak})` : 'no'));
+        grid.appendChild(detailItem('Poses', info.poses ? 'yes' : 'NO — SLAM never locked'));
+      }
+      facts.appendChild(grid);
 
-        if (info.topics.length) {
-          const tw = h('details');
-          tw.style.marginTop = '12px';
-          tw.appendChild(h('summary', null, `${info.topics.length} topics`));
-          const tt = table([{ label: 'Topic' }, { label: 'Schema' }, { label: 'Messages', num: true }]);
-          tt.wrap.style.marginTop = '8px';
-          info.topics.forEach((tp) => {
-            const row = h('tr');
-            row.appendChild(h('td', 'mono', tp.topic));
-            row.appendChild(h('td', 'muted mono', tp.schema));
-            row.appendChild(h('td', 'num', tp.messages.toLocaleString()));
-            tt.tbody.appendChild(row);
-          });
-          tw.appendChild(tt.wrap);
-          inner.appendChild(tw);
-        }
-        if (info.pose_hint) inner.appendChild(hint(info.pose_hint));
-      }).catch((e) => { inner.innerHTML = ''; inner.appendChild(h('div', 'status status-bad', e.message)); });
-    }, exp);
-    nameTd.style.cursor = 'pointer';
-    nameTd.onclick = toggle;
+      if (info.topics.length) {
+        const tw = h('details');
+        tw.style.marginTop = '12px';
+        tw.appendChild(h('summary', null, `${info.topics.length} topics`));
+        const tt = table([{ label: 'Topic' }, { label: 'Schema' }, { label: 'Messages', num: true }]);
+        tt.wrap.style.marginTop = '8px';
+        info.topics.forEach((tp) => {
+          const trow = h('tr');
+          trow.appendChild(h('td', 'mono', tp.topic));
+          trow.appendChild(h('td', 'muted mono', tp.schema));
+          trow.appendChild(h('td', 'num', tp.messages.toLocaleString()));
+          tt.tbody.appendChild(trow);
+        });
+        tw.appendChild(tt.wrap);
+        facts.appendChild(tw);
+      }
+      if (info.pose_hint) facts.appendChild(hint(info.pose_hint));
+    }).catch((e) => {
+      facts.innerHTML = '';
+      facts.appendChild(h('div', 'status status-bad', e.message));
+    });
   });
-
-  card.appendChild(wrap);
-  panel.appendChild(card);
+  box.appendChild(detail);
+  return box;
 }
 
+/* ----------------------------------------------------------------- labels */
 function renderLabels() {
   const panel = $('#tab-labels');
   panel.innerHTML = '';
-  const labs = S.inv.labels;
-  if (!labs.length) {
+  const all = S.inv.labels;
+  if (!all.length) {
     panel.appendChild(emptyState('No label files yet',
       'Run Label on a recording — labels auto-save to labels/<recording>.labels.json.'));
     return;
   }
-  const card = h('div', 'card');
-  const head = h('div', 'card-head');
-  head.appendChild(h('h2', null, `${labs.length} label files · ${labs.reduce((a, l) => a + l.rock_count, 0)} rocks`));
-  head.appendChild(h('p', 'card-sub',
-    'Labels are tied to the recording they were made on by filename, so Rename '
-    + 'moves both. Drift check verifies that odometry held before you generate a '
-    + 'dataset from them.'));
-  card.appendChild(head);
+  const labs = all.filter(dataMatches);
+  const groups = byRun(labs);
 
-  const { wrap, tbody } = table([
-    { label: 'Run' }, { label: 'Rocks', num: true }, { label: 'Shapes' },
-    { label: 'Training bounds' },
-    { label: 'Recording' }, { label: 'Modified', num: true }, { label: 'Actions' },
-  ]);
-  labs.forEach((l) => {
-    const tr = h('tr');
-    const runTd = h('td');
-    const runBox = h('div');
-    runBox.appendChild(h('div', null, l.run_id));
-    if (l.stem !== l.run_id) runBox.appendChild(h('div', 'muted mono', l.name));
-    runTd.appendChild(runBox);
-    tr.appendChild(runTd);
-    tr.appendChild(h('td', 'num', String(l.rock_count)));
-    const shapes = h('td');
-    Object.entries(l.shapes).forEach(([k, v]) => {
-      shapes.appendChild(h('span', 'pill', `${v} ${k}`));
-      shapes.appendChild(document.createTextNode(' '));
-    });
-    tr.appendChild(shapes);
-    // Which volume Generate is allowed to train on: the arena ring bounds the
-    // floor plan, the labeler's z clip bounds the height. Missing either one
-    // means that direction is left to the crop box, which is worth seeing.
-    const bounds = h('td');
-    bounds.appendChild(h('span', l.arena_vertices ? 'pill ok' : 'pill warn',
-      l.arena_vertices ? `arena ${l.arena_vertices} pts` : 'no arena'));
-    bounds.appendChild(document.createTextNode(' '));
-    bounds.appendChild(h('span', l.z_band ? 'pill ok' : 'pill warn',
-      l.z_band ? `z ${l.z_band[0].toFixed(2)}…${l.z_band[1].toFixed(2)} m` : 'full height'));
-    tr.appendChild(bounds);
-    tr.appendChild(h('td', 'mono muted', l.mcap_file || '—'));
-    tr.appendChild(h('td', 'num nowrap', fmtAgo(l.mtime)));
-    const act = h('td');
-    const acts = h('div', 'row-actions');
-    const rec = S.inv.recordings.find((r) => r.name === l.mcap_file)
-      || S.inv.recordings.find((r) => r.stem === l.run_id);
-    const mcap = rec ? rec.path : '';
-    [['label', 'Edit', { mcap, labels: l.path }],
-     ['driftcheck', 'Drift check', { mcap, labels: l.path, rock_id: l.rock_ids[0] || 1 }],
-     ['generate', 'Generate', { mcap, labels: l.path, out: `datasets/${l.run_id}` }],
-    ].forEach(([id, label, pre]) => {
-      const b = h('button', 'btn btn-sm', label);
-      b.onclick = () => openDrawer(id, pre);
-      acts.appendChild(b);
-    });
+  panel.appendChild(dataHeader({
+    title: 'Labels',
+    sub: 'One card per run, one row per labelled copy of it. A row says how many '
+       + 'rocks were marked and whether the two limits that decide what Generate '
+       + 'may train on — the arena outline and the height band — were set. Labels '
+       + 'are tied to their recording by filename, so Rename moves both.',
+    stats: [
+      [String(all.length), 'label files'],
+      [String(groups.reduce((a, g) => a + g.runs.length, 0)), 'runs'],
+      [String(all.reduce((a, l) => a + l.rock_count, 0)), 'rocks'],
+      [String(all.filter((l) => !l.arena_vertices || !l.z_band).length), 'missing a limit'],
+    ],
+    keys: groups.map((g) => `lab:${g.name}`),
+  }));
+  if (!labs.length) { panel.appendChild(noMatches('label files')); return; }
+
+  groups.forEach((g) => {
+    const rocks = g.runs.reduce((a, r) => a + r.items.reduce((x, i) => x + i.rock_count, 0), 0);
+    panel.appendChild(groupSection(`lab:${g.name}`, {
+      title: g.name,
+      sub: `labels/${g.name}/`,
+      archived: g.archived,
+      stats: [plural(g.runs.length, 'run'), plural(g.files, 'file'),
+        plural(rocks, 'rock'), fmtAgo(g.mtime)],
+      defaultOpen: !g.archived || Boolean(S.dataSearch.trim()),
+    }, (body) => {
+      const grid = h('div', 'data-run-grid');
+      g.runs.forEach((run, i) => grid.appendChild(labelCard(run, i)));
+      body.appendChild(grid);
+    }));
+  });
+}
+
+function labelCard(g, index) {
+  const card = h('article', `data-run-card${index % 2 ? ' alt' : ''}`);
+  const head = h('div', 'data-run-head');
+  head.appendChild(h('span', 'data-run-name', g.run));
+  head.appendChild(rocksPill(g.items.reduce((a, l) => a + l.rock_count, 0)));
+  head.appendChild(h('span', 'data-run-meta',
+    `${g.items.length} label file${g.items.length === 1 ? '' : 's'}`));
+  card.appendChild(head);
+  g.items.forEach((l) => card.appendChild(labelVariant(l)));
+  syncCardWidth(card.firstChild);
+  return card;
+}
+
+function labelVariant(l) {
+  const box = h('div', 'variant');
+  const row = h('div', `variant-row v-${variantClass(l.variant)}`);
+  const caret = h('span', 'expander', '▸');
+  row.appendChild(caret);
+  row.appendChild(h('span', 'variant-tag', l.variant));
+  row.appendChild(h('span', l.rock_count ? 'variant-size' : 'variant-size is-warn',
+    `${l.rock_count} rocks`));
+  // The two halves of "which volume may be trained on": the arena ring bounds
+  // the floor plan, the labeler's z clip bounds the height. A missing one is
+  // left to the generator's crop box, which is worth seeing at a glance.
+  row.appendChild(h('span', l.arena_vertices ? 'pill ok sm' : 'pill warn sm',
+    l.arena_vertices ? 'arena' : 'no arena'));
+  row.appendChild(h('span', l.z_band ? 'pill ok sm' : 'pill warn sm',
+    l.z_band ? 'z clip' : 'full height'));
+  row.appendChild(h('span', 'variant-age', fmtAgo(l.mtime)));
+
+  const rec = S.inv.recordings.find((r) => r.name === l.mcap_file)
+    || S.inv.recordings.find((r) => r.stem === l.run_id);
+  const mcap = rec ? rec.path : '';
+  const acts = h('div', 'row-actions hover-actions');
+  [['label', 'Edit', { mcap, labels: l.path }],
+   ['generate', 'Generate', { mcap, labels: l.path, out: `datasets/${l.run_id}` }],
+  ].forEach(([id, label, pre]) => {
+    acts.appendChild(button('btn btn-sm', label, () => openDrawer(id, pre)));
+  });
+  row.appendChild(acts);
+  box.appendChild(row);
+
+  const detail = h('div', 'variant-detail');
+  openable(`lab:${l.path}`, row, detail, caret, (inner) => {
+    inner.appendChild(h('div', 'mono muted path-line', l.path));
+    const grid = h('div', 'detail-grid');
+    grid.appendChild(detailItem('Recording', l.mcap_file || '—'));
+    grid.appendChild(detailItem('Shapes',
+      Object.entries(l.shapes).map(([k, v]) => `${v} ${k}`).join(', ') || '—'));
+    grid.appendChild(detailItem('Arena outline',
+      l.arena_vertices ? `${l.arena_vertices} points` : 'not set'));
+    grid.appendChild(detailItem('Height band',
+      l.z_band ? `${l.z_band[0].toFixed(2)} … ${l.z_band[1].toFixed(2)} m` : 'not set'));
+    grid.appendChild(detailItem('Reflectivity', l.intensity ? 'available' : 'no'));
+    grid.appendChild(detailItem('Labelled', fmtAgo(l.mtime)));
+    inner.appendChild(grid);
+    if (!rec) {
+      inner.appendChild(hint('No recording on disk matches this label file, so Edit '
+        + 'and Drift check open with an empty recording box.'));
+    }
+
+    const house = h('div', 'row-actions house-actions');
+    house.appendChild(button('btn btn-sm', 'Drift check', () => openDrawer('driftcheck', {
+      mcap, labels: l.path, rock_id: l.rock_ids[0] || 1,
+    })));
     const keep = itemControls({
       kind: 'labels', name: l.stem, path: l.path,
       warn: `${l.rock_count} labeled rocks go for good.`
           + (rec ? ' The recording they were made on stays.' : ''),
-    }, runBox);
-    keep.triggers.forEach((b) => acts.appendChild(b));
-    keep.panels.forEach((p) => runTd.appendChild(p));
-    act.appendChild(acts);
-    tr.appendChild(act);
-    tbody.appendChild(tr);
+    }, house);
+    keep.triggers.forEach((b) => house.appendChild(b));
+    inner.appendChild(house);
+    keep.panels.forEach((p) => inner.appendChild(p));
   });
-  card.appendChild(wrap);
-  panel.appendChild(card);
+  box.appendChild(detail);
+  return box;
 }
 
 /* --------------------------------------------------------- housekeeping */
@@ -1215,44 +1948,121 @@ function writeError(e) {
     : e.message;
 }
 
+/* --------------------------------------------------------------- datasets */
+/** Datasets group by the profile folder they were written into — the geometry
+ *  that cut their frames — because two datasets from different profiles are
+ *  never poolable into one training cache. */
 function renderDatasets() {
   const panel = $('#tab-datasets');
   panel.innerHTML = '';
-  const dss = S.inv.datasets;
-  if (!dss.length) {
+  const all = S.inv.datasets;
+  if (!all.length) {
     panel.appendChild(emptyState('No datasets yet',
       'Run Generate on a labeled recording to write one.'));
     return;
   }
+  const q = S.dataSearch.trim().toLowerCase();
+  const dss = q ? all.filter((d) => d.name.toLowerCase().includes(q)) : all;
+
+  const groups = new Map();
   dss.forEach((d) => {
-    const card = h('div', 'card');
-    const head = h('div', 'card-head');
-    const title = h('div');
-    title.style.cssText = 'display:flex; align-items:center; gap:10px; flex-wrap:wrap;';
-    title.appendChild(h('h2', null, d.name));
+    const key = d.group || '(top level)';
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(d);
+  });
+  const sections = [...groups.entries()].map(([name, items]) => ({
+    name,
+    items: items.sort((a, b) => byName(a.name, b.name)),
+    size: items.reduce((a, d) => a + d.size, 0),
+    samples: items.reduce((a, d) => a + d.samples, 0),
+    mtime: Math.max(...items.map((d) => d.mtime)),
+    archived: name.startsWith('archive'),
+  })).sort((a, b) => (a.archived - b.archived) || b.mtime - a.mtime);
+
+  panel.appendChild(dataHeader({
+    title: 'Datasets',
+    sub: 'Grouped by the profile that cut their frames — only datasets from the '
+       + 'same profile can be pooled into one training cache. Open a dataset for '
+       + 'its class balance and its per-run breakdown.',
+    stats: [
+      [String(all.length), 'datasets'],
+      [fmtNum(all.reduce((a, d) => a + d.samples, 0)), 'samples'],
+      [fmtNum(all.reduce((a, d) => a + d.rock_samples, 0)), 'rock samples'],
+      [fmtBytes(all.reduce((a, d) => a + d.size, 0)), 'on disk'],
+    ],
+    keys: sections.map((s) => `ds:${s.name}`),
+  }));
+  if (!dss.length) { panel.appendChild(noMatches('datasets')); return; }
+
+  sections.forEach((s) => {
+    panel.appendChild(groupSection(`ds:${s.name}`, {
+      title: s.name,
+      sub: `datasets/${s.name}/`,
+      archived: s.archived,
+      stats: [plural(s.items.length, 'dataset'), `${fmtNum(s.samples)} samples`,
+        fmtBytes(s.size), fmtAgo(s.mtime)],
+      defaultOpen: !s.archived || Boolean(q),
+    }, (body) => {
+      const grid = h('div', 'ds-grid');
+      s.items.forEach((d, i) => grid.appendChild(datasetCard(d, s.name, i)));
+      body.appendChild(grid);
+    }));
+  });
+}
+
+function datasetCard(d, group, index) {
+  const short = group && d.name.startsWith(`${group}/`) ? d.name.slice(group.length + 1) : d.name;
+  const card = h('article', `data-run-card ds-card${index % 2 ? ' alt' : ''}`);
+  const row = h('div', 'variant-row ds-row');
+  const caret = h('span', 'expander', '▸');
+  row.appendChild(caret);
+  row.appendChild(h('span', 'data-run-name', short));
+  if (d.has_manifest) {
+    row.appendChild(h('span', 'variant-size', `${fmtNum(d.samples)} samples`));
+    const share = d.samples ? (d.rock_samples / d.samples) * 100 : 0;
+    row.appendChild(h('span', share > 0 ? 'pill rock sm' : 'pill warn sm',
+      share > 0 ? `${share.toFixed(1)}% rock` : 'no rock samples'));
+  } else {
+    row.appendChild(h('span', 'pill warn sm', 'no manifest'));
+  }
+  row.appendChild(h('span', 'variant-age', fmtBytes(d.size)));
+
+  const acts = h('div', 'row-actions hover-actions');
+  acts.appendChild(button('btn btn-sm', 'Preview', () => openDrawer('preview', { out_pos: d.path })));
+  acts.appendChild(button('btn btn-sm', 'Add to cache', () => openDrawer('train-cache', { datasets: d.path })));
+  row.appendChild(acts);
+  card.appendChild(row);
+
+  const detail = h('div', 'variant-detail');
+  openable(`ds:${d.path}`, row, detail, caret, (inner) => {
+    inner.appendChild(h('div', 'mono muted path-line', d.path));
+    const title = h('div', 'row-actions house-actions');
     if (d.has_manifest) title.appendChild(h('span', 'pill', `config ${d.config_hash}`));
-    else title.appendChild(h('span', 'status status-warn', 'no manifest'));
-    title.appendChild(h('span', 'pill', fmtBytes(d.size)));
     const keep = itemControls({
       kind: 'dataset', name: d.name, path: d.path,
       warn: `${fmtBytes(d.size)} in ${d.files.toLocaleString()} files goes for good. `
           + 'A training cache built from it keeps its own copy.',
     }, title);
     keep.triggers.forEach((b) => title.appendChild(b));
-    head.appendChild(title);
-    keep.panels.forEach((p) => head.appendChild(p));
-    head.appendChild(h('p', 'card-sub',
-      d.has_manifest
-        ? `${d.runs.length} run${d.runs.length === 1 ? '' : 's'} · ${d.samples.toLocaleString()} format-A samples · ${d.bev_frames.toLocaleString()} BEV frames`
-        : 'This directory has no manifest.json — it was not written by Generate, or the run was interrupted.'));
-    card.appendChild(head);
+    inner.appendChild(title);
+    keep.panels.forEach((p) => inner.appendChild(p));
+
+    if (!d.has_manifest) {
+      inner.appendChild(hint('This directory has no manifest.json — it was not '
+        + 'written by Generate, or the run was interrupted.'));
+      return;
+    }
+    inner.appendChild(h('div', 'muted',
+      `${d.runs.length} run${d.runs.length === 1 ? '' : 's'} · `
+      + `${d.samples.toLocaleString()} format-A samples · `
+      + `${d.bev_frames.toLocaleString()} BEV frames`));
 
     if (d.samples > 0) {
-      card.appendChild(window.Charts.proportionBar([
+      inner.appendChild(window.Charts.proportionBar([
         { label: 'rock samples', value: d.rock_samples, color: window.Charts.seriesColor(1) },
         { label: 'clear samples', value: d.clear_samples, color: window.Charts.seriesColor(0) },
-      ], { caption: `Class balance across the whole dataset. The classifiers handle this imbalance `
-                  + `with class-weighted BCE — read PR-AUC and F1, never bare accuracy.` }));
+      ], { caption: 'Class balance across the whole dataset. The classifiers handle this imbalance '
+                  + 'with class-weighted BCE — read PR-AUC and F1, never bare accuracy.' }));
     }
 
     if (d.runs.length) {
@@ -1277,30 +2087,35 @@ function renderDatasets() {
         tr.appendChild(shareTd);
         tr.appendChild(h('td', 'num', String(r.rock_count)));
         const act = h('td');
-        const b = h('button', 'btn btn-sm', 'Preview');
-        b.onclick = () => openDrawer('preview', { out_pos: d.path, run: r.run_id });
-        act.appendChild(b);
+        act.appendChild(button('btn btn-sm', 'Preview',
+          () => openDrawer('preview', { out_pos: d.path, run: r.run_id })));
         tr.appendChild(act);
         tbody.appendChild(tr);
       });
-      card.appendChild(wrap);
+      wrap.style.marginTop = '10px';
+      inner.appendChild(wrap);
     }
-
-    const acts = h('div', 'row-actions');
-    acts.style.marginTop = '14px';
-    [['preview', 'Preview frames', { out_pos: d.path }],
-     ['train-cache', 'Add to training cache', { datasets: d.path }],
-    ].forEach(([id, label, pre]) => {
-      const b = h('button', 'btn btn-sm', label);
-      b.onclick = () => openDrawer(id, pre);
-      acts.appendChild(b);
-    });
-    card.appendChild(acts);
-    panel.appendChild(card);
   });
+  card.appendChild(detail);
+  syncCardWidth(row);
+  return card;
 }
 
 /* =================================================================== JOBS */
+/* A job is stoppable while its process is going. That covers two cases: one
+ * this dashboard launched, and one left over from an earlier dashboard that
+ * outlived it (the server marks those `orphan`). */
+const jobIsLive = (j) => j.status === 'running' || j.orphan;
+
+/* The second line of a history row: which job, how long, how long ago — plus,
+ * for anything read back from the saved history, where it came from. */
+function jobMeta(j) {
+  const bits = [j.id, fmtDur(j.elapsed), fmtAgo(j.started)];
+  if (j.orphan) bits.push('still running in the background');
+  else if (j.restored) bits.push('earlier session');
+  return bits.join(' · ');
+}
+
 function renderJobs() {
   const list = $('#jobList');
   list.innerHTML = '';
@@ -1310,16 +2125,17 @@ function renderJobs() {
   S.jobs.forEach((j) => {
     const li = h('li');
     li.classList.toggle('is-active', j.id === S.activeJob);
+    li.classList.toggle('is-restored', Boolean(j.restored));
     const top = h('div', 'job-row-top');
     top.appendChild(h('span', 'job-title', j.title));
     top.appendChild(h('span', `status status-${j.status}`, j.status));
     li.appendChild(top);
-    li.appendChild(h('div', 'job-meta', `${j.id} · ${fmtDur(j.elapsed)} · ${fmtAgo(j.started)}`));
+    li.appendChild(h('div', 'job-meta', jobMeta(j)));
     li.onclick = () => selectJob(j.id);
     list.appendChild(li);
   });
 
-  const running = S.jobs.filter((j) => j.status === 'running').length;
+  const running = S.jobs.filter(jobIsLive).length;
   const badge = $('#jobsBadge');
   badge.hidden = running === 0;
   badge.textContent = String(running);
@@ -1327,11 +2143,11 @@ function renderJobs() {
   const job = S.jobs.find((j) => j.id === S.activeJob);
   $('#jobLogTitle').textContent = job ? `${job.title} · ${job.id}` : 'No job selected';
   $('#jobLogCmd').textContent = job ? job.command_line : '';
-  $('#jobStop').hidden = !(job && job.status === 'running');
+  $('#jobStop').hidden = !(job && jobIsLive(job));
   // Rerun and Stop are the same slot: a job is either live (stop it) or over
   // (run it again). Rerunning a job while its own copy still holds the sensor
   // port or a viewer window is never what you meant.
-  $('#jobRerun').hidden = !(job && job.status !== 'running');
+  $('#jobRerun').hidden = !(job && !jobIsLive(job));
 }
 
 function selectJob(id) {
@@ -1397,6 +2213,11 @@ async function pumpJob() {
     pre.appendChild(h('div', logClass(line), line));
   });
   S.jobCursor = data.cursor;
+  // A job restored from the saved history only learns its true line count when
+  // its log is read back; without this the poll keeps firing until the next
+  // five-second refresh corrects the number it was remembered with.
+  const cached = S.jobs.find((j) => j.id === id);
+  if (cached) cached.line_count = data.cursor;
   if (S.follow && (atBottom || data.lines.length)) pre.scrollTop = pre.scrollHeight;
   renderJobs();
 }
@@ -1595,12 +2416,13 @@ function renderLiveJobs() {
     const txt = h('div');
     txt.style.flex = '1';
     txt.appendChild(h('div', 'check-name', `${j.title} · ${j.id}`));
+    if (j.restored) txt.appendChild(h('div', 'check-detail', jobMeta(j)));
     txt.appendChild(h('code', 'check-detail', j.command_line));
     row.appendChild(txt);
     // Every job in this list is a panel command, so a running one either has
     // its controls up or is a second away from having them. Saying which beats
     // leaving a gap where a button is about to appear.
-    if (j.status === 'running') {
+    if (jobIsLive(j)) {
       if (j.panel_url) {
         const controls = h('button', 'btn btn-sm', 'Controls');
         controls.title = 'Show this job’s control panel above';
@@ -1610,6 +2432,10 @@ function renderLiveJobs() {
           if (card.scrollIntoView) card.scrollIntoView({ behavior: 'smooth' });
         };
         row.appendChild(controls);
+      } else if (j.orphan) {
+        // Its control panel may well still be serving, but the URL it printed
+        // went with the dashboard that launched it — there is nothing to embed.
+        row.appendChild(h('span', 'check-detail', 'from an earlier session'));
       } else {
         row.appendChild(h('span', 'check-detail', 'panel starting…'));
       }
@@ -1617,7 +2443,7 @@ function renderLiveJobs() {
     const open = h('button', 'btn btn-sm', 'Open log');
     open.onclick = () => { selectJob(j.id); setView('jobs'); };
     row.appendChild(open);
-    if (j.status === 'running') {
+    if (jobIsLive(j)) {
       const stop = h('button', 'btn btn-sm btn-danger', 'Stop');
       stop.onclick = () => stopJob(j.id);
       row.appendChild(stop);
@@ -2040,9 +2866,11 @@ async function refreshState() {
     S.jobs = s.jobs;
     renderMachine();
 
-    // The Training tab's badge counts experiments with unfinished work, and
-    // moves whether or not that view is open.
-    const tnow = s.inventory.training_now || [];
+    // The Training tab's badge counts only experiments actually moving — a
+    // sweep with folds left unrun but stopped days ago is history, not news,
+    // and badging it made the tab look busy when the GPU was idle.
+    const tnow = (s.inventory.training_now || [])
+      .filter((t) => t.counts.running > 0 || t.counts.stalled > 0);
     const tb = $('#trainBadge');
     tb.hidden = tnow.length === 0;
     tb.textContent = String(tnow.length);
@@ -2098,13 +2926,19 @@ function render() {
   if (S.view === 'live') renderLive();
   if (S.view === 'data') renderData();
   if (S.view === 'runs') { ensureBoard(); renderBoard(); }
-  if (S.view === 'training') renderTraining();
+  if (S.view === 'training') { ensureCampaigns(); renderTraining(); }
   renderJobs();
 }
 
 /* ================================================================== INIT */
 async function init() {
   $$('.nav-item').forEach((b) => { b.onclick = () => setView(b.dataset.view); });
+  const fromUrl = window.location.hash.slice(1);
+  if (VIEWS.includes(fromUrl)) setView(fromUrl);
+  window.addEventListener('hashchange', () => {
+    const name = window.location.hash.slice(1);
+    if (VIEWS.includes(name) && name !== S.view) setView(name);
+  });
   $('#drawerClose').onclick = closeDrawer;
   $('#scrim').onclick = closeDrawer;
   $('#runBtn').onclick = runCommand;
@@ -2139,7 +2973,7 @@ async function init() {
   setInterval(() => {
     if (document.hidden) return;
     const job = S.jobs.find((j) => j.id === S.activeJob);
-    if (job && (job.status === 'running' || S.jobCursor < job.line_count)) pumpJob();
+    if (job && (jobIsLive(job) || S.jobCursor < job.line_count)) pumpJob();
   }, 900);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshState(); });
 }

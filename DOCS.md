@@ -402,15 +402,29 @@ with no prediction keep dimmed height colors. A per-scan pass runs in tens of
 milliseconds on a GPU — comfortably real time.
 
 **Rock outlines** are the third view, and the one that answers "how many rocks
-are there" instead of "which points are rock". Every detection above the
-threshold is grouped with the ones near it (**Link distance**, default 0.30 m),
-any clump with fewer detections than the **Min points** gate (default 5) is
-thrown away as speckle, and each survivor is wrapped in a polygon — drawn as a
-low prism in the 3D window and as a filled footprint on the web panel's
-overhead map, with the count of what the gate dropped printed beside it so an
-over-strict gate is visible rather than silent. Pick it from the Model card's
-Display dropdown; the two knobs live in the **Rock outlines** card next to it.
-They are display settings: moving one re-draws, it never re-scores.
+are there" instead of "which points are rock". The default **Robust density +
+tight contour** grouping starts from every detection above the threshold but
+only lets a point grow a component when it has enough **Core neighbours**.
+A sparse chain can touch the edge of a real rock once, but cannot relay the
+connection indefinitely the way single-link clustering does. The default
+**Link distance** is 0.15 m (three cells on the normal 5 cm candidate grid) and
+the final **Min points** gate is 6.
+
+Each dense survivor then passes object-level priors: **Max diameter** rejects
+furniture-scale footprints, **Max height** rejects tall structures, and an
+optional **Mean confidence** rejects components made mostly from marginal
+above-threshold points. Zero disables any optional gate. A Delaunay contour
+wraps what remains; **Contour gap** controls how far it may bridge empty ground
+and **Polygon padding** adds a safety skin. The polygon is drawn as a low prism
+in the 3D window and as a filled footprint on the web panel's overhead map.
+The readout says not just how much was dropped, but whether it was sparse,
+small, too wide, too tall, or weak.
+
+Set **Grouping** to **Legacy links + convex hull** for the exact previous
+single-link behavior. Legacy mode uses only Link distance and Min points and
+ignores all new object/contour controls, so it is both a fallback and a useful
+A/B view. All outline controls are display settings: moving one re-draws, it
+never re-scores or changes model probabilities.
 
 **Comparing two checkpoints.** `--compare-model OTHER.pt` (on top of
 `--model`) opens a **second Open3D window** on the same scene, scored by a
@@ -439,7 +453,9 @@ Everything about scoring is tunable live in the panel's **Model** section:
 on/off, confidence vs. detections vs. rock-outline display, decision threshold, update
 interval (default 0.5 s), scan window (0 = single scan, matching training),
 the region's z band and max range, prediction-map on/off + clear, and the
-max-centers-per-pass cap. "Crop view to region" in the View section also
+max-centers-per-pass cap. The separate **Rock outlines** section owns density,
+size, confidence and contour controls; none of those re-runs the model.
+"Crop view to region" in the View section also
 hides the out-of-region points (walls/ceiling) from the display itself.
 `--floor-band` (or `--z-min/--z-max`) and `--max-range` seed the region from
 the CLI; `--score-interval` and `--device` set the cadence and torch device.
@@ -1328,4 +1344,3 @@ rocklabel live --source udp --model training/experiments/compare/pointnet_loro_m
 
 run model with previously recorded mcap:
 rocklabel-train replay recordings/myroom5.mcap --checkpoint training/experiments/compare/pointnet_loro_myroom4/best.pt     --z-min -1.5 --z-max -0.5 --max-range 8
-

@@ -58,7 +58,7 @@ def fixtures(tmp_path):
     recorded = {}
     with app.test_client() as client:
         for path in ("/api/catalog", "/api/state", "/api/sensor", "/api/jobs",
-                     "/api/board"):
+                     "/api/board", "/api/campaigns"):
             recorded[path] = client.get(path).get_json()
         rec = recorded["/api/state"]["inventory"]["recordings"][0]["path"]
         recorded["/api/recording"] = client.get(
@@ -87,9 +87,20 @@ def fixtures(tmp_path):
                   "command_line": "rocklabel inspect recordings/run1.mcap",
                   "gui": False, "status": "ok", "returncode": 0,
                   "panel_url": None, "finished": 12.0, "elapsed": 12.0}
+    # …plus one read back from the saved history: a training run that was still
+    # going when the dashboard was last closed, and whose process outlived it.
+    # It renders differently (no rerun, still stoppable), so the harness needs
+    # one to walk over.
+    past = done | {"id": "j0003", "command_id": "train", "title": "Train",
+                   "command_line": "rocklabel-train train --profile full-sweep",
+                   "status": "interrupted", "returncode": None, "finished": None,
+                   "elapsed": 900.0, "restored": True, "orphan": True}
+    for j in (job, done):
+        j.setdefault("restored", False)
+        j.setdefault("orphan", False)
     recorded["/api/run"] = {"job": job}
-    recorded["/api/jobs"] = {"jobs": [job, done]}
-    recorded["/api/state"]["jobs"] = [job, done]
+    recorded["/api/jobs"] = {"jobs": [job, done, past]}
+    recorded["/api/state"]["jobs"] = [job, done, past]
     recorded["/api/jobs/JOB/rerun"] = {"job": done | {"id": "j0003"}}
     recorded["/api/rename"] = {"name": "renamed", "path": "datasets/full-sweep/renamed",
                                "renamed": ["datasets/full-sweep/renamed"]}

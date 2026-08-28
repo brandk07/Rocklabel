@@ -23,7 +23,7 @@ import webbrowser
 
 from flask import Flask, abort, jsonify, render_template, request, send_from_directory
 
-from . import board, inventory, netfix, spec, sysinfo
+from . import board, campaigns, inventory, netfix, spec, sysinfo
 from .jobs import JobManager
 
 
@@ -208,6 +208,13 @@ def create_app(root: str) -> Flask:
     def api_board():
         return jsonify(board.board(root))
 
+    # Campaign write-ups for the Training screen. Same shape of work as the
+    # board — it walks every fold directory — so it is fetched on entry to that
+    # screen rather than riding along with the inventory poll.
+    @app.get("/api/campaigns")
+    def api_campaigns():
+        return jsonify(campaigns.campaigns(root))
+
     @app.get("/api/board/notes")
     def api_board_notes():
         return jsonify({"notes": board.read_notes(root)})
@@ -321,12 +328,13 @@ def create_app(root: str) -> Flask:
         Refuses while the job itself is still running: every command that would
         be worth rerunning holds something exclusive — the UDP port, a GUI
         window, an output folder — and a second copy of it fights the first.
-        Stop it, then rerun.
+        Stop it, then rerun. That includes a job left over from an earlier
+        dashboard whose process is still going.
         """
         job = jobs.get(job_id)
         if job is None:
             abort(404, job_id)
-        if job.status == "running":
+        if job.alive:
             abort(409, f"{job_id} is still running — stop it first")
         return jsonify({"job": jobs.rerun(job).summary()})
 

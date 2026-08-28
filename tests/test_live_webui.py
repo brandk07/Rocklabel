@@ -1098,11 +1098,33 @@ def _outline_ctl(fused):
 
 def test_outline_settings_reach_the_scorer(fused):
     ctl, scorer = _outline_ctl(fused)
+    ctl.set("outline.grouping", "robust")
+    ctl.set("outline.core_points", 6)
+    ctl.set("outline.max_diameter_m", 0.7)
+    ctl.set("outline.max_height_m", 0.4)
+    ctl.set("outline.min_mean_prob", 0.92)
+    ctl.set("outline.contour_m", 0.18)
+    ctl.set("outline.padding_m", 0.035)
+    st = scorer.settings
+    assert st.cluster_grouping == "robust"
     assert scorer.settings.cluster_link_m == pytest.approx(0.3)
-    assert scorer.settings.cluster_min_points == 5
+    assert st.cluster_core_points == 6
+    assert st.cluster_min_points == 5
+    assert st.cluster_max_diameter_m == pytest.approx(0.7)
+    assert st.cluster_max_height_m == pytest.approx(0.4)
+    assert st.cluster_min_mean_prob == pytest.approx(0.92)
+    assert st.cluster_contour_m == pytest.approx(0.18)
+    assert st.cluster_padding_m == pytest.approx(0.035)
     values = ctl.snapshot()["values"]
+    assert values["outline.grouping"] == "robust"
     assert values["outline.link_m"] == pytest.approx(0.3)
+    assert values["outline.core_points"] == 6
     assert values["outline.min_points"] == 5
+    assert values["outline.max_diameter_m"] == pytest.approx(0.7)
+    assert values["outline.max_height_m"] == pytest.approx(0.4)
+    assert values["outline.min_mean_prob"] == pytest.approx(0.92)
+    assert values["outline.contour_m"] == pytest.approx(0.18)
+    assert values["outline.padding_m"] == pytest.approx(0.035)
 
 
 def test_the_map_draws_polygons_when_the_display_asks_for_them(fused):
