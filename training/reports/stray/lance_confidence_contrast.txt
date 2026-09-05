@@ -1,0 +1,33 @@
+intensity: rescaling by 1.5259e-05 (driver publishes raw counts in a float field)
+
+=== levelling ===
+  levelling:             manual
+  mount roll / pitch:    -0.74 deg / -2.96 deg (tilt 3.05 deg)
+intensity: rescaling by 1.5259e-05 (driver publishes raw counts in a float field)
+
+########## lance: 40 frames
+  model                              ground     ROCK  contrast   p99.9  range used  PR-AUC
+  classifier cls-base                 0.000    0.004    +0.004   1.000       1.000   0.403
+  classifier cls-stray                0.055    0.981    +0.926   1.000       0.999   0.655
+  segmenter seg-base                  0.000    0.956    +0.956   1.000       1.000   0.615
+  segmenter seg-stray                 0.000    0.102    +0.102   0.998       0.998   0.437
+  segmenter segdeploy-frame-18        0.000    0.139    +0.139   0.995       0.995   0.479
+  segmenter now deployed (e80)        0.638    0.914    +0.276   1.000       0.932   0.223
+
+=== levelling ===
+  levelling:             manual
+  mount roll / pitch:    +0.22 deg / +30.97 deg (tilt 30.97 deg)
+  floor (levelled):      z = -0.813 m
+
+########## VolleyBallTest11: 17 frames
+  model                              ground     ROCK  contrast   p99.9  range used  PR-AUC
+  classifier cls-base                 0.038    0.991    +0.953   1.000       1.000   0.786
+  classifier cls-stray                0.056    0.993    +0.936   1.000       0.999   0.789
+  segmenter seg-base                  0.087    0.977    +0.891   1.000       1.000   0.725
+  segmenter seg-stray                 0.154    0.977    +0.822   1.000       0.999   0.690
+  segmenter segdeploy-frame-18        0.113    0.935    +0.822   1.000       0.999   0.675
+  segmenter now deployed (e80)        0.009    0.941    +0.933   1.000       1.000   0.612
+
+ground/ROCK are median confidences on clear ground and on labelled rock. 'contrast' is
+the gap between them, in the same 0-1 units the colour ramp spans - it is what you
+see. 'range used' is how much of the ramp the model's output actually occupies.

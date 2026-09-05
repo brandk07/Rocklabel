@@ -3,7 +3,7 @@
   "mcap_file": "VolleyBallTest4.reslam.mcap",
   "run_id": "VolleyBallTest4.reslam",
   "odom_frame": "world",
-  "created": "2026-08-17T21:06:02Z",
+  "created": "2026-08-29T00:13:53Z",
   "tool_version": "0.2.0",
   "intensity_available": true,
   "accumulator_voxel_m": 0.03,
@@ -12,7 +12,7 @@
       "id": 2,
       "shape": "polygon",
       "center": [
-        2.5493,
+        2.5492,
         -2.494,
         -0.7057
       ],
@@ -72,7 +72,7 @@
       "id": 3,
       "shape": "polygon",
       "center": [
-        2.6497,
+        2.6498,
         -2.2715,
         -0.7393
       ],
@@ -132,8 +132,8 @@
       "id": 4,
       "shape": "polygon",
       "center": [
-        2.7543,
-        -2.0258,
+        2.7542,
+        -2.0257,
         -0.8418
       ],
       "radius": 0.2591,
@@ -186,9 +186,9 @@
       "center": [
         2.7938,
         -1.8177,
-        -0.8449
+        -0.8448
       ],
-      "radius": 0.2596,
+      "radius": 0.2595,
       "vertices": [
         [
           2.7293,
@@ -237,7 +237,7 @@
       "shape": "polygon",
       "center": [
         2.8208,
-        -1.5663,
+        -1.5662,
         -0.8823
       ],
       "radius": 0.262,
@@ -470,10 +470,10 @@
     ]
   },
   "level": {
-    "mode": "auto",
+    "mode": "manual",
     "roll_deg": -7.3597,
     "pitch_deg": 31.202,
-    "floor_z": -0.7813
+    "floor_z": -0.7818
   },
   "z_band": [
     -1.0,

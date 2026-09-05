@@ -112,6 +112,40 @@ def test_tf_tree_composes_chain():
     np.testing.assert_allclose(pos, np.zeros(3))
 
 
+def test_tf_tree_stops_at_the_odom_frame_not_the_map_frame():
+    """A competition bag's map->odom is a real rotation, and walking through it
+    lands in a different world frame than the labeler and generator use.
+
+    On the lance recording that step is a constant 2.5 deg tilt, so composing
+    to the tree root put the replay viewer in a world tilted away from the one
+    every label and training tensor was built in — and the levelling angle
+    stored in the label file then made the tilt worse instead of removing it.
+    """
+    tree = TfTree()
+    # map -> odom carries a 30 deg roll; odom -> base_link -> lidar_link do not.
+    roll30 = np.array([np.cos(np.pi / 12), np.sin(np.pi / 12), 0.0, 0.0])
+    tree.update("map", "odom", np.array([5.0, 0.0, 0.0]), roll30)
+    tree.update("odom", "base_link", np.array([1.0, 0.0, 0.0]), _YAW90)
+    tree.update("base_link", "lidar_link", np.array([0.0, 0.0, 0.5]),
+                np.array([1.0, 0.0, 0.0, 0.0]))
+
+    # Default: stop at odom, so map -> odom contributes nothing.
+    pos, quat = tree.pose("lidar_link")
+    np.testing.assert_allclose(pos, [1.0, 0.0, 0.5], atol=1e-12)
+    np.testing.assert_allclose(quat_to_matrix(quat), quat_to_matrix(_YAW90), atol=1e-12)
+
+    # Opting out walks to the root and does pick the extra rotation up.
+    root_pos, root_quat = tree.pose("lidar_link", world_frame=None)
+    assert not np.allclose(root_pos, pos)
+    assert not np.allclose(quat_to_matrix(root_quat), quat_to_matrix(quat), atol=1e-6)
+
+    # A bag whose tree has no odom frame still composes to its root.
+    bare = TfTree()
+    bare.update("map", "base_link", np.array([2.0, 0.0, 0.0]), _YAW90)
+    assert not bare.has_frame("odom")
+    np.testing.assert_allclose(bare.pose("base_link", world_frame=None)[0], [2.0, 0.0, 0.0])
+
+
 # --------------------------------------------------------------------------- #
 # End-to-end rosbag replay
 # --------------------------------------------------------------------------- #
@@ -165,7 +199,9 @@ def test_ros2_bag_replay_end_to_end(tmp_path):
 
     src = McapReplaySource(path, autoplay=False)
     src.start()
-    assert src.duration_sec == pytest.approx(0.2)
+    # The timeline covers the clouds (0.1 s -> 0.2 s), not the bag's advertised
+    # span: the leading /tf at t=0 is not something playback can show.
+    assert src.duration_sec == pytest.approx(0.1)
     src.seek(src.duration_sec)
     batches = _drain(src)
 
@@ -180,10 +216,10 @@ def test_ros2_bag_replay_end_to_end(tmp_path):
     assert src.finished
 
     # Backward seek: rewind, reset downstream, fast-forward to the target
-    # (0.11s lies past the first cloud, so exactly that one is redelivered).
+    # (0.01s lies past the first cloud, so exactly that one is redelivered).
     resets = []
     src.on_rewind = lambda: resets.append(1)
-    src.seek(0.11)
+    src.seek(0.01)
     b = src.read(timeout=0.5)
     assert len(resets) == 1 and b is not None
     np.testing.assert_allclose(b.points, pts[:2] + tf1[2], atol=1e-6)
@@ -216,4 +252,35 @@ def test_intensity_scale_probe_u8_range(tmp_path):
     src.seek(1.0)
     (batch,) = _drain(src)
     np.testing.assert_allclose(batch.intensity, [2570.0, 51400.0, 0.0])  # x257
+    src.stop()
+
+
+def test_replay_timeline_ignores_tf_that_predates_the_clouds(tmp_path):
+    """A trimmed bag keeps /tf from before the cut; the timeline must not.
+
+    ``rocklabel trim`` (and rosbag2 itself) leave pose messages either side of
+    the window, so the file's advertised start time can sit minutes before the
+    first cloud. Anchoring playback there left the viewer parked at 0:00 with
+    nothing on screen until you scrubbed forward to where the clouds began.
+    """
+    path = str(tmp_path / "trimmed.mcap")
+    pts = np.array([[1.0, 0.0, 0.0]])
+    inten = np.array([1.0])
+    tf1 = ("odom", "lidar_link", np.array([0.0, 0.0, 0.0]), np.array([1.0, 0, 0, 0]))
+    _write_bag(
+        path,
+        [
+            # 150 s of poses before the first cloud, exactly as a trim leaves.
+            ("/tf", "tf2_msgs/msg/TFMessage", 0, _tf_msg([tf1])),
+            ("/tf", "tf2_msgs/msg/TFMessage", 150_000_000_000, _tf_msg([tf1])),
+            ("/pc", "sensor_msgs/msg/PointCloud2", 150_000_000_000, _cloud_msg(pts, inten)),
+            ("/pc", "sensor_msgs/msg/PointCloud2", 150_500_000_000, _cloud_msg(pts, inten)),
+        ],
+    )
+    src = McapReplaySource(path, autoplay=True, speed=0.0)
+    src.start()
+    assert src.duration_sec == pytest.approx(0.5)   # not 150.5
+    assert src.position_sec == pytest.approx(0.0)
+    # The first cloud is available immediately rather than 150 s from now.
+    assert src.read(timeout=1.0) is not None
     src.stop()

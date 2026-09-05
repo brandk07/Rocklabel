@@ -122,6 +122,14 @@ def build_parser() -> argparse.ArgumentParser:
     _add_config_arg(p)
     p.add_argument("--labels", help="label JSON to resume editing (default: <mcap>.labels.json)")
     p.add_argument("--stride", type=int, help="accumulate every Nth scan (default from config: 1)")
+    p.add_argument("--min-hits", type=int, metavar="N",
+                   help="drop fused voxels that fewer than N scans ever hit "
+                        "(default: 1 = keep everything). Real ground "
+                        "and rocks come back in the same voxel on every look, "
+                        "while a stray return claims a fresh voxel each scan, so "
+                        "raising this clears scattered mid-air points without "
+                        "thinning solid surfaces. Try 3-10 on a long recording; "
+                        "lower it if rocks start disappearing")
     p.add_argument("--z-min", type=float, help="initial lower z clip (meters)")
     p.add_argument("--z-max", type=float, help="initial upper z clip (meters)")
     p.add_argument("--dump-accumulated", metavar="CLOUD.PLY",
@@ -302,7 +310,8 @@ def main(argv: list[str] | None = None) -> int:
             from .gui.labeler import run_label
             run_label(mcap, cfg, args.labels, args.stride, args.z_min, args.z_max,
                       dump_accumulated=args.dump_accumulated,
-                      fallback_viewer=args.fallback_viewer)
+                      fallback_viewer=args.fallback_viewer,
+                      min_hits=args.min_hits)
         elif args.command == "driftcheck":
             cfg = _apply_level_args(cfg, args)
             from .gui.driftcheck import run_driftcheck

@@ -3,6 +3,7 @@ offline pipeline reads, CLI config plumbing behaves, and the live scorer's
 point-coloring contract holds."""
 
 import argparse
+import json
 
 import numpy as np
 import pytest
@@ -11,7 +12,8 @@ from rocklabel.config import load_config
 from rocklabel.recording.lidarrig_io import iter_frames, read_embedded_config
 from rocklabel.live.config import AppConfig
 from rocklabel.live.pipeline import IngestEngine
-from rocklabel.live.run import _build_config, add_live_args
+from rocklabel.live.run import (_build_config, _label_level_for_replay,
+                                add_live_args)
 from rocklabel.live.sources import make_source
 from rocklabel.live.surfaces import make_surface_builder
 from rocklabel.recording.pipeline import ScanStream
@@ -80,6 +82,19 @@ def test_play_disables_motion_and_recording(tmp_path):
     cfg = _build_config(_parse(False, ["--play", play, "--record"]), record_cmd=False)
     assert not cfg.slam.enabled and not cfg.motion.use_imu
     assert not cfg.record.autostart
+
+
+def test_a_labelled_replay_reuses_the_exact_frame_training_used(tmp_path):
+    labels = tmp_path / "labels" / "court"
+    labels.mkdir(parents=True)
+    (labels / "run.labels.json").write_text(json.dumps({
+        "mcap_file": "run.mcap",
+        "level": {"mode": "auto", "roll_deg": -7.3597,
+                  "pitch_deg": 31.202, "floor_z": -0.7813},
+    }))
+    level = _label_level_for_replay(str(tmp_path / "run.mcap"), str(tmp_path / "labels"))
+    assert level["roll_deg"] == pytest.approx(-7.3597)
+    assert level["pitch_deg"] == pytest.approx(31.202)
 
 
 def _bare_scorer(centers, probs, settings=None):
@@ -265,6 +280,48 @@ def test_the_segmenter_returns_one_probability_per_point_not_per_ball():
         assert seg(balls, counts).shape == (4, 256)      # one per point
 
 
+def test_live_loader_preserves_the_checkpoint_height_reference(tmp_path):
+    """The floor reference changes no parameter shapes, so the weights load
+    cleanly even if serving forgets the setting.  That made the retrained model
+    silently run with the old preprocessing and look just like the old model."""
+    torch = pytest.importorskip("torch")
+    from rocklabel.live.scoring import LiveScorer, ScoreSettings
+    from rocklabel.train.models import build_model
+
+    config = {
+        "model": "pointnet2_seg", "tnet": False, "dropout": None,
+        "features": ["dx", "dy", "dz"],
+        "seg_npoints": [32, 16, 8], "seg_radii": [0.1, 0.3, 0.8],
+        "seg_height_ref": "floor",
+        "seg_coord_ref": "local",
+    }
+    generator = {"seed": 42, "frame_window_s": 0.0}
+    trained = build_model(
+        config["model"], features=config["features"],
+        seg_npoints=config["seg_npoints"], seg_radii=config["seg_radii"],
+        seg_height_ref=config["seg_height_ref"],
+        seg_coord_ref=config["seg_coord_ref"],
+    )
+    checkpoint = tmp_path / "floor.pt"
+    torch.save({"config": config, "generator": generator,
+                "model": trained.state_dict(),
+                "floor_band": (-1.05, -0.78)}, checkpoint)
+
+    scorer = LiveScorer(str(checkpoint), object(), device="cpu",
+                        settings=ScoreSettings())
+    assert scorer._model.height_ref == "floor"
+    assert scorer._model.coord_ref == "local"
+    # The saved sensor-relative band is useful checkpoint provenance, but a
+    # floor-referenced model subtracts the live floor and is invariant to this
+    # offset.  The old warning falsely blamed Lance's mounting height even when
+    # the new preprocessing was active.
+    scorer.floor_warning = "stale warning"
+    points = torch.zeros((1, 32, 4), dtype=torch.float32)
+    points[0, :, 2] = -0.57
+    scorer._check_floor(points, torch.tensor([32]))
+    assert scorer.floor_warning is None
+
+
 def test_a_failing_scorer_says_so_instead_of_warming_up_forever():
     """The panel used to show 'warming up…' indefinitely while every pass
     raised, with the reason only in a terminal log."""
@@ -278,3 +335,115 @@ def test_a_failing_scorer_says_so_instead_of_warming_up_forever():
     # and with no error it still reads as warming up
     scorer._last_error = None
     assert "warming up" in scorer.status()
+
+
+def test_a_tall_z_band_warns_a_segmenter_instead_of_going_quietly_dead():
+    """Measured on the competition recording: the floor-band preset lets 0.70 m
+    of berm and equipment into a model trained on 0.2 m of flat ground, and it
+    then reports no rocks anywhere - which looks exactly like a clean arena."""
+    torch = pytest.importorskip("torch")
+    scorer = _bare_scorer(np.zeros((0, 3)), np.zeros(0, np.float32))
+    scorer.frame_band = (0.15, 0.25)
+    scorer.height_warning = None
+
+    tall = torch.zeros((1, 64, 4), dtype=torch.float32)
+    tall[0, :, 2] = torch.linspace(0.0, 0.70, 64)
+    scorer._check_frame_height(tall, torch.tensor([64]))
+    assert scorer.height_warning is not None
+    # floor (10th pct) to ceiling (99th pct) of the ramp, not its raw extremes
+    assert "0.62 m" in scorer.height_warning
+
+    thin = torch.zeros((1, 64, 4), dtype=torch.float32)
+    thin[0, :, 2] = torch.linspace(0.0, 0.25, 64)
+    scorer._check_frame_height(thin, torch.tensor([64]))
+    assert scorer.height_warning is None
+
+
+def test_a_region_too_sparse_for_a_whole_frame_pass_says_so():
+    """A segmenter refuses a region under segmentation_min_points. Silently,
+    the panel just kept showing the previous pass's numbers."""
+    scorer = _bare_scorer(np.zeros((0, 3)), np.zeros(0, np.float32))
+    scorer._last_thin = (140, 512)
+    st = scorer.status_dict()
+    assert "140 points" in st["warning"] and "512" in st["warning"]
+
+
+# --------------------------------------------------------------------------- #
+# Phantom-point rejection
+# --------------------------------------------------------------------------- #
+def _sweep_with_strays(n_ground=800, n_stray=20, seed=0):
+    """Flat ground over a 6 m square, plus a few returns stranded in mid-air."""
+    rng = np.random.default_rng(seed)
+    ground = np.column_stack([
+        rng.uniform(-3.0, 3.0, n_ground),
+        rng.uniform(-3.0, 3.0, n_ground),
+        rng.normal(0.0, 0.01, n_ground),
+    ])
+    strays = np.column_stack([
+        rng.uniform(-3.0, 3.0, n_stray),
+        rng.uniform(-3.0, 3.0, n_stray),
+        rng.uniform(1.0, 2.5, n_stray),
+    ])
+    return ground, strays
+
+
+def test_floating_filter_drops_strays_and_keeps_ground_and_rocks():
+    from rocklabel.live.filters import floating_keep_mask
+
+    ground, strays = _sweep_with_strays()
+    # A 0.3 m rock sitting on the ground must survive; it is well under the cut.
+    rock = np.column_stack([
+        np.full(60, 1.0), np.full(60, 1.0), np.linspace(0.0, 0.3, 60),
+    ])
+    pts = np.vstack([ground, rock, strays])
+    keep = floating_keep_mask(pts, cell_size=1.0, max_height=0.5)
+
+    n_g, n_r = len(ground), len(rock)
+    assert keep[:n_g].all()                      # ground untouched
+    assert keep[n_g:n_g + n_r].all()             # rock untouched
+    assert not keep[n_g + n_r:].any()            # every stray dropped
+
+
+def test_floating_filter_beats_the_mean_based_outlier_test():
+    """The spikes inflate their own column's std, so the mean test misses them.
+
+    This is why the phantom points survived: a return 1-2.5 m up widens its
+    column's spread enough that a +-2.5 sigma gate no longer reaches it, while
+    the genuinely raised points nearby (rock tops) get clipped instead.
+    """
+    from rocklabel.live.filters import floating_keep_mask, statistical_outlier_mask
+
+    ground, strays = _sweep_with_strays()
+    pts = np.vstack([ground, strays])
+    n_g = len(ground)
+
+    mean_keep = statistical_outlier_mask(pts, cell_size=0.5, std_ratio=2.5)
+    robust_keep = floating_keep_mask(pts, cell_size=1.0, max_height=0.5)
+
+    mean_caught = (~mean_keep[n_g:]).mean()
+    robust_caught = (~robust_keep[n_g:]).mean()
+    assert robust_caught == 1.0
+    assert mean_caught < robust_caught
+
+
+def test_floating_filter_leaves_sparse_columns_alone():
+    """Too few points in a column to say where the ground is -> keep them."""
+    from rocklabel.live.filters import floating_keep_mask
+
+    pts = np.array([[0.0, 0.0, 0.0], [0.1, 0.1, 3.0]])
+    assert floating_keep_mask(pts, cell_size=1.0, max_height=0.5,
+                              min_cell_points=4).all()
+
+
+def test_floating_filter_mask_passthrough_and_disable():
+    from rocklabel.live.config import FloatingConfig
+    from rocklabel.live.filters import floating_filter_mask
+
+    ground, strays = _sweep_with_strays()
+    pts = np.vstack([ground, strays])
+    assert floating_filter_mask(pts, FloatingConfig(enabled=False)) is None
+    # Batch below min_points: no statistics worth trusting, pass through.
+    assert floating_filter_mask(pts[:8], FloatingConfig()) is None
+    # Nothing to drop -> None, so callers can skip the copy.
+    assert floating_filter_mask(ground, FloatingConfig()) is None
+    assert floating_filter_mask(pts, FloatingConfig()) is not None

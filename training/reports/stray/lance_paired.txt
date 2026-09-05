@@ -1,0 +1,39 @@
+intensity: rescaling by 1.5259e-05 (driver publishes raw counts in a float field)
+
+=== levelling ===
+  levelling:             manual
+  mount roll / pitch:    -0.74 deg / -2.96 deg (tilt 3.05 deg)
+intensity: rescaling by 1.5259e-05 (driver publishes raw counts in a float field)
+lance: 60 frames, ~3343 points each
+
+
+=== Classifier: PR-AUC on the lance arena, per fold ===
+fold (held out of training)       no stray     stray     delta
+VolleyBallTest10.reslam              0.489     0.601    +0.112
+VolleyBallTest11.reslam              0.609     0.672    +0.063
+VolleyBallTest12.reslam              0.612     0.641    +0.029
+VolleyBallTest2.reslam               0.437     0.548    +0.110
+VolleyBallTest3.reslam               0.526     0.656    +0.130
+VolleyBallTest4.reslam               0.583     0.607    +0.024
+VolleyBallTest5.reslam               0.467     0.591    +0.124
+VolleyBallTest6.reslam               0.545     0.567    +0.022
+VolleyBallTest7.reslam               0.482     0.623    +0.141
+VolleyBallTest8.reslam               0.512     0.602    +0.090
+VolleyBallTest9.reslam               0.400     0.582    +0.182
+mean                                                    +0.093
+  11 folds, stray ahead on 11 of 11, signed-rank p = 0.001
+
+=== Segmenter: PR-AUC on the lance arena, per fold ===
+fold (held out of training)       no stray     stray     delta
+VolleyBallTest10.reslam              0.459     0.579    +0.120
+VolleyBallTest11.reslam              0.438     0.530    +0.092
+VolleyBallTest3.reslam               0.472     0.426    -0.047
+VolleyBallTest4.reslam               0.472     0.484    +0.012
+VolleyBallTest6.reslam               0.447     0.479    +0.032
+VolleyBallTest9.reslam               0.397     0.546    +0.149
+mean                                                    +0.060
+  6 folds, stray ahead on 5 of 6, signed-rank p = 0.156
+
+Every model here was trained without lance and without the recording named on its row.
+PR-AUC is threshold-free. Within a family the two columns are scored on identical
+points, so the delta is the augmentation; across families they are not comparable.

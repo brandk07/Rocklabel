@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from ..dataset.neighborhoods import FEATURES, GEOMETRY
+from .models_meta import BEV_CHANNELS, BEV_DENSITY
 from .metrics import normalized_pr_auc
 
 #: Where a sweep's per-fold run directories live: one folder per experiment,
@@ -266,7 +267,13 @@ FULLSWEEP_CONTRASTS = [
 #: * A batch of 512, which the engine turns into 16 whole frames per step
 #:   instead of 8. Measured 1.5x faster per epoch at the same settings, which is
 #:   what pays for the extra epochs.
-_SEG_LONG = {"epochs": 60, "patience": 25, "batch": 512}
+_SEG_LONG = {"epochs": 60, "patience": 25, "batch": 512,
+             # Pinned, not inherited. These two settings changed defaults in
+             # August 2026; every segmentation arm below was trained before that
+             # and has to keep asking for the old behavior or a rerun would
+             # quietly retrain them against a different height reference and
+             # invalidate the baseline the new arm is measured against.
+             "seg_height_ref": "base", "aug_ground_tilt": 0.0}
 
 #: Finer levels for the segmenter (section 3 of the training brief). The stock
 #: geometry throws three quarters of a frame away at the first level and its
@@ -330,7 +337,310 @@ SEGDENSE_CONTRASTS = [
      "Noise floor: the same long segmentation setting, two different seeds."),
 ]
 
+#: The deployment segmenter, as it is actually configured for the competition
+#: rig. Everything two sweeps found worth having, in one arm: 80 epochs (the
+#: 30-epoch folds never once early-stopped), the finer level geometry (a 0.10 m
+#: first radius against rocks that measure 21-68 cm, instead of a 0.25 m ball
+#: that swallows one whole), heights measured from the frame's own floor rather
+#: than the robot base, a random ground tilt, and frame-centred coordinates.
+#: The last two are what a checkpoint needs to survive an arena that is not the
+#: volleyball court: measured on the competition recording, this combination
+#: scored 82.7% precision where the deployed base-relative segmenter scored
+#: 22.5%. Batch 512 rather than 256 because it is ~1.5x faster per epoch at
+#: identical settings, which is what pays for the extra epochs.
+_STRAY_SEG = {"epochs": 80, "patience": 30, "batch": 512,
+              "seg_npoints": [1024, 256, 64], "seg_radii": [0.1, 0.3, 0.8],
+              "seg_height_ref": "floor", "seg_coord_ref": "frame",
+              "aug_ground_tilt": 0.03}
+
+#: The clutter augmentation itself, added to whichever arm is the control.
+#: 5% of every training frame becomes a return sitting on no surface, pushed
+#: along the line of sight it arrived on with a heavy-tailed displacement.
+_STRAY_ON = {"aug_stray_frac": 0.05, "aug_stray_reach": 1.0}
+
+#: Does training against stray returns cost anything on clean data?
+#:
+#: Both model families, each with and without the augmentation, on one cache -
+#: so each pair is a single-variable change and the two families are trained on
+#: exactly the same frames. Order is priority order, and it is deliberately
+#: family-major: the classifier pair is a quarter the cost of the segmenter
+#: pair, so stopping early still leaves one complete answer rather than two
+#: half-finished ones.
+#: The domain-gap arm: the deployment segmenter, trained against the two frame
+#: level differences that were *measured* between its training frames and the
+#: competition arena, rather than against clutter.
+#:
+#: A whole-frame segmenter reads the frame as one object, so two properties of
+#: the frame decide whether it recognises what it is looking at, and both were
+#: measured to be out of range on every single lance frame:
+#:
+#: * **Vertical structure.** Training frames hold 0.10-0.26 m of it - the
+#:   volleyball court is a flat slab. Lance frames hold 0.46-0.55 m, because the
+#:   arena has a berm and walls in shot. A model whose only experience is a flat
+#:   floor can read "sticks up above the ground" as "rock"; in a dug bin that
+#:   cue is worthless. ``aug_ground_tilt`` at 0.08 tips the floor by up to 64 cm
+#:   across the 8 m crop, which puts training's vertical extent on top of the
+#:   arena's instead of a third of it.
+#: * **Density.** Training frames hold ~1,145 points in the crop box, lance
+#:   ~3,479 in the same box - denser than *any* frame in training, which changes
+#:   what every furthest-point sample and ball query returns. Points cannot be
+#:   invented, so the lever is the other way: ``aug_thin_min`` at 0.25 makes the
+#:   model tolerate 290-1,145 points instead of 570-1,145, widening the band it
+#:   is stable across.
+#:
+#: The sliding-window classifier needs neither, which is the point: its input is
+#: a 0.5 m ball with its own local ground subtracted and a fixed point budget,
+#: so it never sees either property. This arm asks whether giving the segmenter
+#: the same indifference by training closes the gap that separates them.
+_SEG_RELIEF = dict(_STRAY_SEG, aug_ground_tilt=0.08, aug_thin_min=0.25)
+
+STRAY_ARMS = [
+    Arm("cls-base", "pointnet", _GEOM, "Classifier · stock",
+        "Plain PointNet on 0.5 m candidate balls, shape only. The control for "
+        "the classifier pair, and the best-scoring classifier setting two "
+        "sweeps have found - PointNet++ measured no better and costs three "
+        "times as much, and reflectivity measured no better and is the channel "
+        "least likely to survive a change of arena."),
+    Arm("cls-stray", "pointnet", _GEOM, "Classifier · trained with stray returns",
+        "The same classifier with one thing added: 5% of every training "
+        "neighborhood becomes a return that sits on no surface, slid along the "
+        "line of sight it arrived on. Single-variable against cls-base.",
+        overrides=_STRAY_ON),
+    Arm("cls-phantom", "pointnet", _GEOM,
+        "Classifier · trained against phantom clumps",
+        "The classifier with 8% of every training batch replaced outright by a "
+        "synthetic phantom clump labelled clear: a loose 3D scatter of sparse "
+        "returns with no surface under it. Measured on the competition "
+        "recording 4 September 2026, that is what the arena's bad returns "
+        "actually present to a 0.5 m candidate ball - 96% of them arrive on "
+        "beams pointing up from the sensor, 85% read shorter than the two "
+        "neighbouring beams in their own ring, and enough land together that "
+        "the generator centres a candidate on the clump. Inside the ball the "
+        "clump is not obviously wrong: it measured 0.54 m of vertical extent "
+        "and 0.090 m of thickness off its best-fit plane against a rock's "
+        "0.46 m and 0.112 m, and the one cue that separates them - 680 returns "
+        "against 4,964 - is destroyed by the fixed 256-point sample. So the "
+        "gap is a missing sample, not a missing jitter: every ball in all "
+        "eleven training recordings is a near-flat patch spanning under 0.12 m "
+        "vertically, and nothing has ever taught the model that a tall loose "
+        "scatter is not a rock. Single-variable against cls-base.",
+        overrides={"aug_phantom_frac": 0.08}),
+    Arm("cls-phantom-heavy", "pointnet", _GEOM,
+        "Classifier · phantom clumps, heavy dose",
+        "The same negative at 20% instead of 8%. Dose is the one free "
+        "parameter here and the earlier stray sweep only ever tried one value, "
+        "so this brackets it: if the effect is real it should move with the "
+        "dose, and if 20% starts costing accuracy on clean volleyball data "
+        "that is the ceiling. Single-variable against cls-phantom.",
+        overrides={"aug_phantom_frac": 0.20}),
+    Arm("cls-both", "pointnet", _GEOM,
+        "Classifier · stray points and phantom clumps",
+        "Both clutter settings at once: 5% of each ball's points slid along "
+        "their line of sight, and 8% of samples replaced by a whole phantom "
+        "clump. They attack different halves of the same failure. On the "
+        "competition arena the stray jitter took the classifier from 39.6% to "
+        "82.2% recall but dropped precision from 54.7% to 37.6% - it learned to "
+        "call more things rocks. The clump negative is aimed squarely at that "
+        "precision loss, because a false call there is a candidate centred on "
+        "fog. If the two compose, this is the deployable one.",
+        overrides={"aug_stray_frac": 0.05, "aug_stray_reach": 1.0,
+                   "aug_phantom_frac": 0.08}),
+    Arm("seg-base", "pointnet2_seg", _GEOM, "Segmentation · deployment settings",
+        "The whole-frame segmenter as the rig is meant to run it: 80 epochs, "
+        "the finer level geometry, heights measured from the frame's own floor, "
+        "a random ground tilt, and frame-centred coordinates. The control for "
+        "the segmenter pair.",
+        overrides=_STRAY_SEG),
+    Arm("seg-stray", "pointnet2_seg", _GEOM,
+        "Segmentation · trained with stray returns",
+        "The deployment segmenter with 5% of every training frame turned into "
+        "stray returns. Real bad returns are mixed pixels and grazing-angle "
+        "range errors, so they slide along their own beam and hang in mid-air "
+        "rather than scattering evenly - which is why the competition cloud "
+        "looks like fog while these eleven recordings do not. Nothing in the "
+        "training data has ever held one, so a model has no reason not to read "
+        "a clump of them as an object. Single-variable against seg-base: if it "
+        "costs nothing on clean volleyball data, it is free insurance for a bin "
+        "that is not clean.",
+        overrides=dict(_STRAY_SEG, **_STRAY_ON)),
+    Arm("seg-capped", "pointnet2_seg", _GEOM, "Segmentation \u00b7 capped loss weight",
+        "The deployment segmenter with one change: a rock example counts at "
+        "most ten times a clear one in the loss, instead of the raw imbalance "
+        "of about 99. That weight is ~99 for any model labelling every point "
+        "and ~4.3 for the sliding-window classifier, and the whole gap comes "
+        "from the generator discarding 95% of clear candidates for one format "
+        "and none for the other. Measured on the BEV grid model, capping it "
+        "took a family from 10 of 18 checkpoints going blank on the "
+        "competition arena to 0 of 12, and lifted the arena score from 0.385 "
+        "to 0.593. The segmenter carries the same weight and shows the same "
+        "symptom - correct ranking with confidence collapsing to near zero - "
+        "so this asks whether the finding that closed segmentation was partly "
+        "measuring an unfixed loss weight. Single-variable against seg-base.",
+        overrides=dict(_STRAY_SEG, pos_weight_cap=10.0)),
+    Arm("seg-relief", "pointnet2_seg", _GEOM,
+        "Segmentation · trained for an arena with relief",
+        "The deployment segmenter trained against the two frame-level "
+        "differences measured between its training frames and the competition "
+        "arena: a floor tipped up to 64 cm across the crop instead of 24 cm, so "
+        "the vertical structure it sees matches the 0.46-0.55 m the arena "
+        "actually holds rather than the 0.10-0.26 m of a flat court, and "
+        "density thinning down to a quarter of a frame instead of a half. "
+        "Single-variable pairs are not the point here - both settings attack "
+        "the same measured gap, and the question the arm asks is whether that "
+        "gap is what has been costing the segmenter its transfer.",
+        overrides=_SEG_RELIEF),
+]
+
+STRAY_CONTRASTS = [
+    ("seg-base", "seg-capped",
+     "Does capping the rock-vs-clear loss weight stop the segmenter's "
+     "confidence collapsing away from home?"),
+    ("cls-base", "cls-stray",
+     "Classifier: does training against stray returns cost anything on clean data?"),
+    ("cls-base", "cls-phantom",
+     "Classifier: does training against phantom clumps cost anything on clean data?"),
+    ("cls-stray", "cls-phantom",
+     "Is a whole synthetic phantom clump a better negative than nudging 5% of "
+     "an ordinary ball's points?"),
+    ("cls-stray", "cls-both",
+     "Does adding the phantom-clump negative on top of stray jitter cost "
+     "anything on clean data?"),
+    ("cls-phantom", "cls-phantom-heavy",
+     "Classifier: does a heavier dose of phantom clumps help or start costing?"),
+    ("seg-base", "seg-stray",
+     "Segmentation: does training against stray returns cost anything on clean data?"),
+    ("cls-base", "seg-base",
+     "Does the deployment segmenter beat the sliding-window classifier?"),
+    ("cls-stray", "seg-stray",
+     "The same question with both models trained against stray returns."),
+    ("seg-base", "seg-relief",
+     "Segmentation: does training for an arena with relief in it beat training "
+     "on a flat court?"),
+]
+
+#: The BEV CNN's deployment-shaped settings. Epochs, patience and batch follow
+#: the segmenter's best-measured arm so the two are separated by the model and
+#: nothing else; 80 epochs is the only training change four sweeps have found
+#: worth keeping (+0.0192, 9 of 11 folds, p = 0.032). Heights come from the
+#: frame's own floor for the same reason the segmenter's do - the robot base
+#: rode 0.87-0.97 m above the floor here and ~0.37 m above it at competition.
+#: The 144-cell grid at 0.10 m holds every cached frame under any heading
+#: rotation: measured over the whole cache, the furthest point from a frame's
+#: centroid is 6.90 m, and a grid sized to the 8 x 8 m crop box would clip a
+#: rotated corner.
+_BEV = {"epochs": 80, "patience": 30, "batch": 512,
+        "seg_height_ref": "floor", "aug_ground_tilt": 0.03,
+        "bev_cell": 0.10, "bev_grid": 144, "bev_width": 32, "bev_depth": 3}
+
+#: Everything except the two channels that say how many returns made a cell.
+_BEV_NO_DENSITY = [c for c in BEV_CHANNELS if c not in BEV_DENSITY]
+
+#: Six folds rather than eleven. What matters for this model family is not the
+#: volleyball score - it is whether a setting survives the competition arena,
+#: and that is measured by scoring every fold's checkpoint on the lance
+#: recording afterwards. Transfer is a lottery (half of one classifier
+#: setting's runs went flat on lance), so several checkpoints per setting is
+#: what buys the answer, and six of them buys more settings than eleven does.
+BEV_FOLDS = ["VolleyBallTest2.reslam", "VolleyBallTest6.reslam",
+             "VolleyBallTest9.reslam", "VolleyBallTest10.reslam",
+             "VolleyBallTest11.reslam", "VolleyBallTest12.reslam"]
+
+BEV_ARMS = [
+    Arm("bev-base", "bev_cnn", _GEOM, "BEV CNN \u00b7 control",
+        "The frame rasterized to a 0.10 m grid and read by a small U-shaped "
+        "convolutional network, one answer per point. No clutter training, raw "
+        "return counts.",
+        overrides=_BEV),
+    Arm("bev-stray", "bev_cnn", _GEOM, "BEV CNN \u00b7 clutter training",
+        "The control plus 5% of every training frame turned into returns that "
+        "sit on no surface. Free-to-positive for the sliding-window classifier; "
+        "measured here it took the grid from 3 of 6 checkpoints going blank on "
+        "the competition arena to 6 of 6.",
+        overrides=dict(_BEV, **_STRAY_ON)),
+    Arm("bev-capped", "bev_cnn", _GEOM, "BEV CNN \u00b7 capped loss weight",
+        "Clutter training with a rock example counting at most ten times a "
+        "clear one instead of the raw 93. Tested because per-point models rank "
+        "rocks correctly away from home while their confidence collapses, and "
+        "an uncapped weight was the standing suspect. It did not help: both "
+        "checkpoints stayed flat at +0.010 contrast.",
+        overrides=dict(_BEV, **_STRAY_ON, pos_weight_cap=10.0)),
+    Arm("bev-relative", "bev_cnn", _GEOM, "BEV CNN \u00b7 scale-free density",
+        "Built on the control rather than on clutter training, because clutter "
+        "training is what kills this family's confidence. Each cell's return "
+        "count is divided by its own frame's average, so the channel says "
+        "'denser or sparser than the rest of this frame' rather than an "
+        "absolute number. The absolute number is not portable: a competition "
+        "frame carries 3,198 points in the crop box against a training median "
+        "of 1,145, and the fixed point budget turns that into a 1.8x shift in "
+        "every cell of the raster.",
+        overrides=dict(_BEV, bev_density_norm=True)),
+    Arm("bev-capped-nostray", "bev_cnn", _GEOM, "BEV CNN \u00b7 capped, no clutter",
+        "Capping the loss weight on the one footing that still produces live "
+        "models. Capping was tested with clutter training and failed, but so "
+        "does everything with clutter training - this asks whether the cap is "
+        "worth anything once that is out of the way.",
+        overrides=dict(_BEV, pos_weight_cap=10.0)),
+    Arm("bev-base-s43", "bev_cnn", _GEOM, "BEV CNN \u00b7 control (seed 43)",
+        "Seed repeat of the control. The control's contrast varies by +/-0.43 "
+        "across its six checkpoints, and without a seed repeat there is no way "
+        "to say how much of that is the setting and how much is the draw.",
+        overrides=_BEV, seed=43),
+    Arm("bev-local", "bev_cnn", _GEOM, "BEV CNN \u00b7 short sight",
+        "The control with the network two levels deep instead of three, "
+        "roughly halving how far each answer can see. The whole-frame segmenter "
+        "fails away from home because it reads the frame as one object; this "
+        "asks whether a shorter sight line buys the classifier's immunity.",
+        overrides=dict(_BEV, bev_depth=2)),
+    Arm("bev-capped-relative", "bev_cnn", _GEOM,
+        "BEV CNN \u00b7 capped, scale-free density",
+        "The two changes that each helped, together. Capping how much a rock "
+        "outweighs a clear example took the control from 3 of 6 checkpoints "
+        "going blank to 0 of 6 and lifted the arena score above the deployed "
+        "classifier's; dividing each cell's count by its own frame's average "
+        "also stopped the blanking but left the model firing everywhere on "
+        "half its folds. Single-variable against bev-capped-nostray.",
+        overrides=dict(_BEV, pos_weight_cap=10.0, bev_density_norm=True)),
+]
+
+BEV_CONTRASTS = [
+    ("bev-base", "bev-local",
+     "Does a shorter sight line cost anything at home?"),
+    ("bev-capped-nostray", "bev-capped-relative",
+     "On top of the capped loss, does a scale-free density channel add anything?"),
+    ("bev-base", "bev-stray",
+     "Does clutter training cost the grid anything on clean data?"),
+    ("bev-stray", "bev-capped",
+     "Does capping how much a rock outweighs a clear example stop the "
+     "confidence collapse away from home?"),
+    ("bev-base", "bev-relative",
+     "Does making the density channel scale-free cost anything at home? "
+     "(What it is for only shows up on the competition arena.)"),
+    ("bev-base", "bev-capped-nostray",
+     "Does capping the loss weight help once clutter training is out of the way?"),
+    ("bev-base", "bev-base-s43",
+     "Noise floor: the same control setting, two different seeds."),
+]
+
 SUITES: dict[str, dict] = {
+    "bev": {
+        "arms": BEV_ARMS,
+        "contrasts": BEV_CONTRASTS,
+        "cache": "full-sweep",
+        "title": "Rocks on a grid: a convolutional network over BEV rasters",
+        "blurb": "Both models trained so far read the frame as a set of points, "
+                 "which means neither can see how many returns made any part of "
+                 "it - the point tensor is padded by repetition and the real "
+                 "count is used only to build a validity mask. A stray return "
+                 "that sits on no surface is exactly a place with one return "
+                 "where a surface would have many. This sweep rasterizes the "
+                 "same frames onto a 0.10 m grid, runs a small U-shaped "
+                 "convolutional network over it, and reads the answer back at "
+                 "every original point, so it is scored on the segmenter's own "
+                 "population and pairs against it fold for fold. The grid is "
+                 "built inside the model rather than read from disk so that "
+                 "every augmentation - above all the stray-return jitter - "
+                 "still reaches it.",
+    },
     "reflectivity": {
         "arms": REFLECTIVITY_ARMS,
         "contrasts": REFLECTIVITY_CONTRASTS,
@@ -350,6 +660,24 @@ SUITES: dict[str, dict] = {
                  "batches (~110 points). Adds the whole-frame segmenter, which "
                  "the batch-sized frames were too sparse to train at all.",
     },
+    "stray": {
+        "arms": STRAY_ARMS,
+        "contrasts": STRAY_CONTRASTS,
+        "cache": "full-sweep",
+        "title": "Training against stray returns",
+        "blurb": "Every recording this project owns was made over flat ground "
+                 "the sensor struck steeply, so almost every return in them "
+                 "landed on a real surface and nothing has ever taught either "
+                 "model that a return can simply be wrong. A competition arena "
+                 "7 m across with the sensor 0.57 m up is seen at a grazing "
+                 "angle almost everywhere, and is full of them. This sweep asks "
+                 "what it costs to train against clutter that is not in the "
+                 "data: both model families, each with and without 5% of every "
+                 "training sample turned into returns that sit on no surface. "
+                 "The segmenter arms also carry every other setting the rig is "
+                 "meant to deploy with, so the control is the real deployment "
+                 "candidate rather than a historical baseline.",
+    },
     "segdense": {
         "arms": SEGDENSE_ARMS,
         "contrasts": SEGDENSE_CONTRASTS,
@@ -360,7 +688,10 @@ SUITES: dict[str, dict] = {
                  "10 cm scales instead of 25 cm. The previous sweep found the "
                  "segmenter starved of frames and stopped before it had "
                  "finished learning; this one removes both limits. Twelve "
-                 "folds, not eleven - VolleyBallTest13 joins as a fold here.",
+                 "folds, not eleven - VolleyBallTest13 joins as a fold here. "
+                 "Also carries the arm that fixes the segmenter's height "
+                 "reference, which is what made every earlier segmenter read an "
+                 "empty arena on the competition recording.",
     },
 }
 

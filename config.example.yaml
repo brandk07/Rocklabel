@@ -141,6 +141,13 @@ labeler:
   # Accumulate every Nth scan (CLI: --stride). 1 = use every scan.
   stride: 1
 
+  # NOTE: the labeler's --min-hits option is deliberately NOT a setting here.
+  # Every key in this file feeds the config hash that identifies which profile
+  # produced a dataset, so adding one would make every dataset already on disk
+  # stop being recognised. --min-hits only changes the cloud you look at while
+  # labeling, never the data `generate` writes, so it lives on the command line
+  # (and on the Label card in the dashboard) instead.
+
   # Initial z clipping planes in odom meters (CLI: --z-min / --z-max).
   # null = no clipping; adjust live with [ and ].
   z_min: null

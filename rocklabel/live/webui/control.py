@@ -262,6 +262,10 @@ class LiveController:
         v["crop.floor_relative"] = bool(crop.floor_relative)
         v["crop.range_max"] = float(crop.range_max)
         v["crop.range_min"] = float(crop.range_min)
+        floating = self._cfg.floating
+        v["floating.enabled"] = bool(floating.enabled)
+        v["floating.max_height"] = float(floating.max_height)
+        v["floating.cell_size"] = float(floating.cell_size)
         if z is not None:
             v["view.color_mode"] = z.color_mode
             lo, hi = z.reflectivity_range
@@ -282,6 +286,7 @@ class LiveController:
             v["model.threshold"] = float(s.threshold)
             v["model.interval_sec"] = float(st.interval_sec)
             v["model.window_sec"] = float(st.window_sec or 0.0)
+            v["region.floor_relative"] = bool(st.floor_relative)
             v["region.z_min"] = float(st.z_min)
             v["region.z_max"] = float(st.z_max)
             v["region.range_max"] = float(st.range_max)
@@ -551,6 +556,15 @@ class LiveController:
         "crop.range_max": "range_max",
         "crop.range_min": "range_min",
     }
+    #: Phantom-point ids -> the FloatingConfig field they own. The engine
+    #: holds the same object and reads it per sweep, so a write lands on the
+    #: next scan. Nothing on the display side follows it, so unlike the crop
+    #: this needs no viewer round-trip.
+    _FLOATING = {
+        "floating.enabled": "enabled",
+        "floating.max_height": "max_height",
+        "floating.cell_size": "cell_size",
+    }
     #: Rock-outline ids -> the ScoreSettings field they own. Display settings
     #: that happen to live beside the scoring ones, so the viewer holds exactly
     #: one copy of them.
@@ -567,6 +581,7 @@ class LiveController:
     }
     #: Scoring-region ids -> the ScoreSettings field they own.
     _REGION = {
+        "region.floor_relative": "floor_relative",
         "region.z_min": "z_min",
         "region.z_max": "z_max",
         "region.range_max": "range_max",
@@ -591,6 +606,8 @@ class LiveController:
             # crop follows when there is no model, so the viewer has to hear
             # about it rather than being left with a stale accumulated cloud.
             self._crop_setting(self._CROP[key], value)
+        elif key in self._FLOATING:
+            setattr(self._cfg.floating, self._FLOATING[key], value)
         elif key in self._OUTLINE:
             self._scorer_setting(self._OUTLINE[key], value)
             self._outline_key = None      # the clumping rule changed

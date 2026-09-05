@@ -21,7 +21,7 @@ Reading order per fold, deliberately:
 
 Notes are the one thing this module writes: a JSON file under the project's
 ``.dashboard/`` folder mapping a row key to free text. Rows without a user
-note fall back to :data:`SEED_NOTES` — the measured conclusions from the
+note fall back to the catalog — the measured conclusions from the
 sweeps already run, so the board says something useful before anything has
 been typed.
 
@@ -36,6 +36,7 @@ from __future__ import annotations
 import json
 import os
 
+from ..train import catalog
 from .inventory import FLAT_EXPERIMENTS, _read_json, _stat
 
 #: Where arm notes live. Inside ``.dashboard/`` beside the job logs: it is
@@ -46,47 +47,21 @@ NOTES_PATH = os.path.join(".dashboard", "run-notes.json")
 #: Conclusions already paid for, keyed by ``<suite>/<arm>``. Shown until a
 #: note is typed over them (clearing a user note simply falls back here).
 #: Sourced from handoff/03-training-RESULT.md and the finished sweeps' reports.
-SEED_NOTES = {
-    # fullsweep -------------------------------------------------------------
-    "fullsweep/pointnet2seg-geom-e80": (
-        "THE ARM TO EXPORT FROM. 80 epochs on ordinary full-sweep frames with "
-        "the stock level geometry: +0.019 mean over the 30-epoch baseline "
-        "(9/11 folds, p=0.032) — real but small. Still improving at the cap, "
-        "so a higher cap would buy a little more at a shrinking rate."),
-    "fullsweep/pointnet2seg-geom": (
-        "The 30-epoch segmentation baseline every other fullsweep arm pairs "
-        "against. Ties PointNet++ on matched spots (0.767 vs 0.764) with a "
-        "much higher floor on hard recordings."),
-    "fullsweep/pointnet2seg-geom-e80-fine": (
-        "80 epochs AND finer level geometry: -0.010 vs stock at 80 epochs "
-        "(3/11 wins, p=0.28). Not a gain — it converges sooner to the same "
-        "place. The +0.057 its dense-cache preview showed was stock geometry "
-        "doing badly THERE, not finer levels helping."),
-    "fullsweep/pointnet-geom": (
-        "Shape-only PointNet baseline. PointNet vs PointNet++ showed no real "
-        "difference across both sweeps (0.780 vs 0.765, p=0.10)."),
-    "fullsweep/pointnet-refl": (
-        "PointNet with reflectivity. Two sweeps agree the brightness channel "
-        "earns nothing (deltas within ±0.01, well inside noise)."),
-    "fullsweep/pointnet2-refl": (
-        "PointNet++ with reflectivity: -0.010 vs shape-only. Reflectivity "
-        "stays off."),
-    # segdense --------------------------------------------------------------
-    "segdense/seg-long": (
-        "Clean negative: 4x the frames + 60 epochs scored -0.008 vs the old "
-        "baseline (5/11 wins, p=0.83). Frames 0.05 s apart overlap almost "
-        "completely, so more frames is more repetition, not more data. The "
-        "segmenter was never starved."),
-    "segdense/seg-fine": (
-        "Stopped after 4 of 12 folds. Its consistent +0.057 over stock "
-        "geometry on this dense cache later turned out to be stock geometry "
-        "doing badly on dense frames — see the e80-fine arm of fullsweep. "
-        "The four finished folds are kept for the record."),
-    # reflectivity ----------------------------------------------------------
-    "reflectivity/pointnet-refl": (
-        "Reflectivity earns nothing at the data level either: ROC-AUC 0.508 "
-        "(chance) for brightness alone."),
-}
+def seed_note(key: str) -> str:
+    """The measured conclusion for ``<suite>/<arm>``, or "" if there is none.
+
+    These used to be a dict here. They now come from
+    :mod:`rocklabel.train.catalog`, which the live viewer's checkpoint picker
+    reads too — a conclusion written in two places is a conclusion that drifts,
+    and this one had already started to (the board still called a segmenter
+    "THE ARM TO EXPORT FROM" after it was measured finding 7 rocks in 54).
+    """
+    suite, _, arm = key.partition("/")
+    return catalog.note(suite, arm or None)
+
+
+def has_seed_note(key: str) -> bool:
+    return bool(seed_note(key))
 
 
 # --------------------------------------------------------------------------- #
@@ -119,9 +94,9 @@ def write_note(root: str, key: str, note: str) -> dict:
     with open(tmp, "w", encoding="utf-8") as fh:
         json.dump(notes, fh, indent=2)
     os.replace(tmp, path)
-    return {"key": key, "note": text or SEED_NOTES.get(key, ""),
+    return {"key": key, "note": text or seed_note(key),
             "source": "custom" if text
-            else ("seed" if key in SEED_NOTES else "")}
+            else ("seed" if has_seed_note(key) else "")}
 
 
 # --------------------------------------------------------------------------- #
@@ -417,11 +392,16 @@ def board(root: str) -> dict:
     # Notes: user-typed ones win, then the measured conclusions.
     notes = read_notes(root)
     for row in rows:
+        # The catalog's plain-English name and status ride along with every
+        # row, so the board can say "settled" or "dead end" beside a setting
+        # instead of leaving a reader to work it out from the score.
+        suite, _, arm = row["key"].partition("/")
+        row["title"], row["status"], _seed = catalog.entry(suite, arm or None)
         user = notes.get(row["key"])
         if user:
             row["note"], row["note_source"] = user, "custom"
-        elif row["key"] in SEED_NOTES:
-            row["note"], row["note_source"] = SEED_NOTES[row["key"]], "seed"
+        elif has_seed_note(row["key"]):
+            row["note"], row["note_source"] = seed_note(row["key"]), "seed"
         else:
             row["note"], row["note_source"] = "", ""
 

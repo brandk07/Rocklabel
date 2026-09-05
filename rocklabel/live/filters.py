@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from rocklabel.live.config import CropConfig, OutlierConfig
+from rocklabel.live.config import CropConfig, FloatingConfig, OutlierConfig
 
 
 def crop_band(cfg: CropConfig, floor_z: float | None) -> tuple[float, float]:
@@ -173,3 +173,82 @@ def filter_batch(points: np.ndarray, cfg: OutlierConfig) -> np.ndarray:
     """
     keep = filter_keep_mask(points, cfg)
     return points if keep is None else points[keep]
+
+
+def floating_keep_mask(
+    points: np.ndarray,
+    cell_size: float,
+    max_height: float,
+    ground_pct: float = 5.0,
+    min_cell_points: int = 4,
+) -> np.ndarray:
+    """Keep-mask that drops points sitting too far above their own column's ground.
+
+    This is the phantom-point test. A multiScan's shallowest beam rings graze
+    the floor at 3-6 m and occasionally report a range far shorter than the
+    real one; reprojected, those returns hang in mid-air. They are ordinary
+    first echoes at ordinary brightness, so nothing about the return itself
+    marks them — only their height above the ground directly beneath them.
+
+    Unlike :func:`statistical_outlier_mask` this uses a low percentile rather
+    than a mean and a standard deviation. That matters: a spike inflates the
+    standard deviation of its own column enough to widen the gate past itself,
+    so the mean-based test lets the spike through while clipping the genuinely
+    raised points (rock tops) around it.
+
+    Must be applied per sweep, *before* accumulation. Once many sweeps are
+    fused the phantom returns form a continuous fog that fills every column,
+    and there is no longer a gap to detect.
+
+    Args:
+        points: ``(N, 3)`` world-frame points, z up.
+        cell_size: side length (m) of the column used for the ground estimate.
+        max_height: drop a point more than this far above its column ground (m).
+        ground_pct: percentile of z taken as the column's ground.
+        min_cell_points: leave columns with fewer points than this alone —
+            too few to say where the ground is.
+
+    Returns:
+        ``(N,)`` boolean keep mask.
+    """
+    n = points.shape[0]
+    if n == 0:
+        return np.ones(0, dtype=bool)
+
+    z = points[:, 2]
+    ix = np.floor(points[:, 0] / cell_size).astype(np.int64)
+    iy = np.floor(points[:, 1] / cell_size).astype(np.int64)
+    key = (ix - ix.min()) * (iy.max() - iy.min() + 1) + (iy - iy.min())
+
+    # Group by column: sorting once lets np.percentile run per contiguous run.
+    order = np.argsort(key, kind="stable")
+    key_sorted = key[order]
+    z_sorted = z[order]
+    starts = np.flatnonzero(np.r_[True, key_sorted[1:] != key_sorted[:-1]])
+    ends = np.r_[starts[1:], len(key_sorted)]
+
+    ground = np.empty(len(starts))
+    for i, (a, b) in enumerate(zip(starts, ends)):
+        ground[i] = np.percentile(z_sorted[a:b], ground_pct)
+    counts = ends - starts
+
+    # Map each point back to its column's ground height and population.
+    cell_of = np.empty(n, dtype=np.int64)
+    cell_of[order] = np.repeat(np.arange(len(starts)), counts)
+
+    testable = counts[cell_of] >= min_cell_points
+    return ~(testable & ((z - ground[cell_of]) > max_height))
+
+
+def floating_filter_mask(points: np.ndarray, cfg: FloatingConfig) -> np.ndarray | None:
+    """Configured phantom-point keep-mask, or ``None`` for pass-through."""
+    if not cfg.enabled or points.shape[0] < cfg.min_points:
+        return None
+    keep = floating_keep_mask(
+        points,
+        cell_size=cfg.cell_size,
+        max_height=cfg.max_height,
+        ground_pct=cfg.ground_pct,
+        min_cell_points=cfg.min_cell_points,
+    )
+    return None if keep.all() else keep

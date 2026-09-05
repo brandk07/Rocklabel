@@ -672,6 +672,20 @@ def test_region_bounds_are_exact_not_rounded(full_ctl):
     assert v["region.z_min"] == -1.5 and v["region.z_max"] == -0.5
 
 
+def test_scoring_region_can_be_reanchored_to_the_floor_live(full_ctl):
+    """The ingest Crop card already had this switch, but it did not change the
+    separate band the model is fed. A robot changing height could therefore
+    leave model scoring behind even while its displayed crop followed ground."""
+    full_ctl.set("region.floor_relative", True)
+    full_ctl.set("region.z_min", -0.10)
+    full_ctl.set("region.z_max", 0.60)
+    values = full_ctl.snapshot()["values"]
+    assert values["region.floor_relative"] is True
+    assert full_ctl._scorer.settings.floor_relative is True
+    assert values["region.z_min"] == pytest.approx(-0.10)
+    assert values["region.z_max"] == pytest.approx(0.60)
+
+
 def test_model_readouts_render_the_scorer_numbers(full_ctl):
     status = full_ctl.snapshot()["status"]
     assert "4,210" in status["model.map"] and "128" in status["model.map"]

@@ -17,6 +17,8 @@ reports/<experiment>/
 | folder | from |
 |---|---|
 | `fullsweep/` | the full-sweep + segmentation sweep (88 folds) |
+| `stray/` | the stray-return augmentation sweep, and **the write-up on why the segmenter is not a valid baseline** — start at `WHY-SEGMENTATION-IS-NOT-A-BASELINE.md` |
+| `bev/` | the grid sweep — the frame drawn as a picture and read by a convolutional network. Scored on the competition arena, not on volleyball folds, because that is where the difference that matters shows up. `lance_eval.txt` is the table that decides anything |
 | `fullsweep/matched/` | the segmenter and the classifier re-scored on one shared set of spots, so their numbers can honestly be compared |
 | `reflectivity/` | the brightness-channel sweep (121 folds) |
 | `reflect/` | the quick brightness check that reads the cache directly and trains nothing |

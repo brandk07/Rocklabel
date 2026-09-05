@@ -24,6 +24,7 @@ from ..train.ablate import (DEFAULT_REPORT_ROOT as REPORT_ROOT,
                             DEFAULT_ROOT as EXPERIMENTS_ROOT,
                             SUITES as ABLATION_SUITES)
 from ..train.cli import DEFAULT_CACHE, DEFAULT_RUNS_ROOT
+from ..train.models_meta import BEV_CHANNELS
 from ..train.models_meta import MODELS as ARCHITECTURES
 
 # Quoted, not copied: the Solve-poses form offers the solver's real defaults, so
@@ -253,6 +254,74 @@ def _seg_geometry() -> list[Param]:
                    "swallows a whole rock; smaller values "
                    "let the first level see the surface of a rock rather than "
                    "the rock as one blob. Three numbers, ascending, comma separated."),
+        Param("seg_height_ref", "enum", "Segmenter height reference",
+              arg="--seg-height-ref", choices=["floor", "base"],
+              default=TRAIN_DEFAULTS["seg_height_ref"], advanced=True,
+              help="Segmenter only. What counts as height zero for every point. "
+                   "\"floor\" measures from the ground the frame itself shows, so "
+                   "it stops mattering how high the robot rides above the floor — "
+                   "leave it here. \"base\" measures from the robot instead, which "
+                   "is what every segmenter before August 2026 was trained with "
+                   "and why they read an empty arena on the competition "
+                   "recording: the robot sat 0.87-0.97 m above the floor in all "
+                   "twelve volleyball recordings and about 0.37 m above it at "
+                   "the competition, and a gap that size takes the model's best "
+                   "confidence anywhere to 0.003. Pick \"base\" only to "
+                   "reproduce an old run."),
+    ]
+
+
+def _bev_geometry() -> list[Param]:
+    """The BEV CNN's grid and network size.
+
+    Only the grid model reads these; the point-based models ignore them. The
+    defaults are what the 'bev' sweep was defined against, so leaving them
+    alone reproduces it.
+    """
+    return [
+        Param("bev_cell", "float", "Grid cell size (m)", arg="--bev-cell",
+              default=TRAIN_DEFAULTS["bev_cell"], min=0.02, max=0.5, step=0.01,
+              advanced=True,
+              help="BEV CNN only. How much ground one cell of the picture "
+                   "covers. 0.10 m matches the stored BEV rasters and puts a "
+                   "44 cm rock across about four cells. Smaller sees finer "
+                   "detail and costs the square of the change in speed."),
+        Param("bev_grid", "int", "Grid size (cells)", arg="--bev-grid",
+              default=TRAIN_DEFAULTS["bev_grid"], min=32, max=512, advanced=True,
+              help="BEV CNN only. How many cells across the square grid is. It "
+                   "has to hold a whole frame after training's random heading "
+                   "rotation: the furthest point from a frame's centre "
+                   "anywhere in the cache is 6.90 m, so 144 cells of 0.10 m "
+                   "(reaching 7.2 m either way) clips nothing, while a grid "
+                   "sized to the 8x8 m crop box would cut a rotated corner "
+                   "off. Must divide evenly by 2 as many times as there are "
+                   "levels."),
+        Param("bev_width", "int", "Network width", arg="--bev-width",
+              default=TRAIN_DEFAULTS["bev_width"], min=8, max=128, advanced=True,
+              help="BEV CNN only. How many channels the first level of the "
+                   "network carries; each level below doubles it. 32 is about "
+                   "1.9 million weights, 16 about half a million. With rock "
+                   "only 1.2% of labelled cells, wider is not obviously "
+                   "better."),
+        Param("bev_depth", "int", "Network levels", arg="--bev-depth",
+              default=TRAIN_DEFAULTS["bev_depth"], min=1, max=5, advanced=True,
+              help="BEV CNN only. How many times the network halves the grid "
+                   "before building it back up. More levels means each cell's "
+                   "answer is informed by more of the scene around it."),
+        Param("bev_channels", "multi", "Cell measurements", arg="--bev-channels",
+              repeat=True, nargs=True, choices=list(BEV_CHANNELS),
+              default=list(BEV_CHANNELS), advanced=True,
+              help="BEV CNN only. Which measurements of each cell the network "
+                   "reads. \"occupied\" and \"count\" are the density pair — "
+                   "whether anything came back from this patch of ground, and "
+                   "how much. They are the one thing a grid can see that a "
+                   "point model cannot, because the point tensor is padded by "
+                   "repeating real points and the true count is only used to "
+                   "mask them off. A stray return that hit nothing lands in a "
+                   "cell of its own with a count of one. Untick both to test "
+                   "whether that is really what the grid wins on. The two "
+                   "intensity rows are ignored unless reflectivity is also "
+                   "ticked as an input channel."),
     ]
 
 
@@ -286,7 +355,8 @@ ARCHITECTURE_CHOICES = sorted(ARCHITECTURES)
 #: only comparable between models graded on the same candidate spots. The
 #: segmenter is graded per point and gets its fair comparison from
 #: 'Segmenter vs classifier' instead.
-CLASSIFIER_CHOICES = [m for m in ARCHITECTURE_CHOICES if m != "pointnet2_seg"]
+CLASSIFIER_CHOICES = [m for m in ARCHITECTURE_CHOICES
+                      if ARCHITECTURES[m][0] == "classify"]
 
 # Back-compat alias used by older call sites.
 MODEL_CHOICES = CLASSIFIER_CHOICES
@@ -352,11 +422,60 @@ def _region_params(advanced: bool = False) -> list[Param]:
     ]
 
 
+def _floating_params(advanced: bool = False) -> list[Param]:
+    """Phantom-point filter, shared by the record and live/replay cards."""
+    return [
+        Param("max_height_above_ground", "float", "Max height above ground",
+              arg="--max-height-above-ground", unit="m",
+              min=0.1, max=5.0, step=0.1, advanced=advanced,
+              help="Throws away a point sitting more than this far above the "
+                   "ground directly beneath it. The sensor's shallowest beam "
+                   "rings skim the floor several metres out and every so often "
+                   "report a distance shorter than the real one, which drops "
+                   "that return into mid-air; stacked over a run they build the "
+                   "fog of floating specks over the arena. Measured on the "
+                   "competition recording the 0.5 m default clears 86% of them "
+                   "and does not lose a single labelled rock return (the tallest "
+                   "rock in any recording stands 0.44 m off its own base). It "
+                   "also strips walls and other tall structure out of the "
+                   "accumulated view — raise it, or untick it below, if you want "
+                   "that scenery back."),
+        Param("floating_cell", "float", "Ground-estimate column",
+              arg="--floating-cell", unit="m",
+              min=0.2, max=5.0, step=0.1, advanced=advanced,
+              help="Width of the square column used to work out where the "
+                   "ground is under each point. Wider still finds the ground "
+                   "beside a big obstacle; narrower follows steep terrain more "
+                   "closely but has fewer points to judge from. 1 m is the "
+                   "measured sweet spot."),
+        Param("keep_floating", "bool", "Keep floating points",
+              arg="--keep-floating", advanced=advanced,
+              help="Turns the phantom-point filter off entirely and keeps every "
+                   "return no matter how high it hangs. Use it to see the raw "
+                   "problem, or when you actually want walls and ceiling in the "
+                   "accumulated cloud."),
+    ]
+
+
 _HANDHELD = Preset(
-    "Handheld rig · floor band",
-    "Sensor about 1 m above the floor, indoor room. The band that every "
-    "myroom run was recorded and scored with.",
-    {"z_min": -1.5, "z_max": -0.5, "max_range": 8.0},
+    "Floor-anchored rock band",
+    "Keep 10 cm below through 60 cm above the measured floor. This works "
+    "whether the sensor is handheld or mounted on the robot. Right for the "
+    "sliding-window classifiers (PointNet, PointNet++), which look at one "
+    "half-metre ball at a time and do not care how tall the band is.",
+    {"floor_band": "-0.10, 0.60", "max_range": 8.0},
+)
+
+_SEG_SLAB = Preset(
+    "Thin slab (segmenter)",
+    "Keep 5 cm below through 25 cm above the measured floor. The per-point "
+    "segmenter reads the whole band in one go, and it has only ever been "
+    "trained on the arena recordings, whose frames hold about 20 cm of "
+    "anything. Measured on the competition recording, the wider band above "
+    "hands it 0.70 m of structure and it finds nothing at all; this one gets "
+    "it back to hundreds of detections a pass. Use it whenever the model name "
+    "ends in _seg.",
+    {"floor_band": "-0.05, 0.25", "max_range": 8.0},
 )
 
 
@@ -413,6 +532,7 @@ COMMANDS: list[Command] = [
                        "It does not care how high you hold the rig, so it beats "
                        "the z band whenever the sensor height wanders during a "
                        "take. Needs levelling, which is on by default."),
+            *_floating_params(),
             Param("sensor_ip", "text", "Sensor IP", arg="--sensor-ip", advanced=True,
                   placeholder="10.11.10.3",
                   help="Only if the sensor is not at the configured default."),
@@ -438,7 +558,7 @@ COMMANDS: list[Command] = [
                   help="Headless only: stop after this many seconds. 0 = until "
                        "you stop the job."),
         ],
-        presets=[_HANDHELD],
+        presets=[_HANDHELD, _SEG_SLAB],
     ),
     Command(
         id="live", bin="rocklabel", sub="live", stage="deploy", gui=True,
@@ -512,6 +632,7 @@ COMMANDS: list[Command] = [
                        "It does not care how high you hold the rig, so it beats "
                        "the z band whenever the sensor height wanders. Needs "
                        "levelling, which is on by default."),
+            *_floating_params(),
             Param("color_mode", "enum", "Initial coloring", arg="--color-mode",
                   choices=["", "height", "reflectivity", "reflectivity_stretch",
                            "model"],
@@ -525,6 +646,7 @@ COMMANDS: list[Command] = [
                   unit="s", min=0.1, max=5.0, step=0.1, advanced=True,
                   help="Seconds between scoring passes. A pass costs 9-20 ms on "
                        "the RTX 2000, so 0.5 leaves the GPU almost idle."),
+            *_level_params(),
             _device(),
             Param("record", "outpath", "Record from launch", arg="--record", advanced=True,
                   placeholder="recordings/myrun.mcap",
@@ -542,7 +664,7 @@ COMMANDS: list[Command] = [
                   help="Headless only: stop after this many seconds. 0 = until "
                        "you stop the job."),
         ],
-        presets=[_HANDHELD],
+        presets=[_HANDHELD, _SEG_SLAB],
     ),
     # ---------------------------------------------------------------- triage
     Command(
@@ -839,6 +961,23 @@ COMMANDS: list[Command] = [
             Param("stride", "int", "Scan stride", arg="--stride", min=1, max=50,
                   help="Accumulate every Nth scan. 1 uses everything (densest, "
                        "slowest to open); raise it on very long recordings."),
+            Param("min_hits", "int", "Drop voxels seen fewer than N times",
+                  arg="--min-hits", min=1, max=200, default=1,
+                  help="Throws away every fused voxel that fewer than N scans "
+                       "ever hit. Ground and rocks come back in the same voxel "
+                       "every time the sensor looks at them; a stray return "
+                       "lands somewhere new each scan and claims a voxel of its "
+                       "own. Because the display draws one dot per voxel, a "
+                       "couple of percent of bad returns can be a third of what "
+                       "you see — on the lance arena 30%% of voxels were hit "
+                       "exactly once out of 10,102 scans, and those sat a median "
+                       "of 2.3 m up in mid-air. Reach for this when the cloud "
+                       "looks like fog or the ground looks too thick to label. "
+                       "1 keeps everything; 3-10 is a good range on a long "
+                       "recording. Rocks do lose some surface too, so lower it "
+                       "if small rocks start vanishing. Note this only cleans "
+                       "the cloud you label on — Generate still builds training "
+                       "frames from every scan."),
             Param("z_min", "float", "Initial z min", arg="--z-min", unit="m", step=0.1,
                   help="Starting lower clip plane in odom meters. The clip is "
                        "also the saved training height band, so this seeds that "
@@ -1103,7 +1242,12 @@ COMMANDS: list[Command] = [
             Param("test_run", "text", "Held-out run", arg="--test-run", required=True,
                   source="cache_runs",
                   help="The run kept out of training and used as the test set. "
-                       "Must be a run present in the cache."),
+                       "Must be a run present in the cache — or the word 'all', "
+                       "which holds nothing out and fits every recording. Use "
+                       "'all' only to build a model you intend to run: it has "
+                       "no honest score, because there is no unseen recording "
+                       "left to score it on, so it reports validation numbers "
+                       "off the tail of its own training data instead."),
             _features(),
             Param("epochs", "int", "Epochs", arg="--epochs", default=30, min=1, max=500),
             Param("batch", "int", "Batch size", arg="--batch", default=256, min=8, max=4096),
@@ -1161,10 +1305,96 @@ COMMANDS: list[Command] = [
                   help="Training randomly drops points to mimic sparser scans; "
                        "this is the fraction of points always kept. 0.5 means a "
                        "neighborhood never loses more than half its points."),
+            Param("aug_stray_frac", "float", "Augment: stray returns",
+                  arg="--aug-stray-frac", step=0.01,
+                  default=TRAIN_DEFAULTS["aug_stray_frac"], min=0.0, max=0.3,
+                  help="Fraction of each training frame turned into returns "
+                       "that sit on no surface, pushed along their own line of "
+                       "sight. Every recording these models learned from was "
+                       "made over flat ground the sensor struck steeply, so "
+                       "almost every return landed where it should and nothing "
+                       "ever taught them a return can simply be wrong. A "
+                       "competition arena is 7 m across with the sensor half a "
+                       "metre up, so most of it is seen at a grazing angle and "
+                       "is full of them. Measured on the lance recording, "
+                       "1-2%% of returns inside 1.5 m and 5-7%% further out land "
+                       "more than 25 cm off the real surface, so 0.05 is a "
+                       "realistic setting. 0 turns it off, which is what every "
+                       "existing checkpoint was trained with."),
+            Param("aug_phantom_frac", "float", "Augment: phantom clumps",
+                  arg="--aug-phantom-frac", step=0.01,
+                  default=TRAIN_DEFAULTS["aug_phantom_frac"], min=0.0, max=0.5,
+                  help="Sliding-window classifier only. Fraction of training "
+                       "samples swapped out for a fake 'phantom clump' marked "
+                       "as clear: a loose 3D scatter of a few returns with no "
+                       "surface underneath. This is aimed at a different miss "
+                       "than the stray-returns setting above. That one nudges a "
+                       "few points of an otherwise normal ball; this one builds "
+                       "the whole ball, because on the competition arena the "
+                       "bad returns clump together hard enough that the "
+                       "candidate finder centres a ball on them and asks the "
+                       "model whether it is a rock. Inside that ball the clump "
+                       "is not obviously wrong - measured, it stands 0.54 m "
+                       "tall against a real rock's 0.46 m - and the one thing "
+                       "that would give it away, having 7 times fewer returns, "
+                       "is thrown away when every ball is cut to 256 points. "
+                       "Meanwhile every ball in the eleven training recordings "
+                       "is a nearly flat patch under 12 cm tall, so nothing has "
+                       "ever shown the model a tall loose scatter and told it "
+                       "that is not a rock. 0.08 is the measured starting "
+                       "point; 0 turns it off."),
+            Param("aug_phantom_extent", "float", "Augment: phantom clump height",
+                  arg="--aug-phantom-extent", unit="m", advanced=True,
+                  step=0.05, default=TRAIN_DEFAULTS["aug_phantom_extent"],
+                  min=0.1, max=2.0,
+                  help="How tall a fake phantom clump is, varied half to one "
+                       "and a half times this each time. The default matches "
+                       "what a real clump measured on the competition arena. "
+                       "Only does anything when the setting above is above 0."),
+            Param("pos_weight_cap", "float", "Loss: rock-vs-clear weight cap",
+                  arg="--pos-weight-cap", advanced=True, min=1.0, max=200.0,
+                  step=1.0, default=TRAIN_DEFAULTS["pos_weight_cap"],
+                  placeholder="uncapped",
+                  help="How much one rock example is allowed to outweigh one "
+                       "clear one while training. Left blank the model uses the "
+                       "raw imbalance in the data, which is about 94 for a "
+                       "model that labels every point and about 4.3 for the "
+                       "sliding-window classifier - and that 22x gap exists "
+                       "only because the dataset builder throws away 95% of the "
+                       "clear spots for one format and none for the other. A "
+                       "weight that large buys recall by pushing the model "
+                       "until almost everything looks like rock, which is the "
+                       "leading suspect for why per-point models put rocks in "
+                       "the right order on a new arena but give everything "
+                       "near-zero confidence, so nothing lights up on screen. "
+                       "Try 10 if a model ranks well but looks blank."),
+            Param("aug_stray_reach", "float", "Augment: stray reach",
+                  arg="--aug-stray-reach", unit="m", step=0.1,
+                  default=TRAIN_DEFAULTS["aug_stray_reach"], min=0.1, max=5.0,
+                  advanced=True,
+                  help="How far a stray return is thrown. Heavy-tailed, so the "
+                       "median lands at about a third of this and a few go "
+                       "several times further - which is how the real ones "
+                       "behave: a beam skimming the ground reads short or long "
+                       "by anything from centimetres to metres. Only matters "
+                       "when the stray fraction is above 0."),
+            Param("aug_ground_tilt", "float", "Augment: ground tilt",
+                  arg="--aug-ground-tilt",
+                  default=TRAIN_DEFAULTS["aug_ground_tilt"], min=0.0, max=0.15,
+                  step=0.005, advanced=True,
+                  help="Segmenter only. Training tips the whole floor at a "
+                       "random angle by up to this much rise per metre, so the "
+                       "model cannot assume a level arena. 0.03 is about 24 cm "
+                       "of rise across the 8 m crop. The floor was flat in "
+                       "every recording we trained on, and a lumpy regolith bin "
+                       "is what breaks that assumption — on the old model, "
+                       "±20 cm of unevenness cost a third of its confidence on "
+                       "real rocks. 0 turns it off."),
             Param("no_augment", "bool", "Disable augmentation", arg="--no-augment",
                   advanced=True,
-                  help="Turn off all three augmentation knobs above."),
+                  help="Turn off every augmentation knob above."),
             *_seg_geometry(),
+            *_bev_geometry(),
             Param("seed", "int", "Seed", arg="--seed", default=42, advanced=True),
             _cache_dir(),
             _device(),
@@ -1210,6 +1440,7 @@ COMMANDS: list[Command] = [
             Param("patience", "int", "Early-stop patience", arg="--patience",
                   default=TRAIN_PATIENCE, min=1),
             *_seg_geometry(),
+            *_bev_geometry(),
             Param("weight_decay", "float", "Weight decay", arg="--weight-decay",
                   default=TRAIN_DEFAULTS["weight_decay"], step=0.0001, advanced=True),
             Param("val_frac", "float", "Validation fraction", arg="--val-frac",
@@ -1294,6 +1525,7 @@ COMMANDS: list[Command] = [
                        "gain. Keep it long enough for the learning-rate schedule "
                        "to finish, or no fold ever sees its fine-tuning phase."),
             *_seg_geometry(),
+            *_bev_geometry(),
             # The rest of the shared training hyperparameters: every one of
             # these passes through to each arm unless the arm's own definition
             # overrides it, which is why they sit behind Advanced.
@@ -1460,6 +1692,10 @@ COMMANDS: list[Command] = [
         notes=[
             "The region flags are a big speedup on wall- and ceiling-heavy "
             "recordings — the same z band you use live.",
+            "Works with a per-point segmenter as well: it scores whole frames "
+            "and colors every point instead of one center per ball. Give it "
+            "the same thin z band you would use live, or it sees far more "
+            "vertical structure than it was trained on and finds nothing.",
             "--dump writes frames, centers and probabilities to an .npz and exits "
             "without a window.",
         ],
@@ -1492,6 +1728,12 @@ COMMANDS: list[Command] = [
              "false negatives are visible as geometry, not just as a number.",
         why="When a fold's F1 is disappointing, this shows you *which* rocks it "
             "misses and whether the misses share a shape.",
+        notes=[
+            "Sliding-window classifiers only. This view shows one confidence "
+            "per sample center, which is not what a per-point segmenter "
+            "produces — pick a _seg checkpoint and it says so and sends you to "
+            "Model replay, which does handle them.",
+        ],
         params=[
             Param("dataset_dir", "dir", "Dataset", source="datasets", required=True),
             Param("checkpoint", "path", "Checkpoint", arg="--checkpoint",

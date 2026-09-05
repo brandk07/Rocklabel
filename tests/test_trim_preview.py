@@ -9,10 +9,10 @@ from rocklabel.dataset.generate import run_generate
 from rocklabel.gui.labeler import accumulate_cloud
 from rocklabel.recording.mcap_io import McapFormatError, read_info
 from rocklabel.gui.preview import load_frame
-from rocklabel.recording.trim import run_trim
+from rocklabel.recording.trim import TF_PAD_S, run_trim
 
 
-def test_trim_time_window_keeps_tf_in_full(synthetic_recording, tmp_path):
+def test_trim_time_window_pads_tf_around_the_window(synthetic_recording, tmp_path):
     mcap_path, labels_path = synthetic_recording
     out = str(tmp_path / "trimmed.mcap")
     cfg = load_config(None)
@@ -20,9 +20,15 @@ def test_trim_time_window_keeps_tf_in_full(synthetic_recording, tmp_path):
     run_trim(mcap_path, out, cfg, start_s=2.0, end_s=5.0)
     info = read_info(out)
     assert info.message_count("/multiscan/lidar_scan") == 30
-    # TF is exempt from the window so edge scans still get poses.
-    assert info.message_count("/tf") == 203
+    # /tf gets TF_PAD_S of slack either side so edge scans still get poses,
+    # but NOT the whole recording: keeping it all left the output advertising
+    # the original time span, which parks a player at 0:00 until the clouds
+    # eventually start. 203 poses over 10 s -> ~141 across the padded 7 s.
+    assert info.message_count("/tf") == 141
     assert info.message_count("/tf_static") == 1
+    # The advertised span covers the window plus the pad, not the whole input.
+    span_s = (info.end_time_ns - info.start_time_ns) / 1e9
+    assert span_s == pytest.approx(3.0 + 2 * TF_PAD_S, abs=0.1)
 
     # The trimmed file goes through the full pipeline without pose skips.
     entry = run_generate(out, labels_path, str(tmp_path / "ds"), cfg)

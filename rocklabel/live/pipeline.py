@@ -17,7 +17,7 @@ from collections import deque
 import numpy as np
 
 from rocklabel.live.config import AppConfig
-from rocklabel.live.filters import crop_mask
+from rocklabel.live.filters import crop_mask, floating_filter_mask
 from rocklabel.live.leveling import GroundLeveler, tilt_deg
 from rocklabel.live.motion import OrientationTracker, matrix_to_quat, quat_to_matrix
 from rocklabel.live.slam import SlamTracker
@@ -266,6 +266,7 @@ class IngestEngine:
         self._recent_max_sec = 5.0
         self._recent_max_batches = 512
         self._crop = config.crop
+        self._floating = config.floating
         self._use_imu = config.motion.use_imu
         self.tracker = OrientationTracker(yaw_only=config.motion.yaw_only)
         self._imu_seen = False
@@ -629,6 +630,21 @@ class IngestEngine:
                     batch.points, batch.intensity, batch.timestamp,
                     batch.orientation, pos, quat,
                 )
+            # 1c. Phantom-point rejection, per sweep and before anything stores
+            #     these points. The shallowest beam rings graze the floor and
+            #     sometimes report short, leaving returns hanging in mid-air;
+            #     they only stand out while the sweep is still separate, because
+            #     accumulating sweeps fills every column with them. Dropping
+            #     them here keeps them out of the accumulated view, the scoring
+            #     window and the heightmap alike.
+            keep = floating_filter_mask(points, self._floating)
+            if keep is not None:
+                points = points[keep]
+                if inten is not None:
+                    inten = inten[keep]
+                if points.shape[0] == 0:
+                    self.stats.record_batch(0, 0.0)
+                    continue
             # The accumulated cloud keeps the FULL world-frame view (walls and
             # all) — the map you check while moving the sensor.
             self.accum.add(

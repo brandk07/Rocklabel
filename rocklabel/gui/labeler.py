@@ -47,8 +47,18 @@ def default_labels_path(mcap_path: str, labels_root: str = "labels",
     return os.path.join(out_dir, basename)
 
 
-def accumulate_cloud(mcap_path: str, cfg: dict, stride: int) -> tuple[np.ndarray, np.ndarray, np.ndarray, "ScanStream"]:
-    """Fuse all (strided) scans into one voxel-accumulated odom-frame cloud."""
+def accumulate_cloud(mcap_path: str, cfg: dict, stride: int,
+                     min_hits: int = 1) -> tuple[np.ndarray, np.ndarray, np.ndarray, "ScanStream"]:
+    """Fuse all (strided) scans into one voxel-accumulated odom-frame cloud.
+
+    ``min_hits`` throws away every voxel that fewer than that many scans ever
+    hit. The accumulator counts hits anyway, and the count is the sharpest
+    signal available for telling terrain from stray returns: ground and rocks
+    come back in the same voxel every time the sensor looks at them, while a
+    mixed pixel or a grazing-angle return lands somewhere new each scan. That
+    asymmetry means a couple of percent of bad returns can be a third of the
+    voxels you actually see on screen.
+    """
     acc = VoxelAccumulator(cfg["labeler"]["accumulator_voxel_m"])
     stream = ScanStream(mcap_path, cfg, stride=stride, progress=True, desc="accumulate")
     for scan in stream:
@@ -59,6 +69,17 @@ def accumulate_cloud(mcap_path: str, cfg: dict, stride: int) -> tuple[np.ndarray
     for line in stream.counters.summary_lines():
         print("  " + line)
     print(f"  voxels:                {len(xyz)} @ {acc.voxel_m} m")
+    if min_hits > 1 and len(xyz):
+        keep = counts >= int(min_hits)
+        dropped = len(xyz) - int(keep.sum())
+        print(f"  min-hits filter:       kept {int(keep.sum())} voxels hit {min_hits}+ "
+              f"times, dropped {dropped} ({dropped / len(xyz) * 100:.1f}%)")
+        if not keep.any():
+            raise SystemExit(
+                f"--min-hits {min_hits} removed every voxel. The recording is short, "
+                "the stride is large, or the value is too high - try a smaller one."
+            )
+        xyz, inten, counts = xyz[keep], inten[keep], counts[keep]
     if len(xyz):
         lo, hi = xyz.min(axis=0), xyz.max(axis=0)
         print(f"  bounding box:          x [{lo[0]:.2f}, {hi[0]:.2f}]  y [{lo[1]:.2f}, {hi[1]:.2f}]  z [{lo[2]:.2f}, {hi[2]:.2f}]")
@@ -68,11 +89,13 @@ def accumulate_cloud(mcap_path: str, cfg: dict, stride: int) -> tuple[np.ndarray
 
 def run_label(mcap_path: str, cfg: dict, labels_path: str | None, stride: int | None,
               z_min: float | None, z_max: float | None,
-              dump_accumulated: str | None = None, fallback_viewer: bool = False) -> None:
+              dump_accumulated: str | None = None, fallback_viewer: bool = False,
+              min_hits: int | None = None) -> None:
     lcfg = cfg["labeler"]
     stride = stride if stride is not None else lcfg["stride"]
     z_min = z_min if z_min is not None else lcfg["z_min"]
     z_max = z_max if z_max is not None else lcfg["z_max"]
+    min_hits = 1 if min_hits is None else int(min_hits)
 
     # Resume before accumulating, not after: rock centers are world
     # coordinates, so a levelling angle measured now that differs from the one
@@ -83,7 +106,7 @@ def run_label(mcap_path: str, cfg: dict, labels_path: str | None, stride: int | 
     if resumed is not None and resumed.rocks:
         cfg = pin_level_to_labels(cfg, resumed.level)
 
-    xyz, inten, _counts, stream = accumulate_cloud(mcap_path, cfg, stride)
+    xyz, inten, _counts, stream = accumulate_cloud(mcap_path, cfg, stride, min_hits)
     if len(xyz) == 0:
         raise SystemExit("No points accumulated - check topic/frame configuration with 'rocklabel inspect'.")
 

@@ -43,8 +43,9 @@ def load_ros2_frames(path: str, stride: int = 1, max_frames: int | None = None,
     which is far denser in time than the solver needs and more than fits in
     memory at once; every 4th scan still leaves ~5 Hz.
     """
-    from rocklabel.live.ros2bag import (TfTree, decode_pointcloud2,
-                                        decode_tfmessage, find_lidar_topics)
+    from rocklabel.live.ros2bag import (DEFAULT_WORLD_FRAME, TfTree,
+                                        decode_pointcloud2, decode_tfmessage,
+                                        find_lidar_topics)
     from rocklabel.live.recording import RecordedFrame
     from mcap.reader import make_reader
 
@@ -64,6 +65,7 @@ def load_ros2_frames(path: str, stride: int = 1, max_frames: int | None = None,
                 next((cid for cid, ch in summary.channels.items()
                       if ch.topic == cloud_topic), -1), 0)
         tf = TfTree()
+        world_frame: str | None = DEFAULT_WORLD_FRAME
         seen = 0
         for _s, ch, m in reader.iter_messages(
             topics=[cloud_topic, *tf_topics]
@@ -85,7 +87,11 @@ def load_ros2_frames(path: str, stride: int = 1, max_frames: int | None = None,
             if pts.shape[0] == 0:
                 continue
             inten = cloud.intensity
-            pos, quat = tf.pose(cloud.frame_id)
+            # Same world frame as the labeler and the replay viewer, so a
+            # re-solve is scored against the poses everything else uses.
+            if world_frame is not None and not tf.has_frame(world_frame):
+                world_frame = None
+            pos, quat = tf.pose(cloud.frame_id, world_frame=world_frame)
             frames.append(RecordedFrame(
                 points=pts,
                 intensity=None if inten is None else inten[keep],

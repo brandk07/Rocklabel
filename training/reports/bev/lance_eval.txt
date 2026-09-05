@@ -1,0 +1,59 @@
+lance: 100 frames, ~3198 pts each, 112 rock sightings
+
+checkpoint                               found@own  found@20fp  contrast  FP/frame  PR-AUC
+REFERENCE cls-stray                     109/112     109/112       +0.895      20.7   0.540
+bev-base/VolleyBallTest10                 1/112      55/112       +0.002       0.0   0.252
+bev-base/VolleyBallTest11                 3/112      84/112       +0.023       0.0   0.387
+bev-base/VolleyBallTest12                 3/112      69/112       +0.134       0.4   0.102
+bev-base/VolleyBallTest2.                80/112      96/112       +0.990       3.4   0.484
+bev-base/VolleyBallTest6.                54/112      93/112       +0.763       1.7   0.480
+bev-base/VolleyBallTest9.                74/112      90/112       +0.928       1.8   0.603
+bev-base-s43/VolleyBallTest10             0/112      19/112       +0.000       0.0   0.209
+bev-base-s43/VolleyBallTest11            70/112      92/112       +0.893       0.5   0.564
+bev-base-s43/VolleyBallTest12            32/112      82/112       +0.197       1.1   0.285
+bev-base-s43/VolleyBallTest2.             2/112      19/112       +0.000       0.0   0.165
+bev-base-s43/VolleyBallTest6.            23/112     108/112       +0.818       1.1   0.423
+bev-base-s43/VolleyBallTest9.             8/112      26/112       +0.000       0.0   0.246
+bev-capped/VolleyBallTest2.              12/112      69/112       +0.010       0.0   0.379
+bev-capped/VolleyBallTest6.               7/112      25/112       +0.000       0.0   0.215
+bev-capped-nostray/VolleyBallTest10      80/112      83/112       +0.994       5.0   0.575
+bev-capped-nostray/VolleyBallTest11      77/112      92/112       +0.983       1.4   0.694
+bev-capped-nostray/VolleyBallTest12      87/112      88/112       +1.000       9.0   0.588
+bev-capped-nostray/VolleyBallTest2.      50/112      86/112       +0.218       0.3   0.574
+bev-capped-nostray/VolleyBallTest6.      81/112      90/112       +0.986       3.2   0.537
+bev-capped-nostray/VolleyBallTest9.      83/112      92/112       +0.682       1.9   0.592
+bev-capped-relative/VolleyBallTest10     75/112      89/112       +0.759       1.5   0.609
+bev-capped-relative/VolleyBallTest11     76/112      93/112       +0.412       0.3   0.667
+bev-capped-relative/VolleyBallTest12     89/112      93/112       +0.999       6.9   0.621
+bev-capped-relative/VolleyBallTest2.     85/112      95/112       +0.998       4.2   0.652
+bev-capped-relative/VolleyBallTest6.     84/112      94/112       +1.000       5.6   0.616
+bev-capped-relative/VolleyBallTest9.     80/112      93/112       +0.672       2.8   0.460
+bev-local/VolleyBallTest10               10/112      88/112       +0.412       0.2   0.474
+bev-local/VolleyBallTest11                2/112      14/112       +0.000       0.0   0.172
+bev-local/VolleyBallTest12               47/112      89/112       +0.766       2.0   0.410
+bev-local/VolleyBallTest2.                7/112      50/112       +0.043       0.1   0.295
+bev-local/VolleyBallTest6.               80/112      94/112       +0.878       2.0   0.521
+bev-local/VolleyBallTest9.               10/112      53/112       +0.005       0.2   0.249
+bev-relative/VolleyBallTest10            83/112      91/112       +0.991       6.5   0.529
+bev-relative/VolleyBallTest11             8/112      84/112       +0.242       0.1   0.271
+bev-relative/VolleyBallTest12            55/112      45/112       +0.644      23.5   0.115
+bev-relative/VolleyBallTest2.             5/112       0/112       +0.466      21.4   0.073
+bev-relative/VolleyBallTest6.            80/112      86/112       +0.997       8.8   0.550
+bev-relative/VolleyBallTest9.             8/112      11/112       +0.340      14.8   0.094
+bev-stray/VolleyBallTest10                4/112      27/112       +0.000       0.0   0.210
+bev-stray/VolleyBallTest11                1/112      44/112       +0.014       0.1   0.186
+bev-stray/VolleyBallTest12                7/112      47/112       +0.005       0.0   0.428
+bev-stray/VolleyBallTest2.                3/112      97/112       +0.055       0.0   0.304
+bev-stray/VolleyBallTest6.                9/112      31/112       +0.006       0.1   0.243
+bev-stray/VolleyBallTest9.                1/112      82/112       +0.036       0.0   0.232
+
+arm                     found@own  found@20fp         contrast          PR-AUC    flat
+REFERENCE cls-stray           97%         97%   +0.895+-0.000    0.540+-0.000   0/1
+bev-base                      32%         72%   +0.473+-0.428    0.385+-0.165   3/6
+bev-base-s43                  20%         51%   +0.318+-0.387    0.315+-0.137   4/6
+bev-capped                     8%         42%   +0.005+-0.005    0.297+-0.082   2/2
+bev-capped-nostray            68%         79%   +0.810+-0.288    0.593+-0.048   0/6
+bev-capped-relative           73%         83%   +0.807+-0.219    0.604+-0.068   0/6
+bev-local                     23%         58%   +0.351+-0.363    0.353+-0.125   3/6
+bev-relative                  36%         47%   +0.613+-0.296    0.272+-0.200   0/6
+bev-stray                      4%         49%   +0.019+-0.020    0.267+-0.081   6/6

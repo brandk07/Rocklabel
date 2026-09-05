@@ -234,3 +234,30 @@ def test_accumulate_and_ply_dump(synthetic_recording, tmp_path):
     ply = tmp_path / "cloud.ply"
     write_ply(str(ply), xyz, inten)
     assert ply.stat().st_size > 16 * len(xyz)
+
+
+def test_min_hits_drops_voxels_few_scans_ever_hit():
+    """The hit count separates a surface from a stray return.
+
+    A voxel every scan sees is terrain; one a single scan saw is noise that
+    happened to land there. The filter has to remove the second without
+    touching the first.
+    """
+    from rocklabel.geometry.accumulate import VoxelAccumulator
+
+    acc = VoxelAccumulator(0.03)
+    solid = np.array([[0.0, 0.0, 0.0], [0.1, 0.0, 0.0]], np.float32)
+    for scan in range(10):
+        # The same two points every scan, plus one stray that never repeats.
+        stray = np.array([[1.0 + scan, 2.0, 1.5]], np.float32)
+        pts = np.concatenate([solid, stray])
+        acc.add(pts, np.zeros(len(pts), np.float32))
+    xyz, _inten, counts = acc.result()
+    assert len(xyz) == 12                     # 2 repeated + 10 one-offs
+    assert (counts >= 10).sum() == 2
+    assert (counts == 1).sum() == 10
+
+    keep = counts >= 3
+    assert keep.sum() == 2, "only the repeatedly-seen voxels survive"
+    # The survivors are the solid pair, not any of the strays.
+    assert np.all(xyz[keep][:, 2] < 0.05)

@@ -18,7 +18,7 @@ import os
 
 from ..dataset.neighborhoods import FEATURES
 from ..profiles import DEFAULT_PROFILE
-from .models_meta import MODELS
+from .models_meta import BEV_CHANNELS, MODELS, model_task
 from . import TRAIN_DEFAULTS
 from .ablate import (DEFAULT_REPORT_ROOT as REPORT_ROOT, DEFAULT_ROOT as ABLATE_ROOT,
                      SUITES)
@@ -26,6 +26,11 @@ from .matched import AGGREGATIONS, DEFAULT_RADIUS_M
 from .data import default_datasets, run_dir_name, run_suffix
 
 DEFAULT_ROOT = "training"
+
+#: ``--test-run all``: hold nothing out and fit every recording in the cache.
+#: A cache run can never be called this - run ids are recording stems - so the
+#: sentinel cannot collide with a real fold.
+TRAIN_ALL = "all"
 
 #: Where `cache` writes and every training command reads. One cache per
 #: generation profile, because a cache built from full-sweep frames and one
@@ -41,7 +46,11 @@ DEFAULT_RUNS_ROOT = os.path.join(ABLATE_ROOT, "compare")
 ABLATE_PASSTHROUGH = ("epochs", "batch", "lr", "weight_decay", "patience",
                       "val_frac", "gap_frames", "gap_seconds", "augment",
                       "aug_intensity_gain", "aug_intensity_shift", "aug_thin_min",
-                      "seg_npoints", "seg_radii",
+                      "aug_ground_tilt", "aug_stray_frac", "aug_stray_reach",
+                      "aug_phantom_frac", "aug_phantom_extent",
+                      "bev_cell", "bev_grid", "bev_width", "bev_depth",
+                      "bev_channels", "pos_weight_cap",
+                      "seg_npoints", "seg_radii", "seg_height_ref",
                       "dropout", "tnet", "seed", "device")
 
 
@@ -62,6 +71,27 @@ def _settings_match(run_dir: str, cfg: dict) -> bool:
         old = json.load(f)
     old.setdefault("features", list(FEATURES))  # predates the channel setting
     for key in ("seg_npoints", "seg_radii"):     # predates the level geometry
+        old.setdefault(key, TRAIN_DEFAULTS[key])
+    # Predates the height reference. A segmentation run from before it existed
+    # was trained base-relative, so it must compare as "base" and be retrained
+    # when the sweep now asks for "floor". A classifier run is unaffected by
+    # either setting, so it takes today's default and keeps matching - otherwise
+    # adding this would have invalidated every classifier fold already on disk.
+    seg = model_task(old["model"]) == "segment" if old.get("model") else False
+    old.setdefault("seg_height_ref", "base" if seg else TRAIN_DEFAULTS["seg_height_ref"])
+    old.setdefault("seg_coord_ref", "scene")
+    old.setdefault("aug_ground_tilt", 0.0 if seg else TRAIN_DEFAULTS["aug_ground_tilt"])
+    # The stray-return jitter defaults to off, which is exactly what a run made
+    # before it existed did, so filling it in keeps every checkpoint on disk
+    # matching instead of marking them all stale.
+    old.setdefault("aug_stray_frac", TRAIN_DEFAULTS["aug_stray_frac"])
+    old.setdefault("aug_stray_reach", TRAIN_DEFAULTS["aug_stray_reach"])
+    old.setdefault("aug_phantom_frac", TRAIN_DEFAULTS["aug_phantom_frac"])
+    old.setdefault("aug_phantom_extent", TRAIN_DEFAULTS["aug_phantom_extent"])
+    # Runs predating the BEV CNN carry none of its settings; filling the
+    # defaults in keeps them resumable rather than reading as a settings change.
+    for key in ("bev_cell", "bev_grid", "bev_width", "bev_depth",
+                "bev_channels", "pos_weight_cap"):
         old.setdefault(key, TRAIN_DEFAULTS[key])
     return old == cfg
 
@@ -179,6 +209,78 @@ def _add_train_args(p: argparse.ArgumentParser) -> None:
         help="segmentation only: how many centroids each of the three "
              "downsampling levels keeps, coarsest last. The default throws "
              "three quarters of the frame away at the first level")
+    opt("--seg-height-ref", choices=("base", "floor"),
+        help="segmentation only: what height zero means. 'floor' subtracts the "
+             "frame's own ground first, so how high the robot base rides above "
+             "the floor stops mattering; 'base' is the pre-2026-08 behavior and "
+             "collapses to near-zero confidence on a recording whose base sits "
+             "even 30 cm off where training's did")
+    opt("--bev-cell", type=float,
+        help="BEV CNN only: the size of one grid cell in metres. 0.10 matches "
+             "the stored BEV rasters and puts a 44 cm rock across about four "
+             "cells")
+    opt("--bev-grid", type=int,
+        help="BEV CNN only: how many cells across the (square) grid is. It has "
+             "to hold a whole frame after the random heading rotation, and the "
+             "furthest point from a frame's centre anywhere in the cache is "
+             "6.90 m, so 144 cells at 0.10 m (+/-7.2 m) clips nothing. Must "
+             "divide by 2^depth")
+    opt("--bev-width", type=int,
+        help="BEV CNN only: channels in the network's first level; each level "
+             "below doubles it. 32 is ~1.9 million weights, 16 is ~0.5 million")
+    opt("--bev-depth", type=int,
+        help="BEV CNN only: how many times the network halves the grid before "
+             "building it back up")
+    opt("--bev-channels", nargs="+", metavar="NAME",
+        help="BEV CNN only: which per-cell measurements the network reads, by "
+             f"name (default all of: {', '.join(BEV_CHANNELS)}). Dropping "
+             "'occupied' and 'count' removes the density pair, which is the "
+             "one thing a grid can see that a point model cannot")
+    opt("--seg-coord-ref", choices=("scene", "frame", "local"),
+        help="segmentation only: 'scene' feeds absolute scene xyz to every "
+             "grouping layer; 'frame' recenters each frame but keeps position "
+             "within it; 'local' feeds only centroid-relative geometry")
+    opt("--aug-ground-tilt", type=float,
+        help="segmentation only: half-width of the random ground tilt, in "
+             "metres of rise per metre of ground (0 = off). Training's floor "
+             "was flat and level in every recording; this is what stops the "
+             "model assuming an unlevelled bin cannot happen")
+    opt("--aug-stray-frac", type=float, metavar="F",
+        help="fraction of each frame turned into stray returns that sit on no "
+             "surface, pushed along their own line of sight (0 = off). Every "
+             "training recording was made over flat ground the sensor struck "
+             "steeply, so almost nothing in them is a bad return; a competition "
+             "arena seen at a grazing angle is full of them. Measured on the "
+             "lance bag, 1-2%% of returns inside 1.5 m and 5-7%% further out land "
+             "over 25 cm off the real surface, so 0.05 is a realistic setting")
+    opt("--aug-phantom-frac", type=float, metavar="F",
+        help="classifier only: fraction of training samples replaced outright by "
+             "a synthetic phantom clump labelled clear - a loose 3D scatter of "
+             "sparse returns with no surface beneath it. That is what the "
+             "competition arena's bad returns present to a 0.5 m candidate ball, "
+             "and no ball in the training recordings is one: referenced to its "
+             "own lowest point the median training ball spans under 0.12 m "
+             "vertically. Reach for it when a model fires on mid-air clutter. "
+             "0 = off")
+    opt("--aug-phantom-extent", type=float, metavar="M",
+        help="vertical extent (m) of a synthetic phantom clump, drawn 0.5-1.5x "
+             "this. Default 0.54 is what a phantom-centred ball measured on the "
+             "competition arena")
+    opt("--aug-stray-reach", type=float, metavar="M",
+        help="how far a stray is thrown, in metres. Heavy-tailed: the median "
+             "lands at about a third of this and a few go several times "
+             "further, matching the per-beam range wander measured on a parked "
+             "robot (default 1.0)")
+    opt("--pos-weight-cap", type=float, metavar="W",
+        help="ceiling on how much one rock example outweighs one clear one in "
+             "the loss. Unset keeps the raw class imbalance, which is about 94 "
+             "for a per-point model and about 4.3 for the sliding-window "
+             "classifier - a 22x difference that comes only from the generator "
+             "discarding 95%% of clear candidates for one format and none for "
+             "the other. A weight that big buys recall by pushing the decision "
+             "boundary until nearly everything reads as rock, and is the "
+             "standing suspect for per-point models that rank rocks correctly "
+             "on a new arena while their confidence collapses to near zero")
     opt("--seg-radii", type=float, nargs=3, metavar=("R1", "R2", "R3"),
         help="segmentation only: how wide a ball (metres) each level pools "
              "over, finest first. The default's finest scale is 0.25 m, which "
@@ -204,6 +306,12 @@ def _train_cfg(args, model: str, train_runs: list[str], test_run: str) -> dict:
         gap_frames=args.gap_frames, gap_seconds=args.gap_seconds,
         epochs=args.epochs, batch=args.batch, lr=args.lr,
         weight_decay=args.weight_decay, patience=args.patience, augment=args.augment,
+        seg_height_ref=args.seg_height_ref, seg_coord_ref=args.seg_coord_ref,
+        aug_ground_tilt=args.aug_ground_tilt,
+        aug_stray_frac=args.aug_stray_frac,
+        aug_stray_reach=args.aug_stray_reach,
+        aug_phantom_frac=args.aug_phantom_frac,
+        aug_phantom_extent=args.aug_phantom_extent,
         aug_intensity_gain=args.aug_intensity_gain,
         aug_intensity_shift=args.aug_intensity_shift,
         aug_thin_min=args.aug_thin_min,
@@ -230,7 +338,13 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("train", help="train one model on one leave-one-run-out fold")
     p.add_argument("--model", choices=sorted(MODELS), required=True,
                    help="; ".join(f"{k} = {v[1]}" for k, v in MODELS.items()))
-    p.add_argument("--test-run", required=True, help="run held out for testing")
+    p.add_argument("--test-run", required=True,
+                   help="run held out for testing, or 'all' to hold nothing "
+                        "out and fit every recording in the cache. 'all' is a "
+                        "deployment fit, not an experiment: there is no "
+                        "unseen run left to score it on, so it writes "
+                        "val_metrics.json rather than test_metrics.json and "
+                        "cannot appear in any leave-one-run-out table.")
     _add_common(p)
     _add_train_args(p)
     _add_gpu_arg(p)
@@ -331,6 +445,53 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dump", default=None,
                    help="write frame/centers/probs to this .npz and exit (no window)")
 
+    p = sub.add_parser(
+        "visual-audit",
+        help="deployment comparison on distinct labelled rocks: accumulate both "
+             "models, measure complete-rock coverage, and render disagreements")
+    p.add_argument("recording", help="labelled .mcap recording to replay")
+    p.add_argument("--labels", required=True, help="rock labels JSON for the recording")
+    p.add_argument("--model-a", required=True, help="first checkpoint (best.pt)")
+    p.add_argument("--model-b", required=True, help="second checkpoint (best.pt)")
+    p.add_argument("--out", default=os.path.join(REPORT_ROOT, "visual-audit"),
+                   help=f"report directory (default: {REPORT_ROOT}/visual-audit)")
+    p.add_argument("--config", default=None,
+                   help="YAML config for recording topics (default: built-ins)")
+    p.add_argument("--floor-band", type=float, nargs=2, default=(-0.10, 0.60),
+                   metavar=("LOW", "HIGH"),
+                   help="operational z band relative to measured floor; this is not "
+                        "silently narrowed to make a model look better "
+                        "(default: -0.10 0.60 m)")
+    p.add_argument("--max-range", type=float, default=8.0,
+                   help="horizontal range around the sensor (default: 8 m)")
+    p.add_argument("--stride", type=int, default=None,
+                   help="score every Nth window (default: checkpoint training stride)")
+    p.add_argument("--window-s", type=float, default=None,
+                   help="input scan window (default: checkpoint training window)")
+    p.add_argument("--accum-seconds", type=float, default=5.0,
+                   help="duration of each independently accumulated map (default: 5)")
+    p.add_argument("--candidates-per-rock", type=int, default=3,
+                   help="visibility-rich intervals retained per physical rock (default: 3)")
+    p.add_argument("--min-visible-points", type=int, default=15,
+                   help="real returns required before a rock is auditable (default: 15)")
+    p.add_argument("--min-coverage", type=float, default=0.25,
+                   help="fraction of occupied rock cells required for a complete "
+                        "detection (default: 0.25)")
+    p.add_argument("--material-gap", type=float, default=0.20,
+                   help="median per-rock coverage difference that rejects a parity "
+                        "claim (default: 0.20, or 20 percentage points)")
+    p.add_argument("--cell", type=float, default=0.10,
+                   help="shared ground-cell size in metres (default: 0.10)")
+    p.add_argument("--max-cases", type=int, default=12,
+                   help="maximum disagreement montages, one per rock (default: 12)")
+    p.add_argument("--start", type=float, default=None,
+                   help="first recording-relative second to inspect")
+    p.add_argument("--end", type=float, default=None,
+                   help="last recording-relative second to inspect")
+    p.add_argument("--batch", type=int, default=512,
+                   help="classifier inference batch size (default: 512)")
+    p.add_argument("--device", default=None, help="cuda / cpu (default: auto)")
+
     p = sub.add_parser("view", help="3D viewer: replay a run colored by model confidence")
     p.add_argument("dataset_dir", help="dataset directory (e.g. datasets/myroomdataset2)")
     p.add_argument("--checkpoint", required=True, help="path to a best.pt")
@@ -358,13 +519,18 @@ def main(argv: list[str] | None = None) -> int:
         from .data import load_cache_meta
         from .engine import train_fold
         runs = sorted(load_cache_meta(args.cache_dir)["runs"])
-        if args.test_run not in runs:
-            raise SystemExit(f"test run {args.test_run!r} not in cache; available: {runs}")
-        cfg = _train_cfg(args, args.model, [r for r in runs if r != args.test_run],
-                         args.test_run)
+        if args.test_run == TRAIN_ALL:
+            cfg = _train_cfg(args, args.model, runs, "")
+            fold_name = "trainall"
+        else:
+            if args.test_run not in runs:
+                raise SystemExit(f"test run {args.test_run!r} not in cache; "
+                                 f"available: {runs} (or {TRAIN_ALL!r})")
+            cfg = _train_cfg(args, args.model, [r for r in runs if r != args.test_run],
+                             args.test_run)
+            fold_name = f"loro_{args.test_run}"
         run_dir = os.path.join(args.runs_root,
-                               run_dir_name(args.model, f"loro_{args.test_run}",
-                                            args.features))
+                               run_dir_name(args.model, fold_name, args.features))
         train_fold(cfg, run_dir, resume=not args.fresh)
         return 0
 
@@ -443,6 +609,21 @@ def main(argv: list[str] | None = None) -> int:
                         window_s=args.window_s, dump=args.dump,
                         z_min=args.z_min, z_max=args.z_max,
                         max_range=args.max_range)
+        return 0
+
+    if args.command == "visual-audit":
+        from .visual_audit import run_visual_audit
+        run_visual_audit(
+            args.recording, args.labels, args.model_a, args.model_b, args.out,
+            config_path=args.config, floor_band=tuple(args.floor_band),
+            max_range=args.max_range, stride=args.stride, window_s=args.window_s,
+            accum_seconds=args.accum_seconds,
+            candidates_per_rock=args.candidates_per_rock,
+            min_visible_points=args.min_visible_points,
+            min_coverage=args.min_coverage, material_gap=args.material_gap,
+            max_cases=args.max_cases,
+            cell_m=args.cell, start_s=args.start, end_s=args.end,
+            device=args.device, batch=args.batch)
         return 0
     return 2
 

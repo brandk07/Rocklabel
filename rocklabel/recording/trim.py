@@ -9,8 +9,17 @@ output file.
 By default only the pointcloud topic plus /tf and /tf_static are kept — for a
 recording that also carries cameras etc. this typically shrinks the file by
 an order of magnitude. --start-s/--end-s crop time as seconds relative to the
-first message; TF topics are exempt from the time window so pose lookups near
-the window edges keep working.
+first message.
+
+Poses need a little slack around the cut so lookups at the very edges of the
+window still bracket a transform, so /tf is kept for ``TF_PAD_S`` seconds
+either side of the window. It is only slack, though: keeping /tf for the whole
+recording (as this used to) leaves the output file *advertising* the original
+time span while holding clouds for a small slice of it. Players trust that
+span, so a bag trimmed to start at 150 s would sit at 0:00 doing nothing until
+you scrubbed forward to 150 s. The single latched /tf_static message is kept
+whatever its timestamp and restamped to the start of the window, for the same
+reason — a static transform is valid for all time, so moving it is safe.
 """
 
 from __future__ import annotations
@@ -25,6 +34,11 @@ from tqdm import tqdm
 
 from .. import __version__
 
+#: Seconds of /tf kept either side of the time window, so a pose lookup at the
+#: very edge of the window still has transforms bracketing it. At the ~38 Hz
+#: these recordings publish /tf, this is ~75 messages of slack per side.
+TF_PAD_S = 2.0
+
 
 def run_trim(in_path: str, out_path: str, cfg: dict, extra_topics: list[str] | None = None,
              start_s: float | None = None, end_s: float | None = None,
@@ -32,7 +46,9 @@ def run_trim(in_path: str, out_path: str, cfg: dict, extra_topics: list[str] | N
     if os.path.abspath(in_path) == os.path.abspath(out_path):
         raise SystemExit("trim: --out must differ from the input file")
     topics_cfg = cfg["topics"]
-    tf_topics = {topics_cfg["tf_topic"], topics_cfg["tf_static_topic"]}
+    tf_topic = topics_cfg["tf_topic"]
+    tf_static_topic = topics_cfg["tf_static_topic"]
+    tf_topics = {tf_topic, tf_static_topic}
     keep: set[str] | None = None
     if not all_topics:
         from .lidarrig_io import TOPIC as LIDARRIG_TOPIC
@@ -78,12 +94,23 @@ def run_trim(in_path: str, out_path: str, cfg: dict, extra_topics: list[str] | N
                     continue
                 if keep is not None and channel.topic not in keep:
                     continue
-                if channel.topic not in tf_topics:  # TF exempt from the time window
-                    t_rel = (rec.log_time - t0_ns) / 1e9
-                    if start_s is not None and t_rel < start_s:
+                # Time window. /tf gets TF_PAD_S of slack either side so edge
+                # lookups still bracket; /tf_static is latched (one message,
+                # valid for all time) so it is kept and restamped below.
+                log_time = rec.log_time
+                if channel.topic != tf_static_topic:
+                    pad = TF_PAD_S if channel.topic == tf_topic else 0.0
+                    t_rel = (log_time - t0_ns) / 1e9
+                    if start_s is not None and t_rel < start_s - pad:
                         continue
-                    if end_s is not None and t_rel > end_s:
+                    if end_s is not None and t_rel > end_s + pad:
                         continue
+                elif start_s is not None:
+                    # Keep the latched transform, but do not let its original
+                    # timestamp stretch the output's advertised time span back
+                    # to the start of the untrimmed recording.
+                    window_start = t0_ns + int(start_s * 1e9)
+                    log_time = max(log_time, window_start)
                 new_cid = new_channel_ids.get(rec.channel_id)
                 if new_cid is None:
                     schema = schemas.get(channel.schema_id)
@@ -97,13 +124,13 @@ def run_trim(in_path: str, out_path: str, cfg: dict, extra_topics: list[str] | N
                         channel.topic, channel.message_encoding, new_sid, dict(channel.metadata)
                     )
                     new_channel_ids[rec.channel_id] = new_cid
-                writer.add_message(new_cid, rec.log_time, rec.data, rec.publish_time, rec.sequence)
+                writer.add_message(new_cid, log_time, rec.data, rec.publish_time, rec.sequence)
                 counts[channel.topic] += 1
                 if not kept_range:
-                    kept_range = [rec.log_time, rec.log_time]
+                    kept_range = [log_time, log_time]
                 else:
-                    kept_range[0] = min(kept_range[0], rec.log_time)
-                    kept_range[1] = max(kept_range[1], rec.log_time)
+                    kept_range[0] = min(kept_range[0], log_time)
+                    kept_range[1] = max(kept_range[1], log_time)
         progress.close()
         writer.finish()
 

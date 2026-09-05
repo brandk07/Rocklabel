@@ -1,0 +1,15 @@
+intensity: rescaling by 1.5259e-05 (driver publishes raw counts in a float field)
+
+=== levelling ===
+  levelling:             manual
+  mount roll / pitch:    -0.74 deg / -2.96 deg (tilt 3.05 deg)
+intensity: rescaling by 1.5259e-05 (driver publishes raw counts in a float field)
+lance: 100 frames, 138 rock sightings
+
+  fold                                                 seg-base                        seg-relief                         cls-stray
+                                        PR-AUC  contrast  rocks           PR-AUC  contrast  rocks           PR-AUC  contrast  rocks
+  VolleyBallTest10.reslam           0.564    +0.838    63/138          0.497    +0.315    49/138          0.607    +0.941   136/138   
+  VolleyBallTest11.reslam           0.601    +0.436    38/138          0.385    +0.016    37/138          0.776    +0.803   137/138   
+  VolleyBallTest6.reslam            0.484    +0.245    39/138          0.521    +0.315    45/138          0.601    +0.907   136/138   
+  VolleyBallTest9.reslam            0.488    +0.293    30/138          0.567    +0.731    78/138          0.619    +0.928   135/138   
+  MEAN                              0.534    +0.453  (4 folds)        0.492    +0.344  (4 folds)        0.651    +0.895  (4 folds) 

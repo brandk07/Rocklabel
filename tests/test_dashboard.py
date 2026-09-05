@@ -220,7 +220,7 @@ def test_every_command_that_replays_a_recording_offers_levelling():
     Rock centers are stored in world coordinates, so a form that let you level
     while labelling but not while generating would misplace every one of them.
     """
-    for cid in ("label", "driftcheck", "generate"):
+    for cid in ("live", "label", "driftcheck", "generate"):
         names = {p.name for p in spec.COMMANDS_BY_ID[cid].params}
         assert {"level", "mount_roll", "mount_pitch"} <= names, cid
 
@@ -324,40 +324,55 @@ def test_snapshot_links_recordings_to_their_labels(project):
     assert snap["recordings"][0]["labels"] == os.path.join("labels", "run1.labels.json")
 
 
-def test_snapshot_summarizes_datasets_runs_and_checkpoints(project):
+def test_snapshot_summarizes_datasets_and_the_cache(project):
     snap = inventory.snapshot(str(project))
     assert snap["totals"]["samples"] == 500
     assert snap["totals"]["rock_samples"] == 120
     assert snap["datasets"][0]["config_hash"] == "abc123def456"  # truncated for display
-    assert snap["totals"]["runs_complete"] == 1
-    assert snap["totals"]["best_f1"] == pytest.approx(0.87)
-    ck = snap["checkpoints"][0]
-    assert [c["path"] for c in snap["checkpoints"]] == [
-        os.path.join("training", "experiments", "compare",
-                     "pointnet_loro_run1", "best.pt")]
-    # Grouped and annotated rather than a bare path: the picker has to say
-    # which run produced a model and what it scored.
-    assert ck["group"] == "compare · pointnet"
-    assert ck["fold"] == "run1" and ck["pr_auc"] == pytest.approx(0.96)
-    assert "run1" in ck["name"] and "0.96" in ck["name"]
-    assert ck["best_of_experiment"] is True
     assert [r["name"] for r in snap["cache_runs"]] == ["run1", "run2"]
-    assert snap["runs"][0]["epochs_run"] == 2  # from history.csv
 
 
-def test_last_pt_is_listed_but_flagged_unusable(project):
-    # last.pt has no config/generator/threshold, so every consumer of the
-    # checkpoint pickers would KeyError on it — the UI greys it out.
-    (project / "training" / "experiments" / "compare" / "pointnet_loro_run1"
-     / "last.pt").write_bytes(b"x")
-    cks = {os.path.basename(c["path"]): c
-           for c in inventory.snapshot(str(project))["checkpoints"]}
-    assert set(cks) == {"best.pt", "last.pt"}
-    assert cks["best.pt"]["disabled"] is False
-    assert cks["last.pt"]["disabled"] is True
-    assert cks["last.pt"]["note"]
-    # Only a loadable checkpoint can be the shortcut.
-    assert cks["last.pt"]["best_of_experiment"] is False
+def test_a_retired_experiment_contributes_to_nothing(project):
+    """The fixture's only trained run lives under "compare", which is retired:
+    it was trained against a population nothing current matches, so its scores
+    would only make the headline describe work nobody looks at. It must be
+    absent from the totals and from the picker alike, not absent from one and
+    quietly inflating the other."""
+    snap = inventory.snapshot(str(project))
+    assert snap["totals"]["runs_complete"] == 0
+    assert snap["totals"]["best_f1"] == 0.0
+    assert snap["checkpoints"] == []
+
+
+def test_a_live_run_is_counted_and_offered(project):
+    """The other half of the retirement test: an ordinary sweep fold does
+    reach the totals, the picker and the run list."""
+    _ablate_fold(project, "stray", "cls-stray", "run1", 0.83)
+    snap = inventory.snapshot(str(project))
+    assert snap["totals"]["runs_complete"] == 1
+    assert [c["fold"] for c in snap["checkpoints"]] == ["run1"]
+    assert snap["runs"][0]["metrics"]["pr_auc"] == pytest.approx(0.83)
+
+
+def test_the_resume_point_is_not_offered_at_all(project):
+    """last.pt carries optimizer state but no config, generator settings or
+    threshold, so loading one raises. It used to be listed greyed out, which
+    doubled the length of every picker with entries nobody can choose."""
+    d = _ablate_fold(project, "stray", "cls-base", "run1", 0.9)
+    (d / "last.pt").write_bytes(b"x")
+    cks = inventory.snapshot(str(project))["checkpoints"]
+    assert [os.path.basename(c["path"]) for c in cks] == ["best.pt"]
+    assert not any(c["disabled"] for c in cks)
+
+
+def test_a_fold_still_training_offers_nothing_yet(project):
+    """Only a resume point on disk means the fold has not produced anything
+    loadable, so the picker stays quiet about it — the training panel is what
+    reports work in flight."""
+    d = project / "training" / "experiments" / "stray" / "cls-base" / "loro_run7"
+    d.mkdir(parents=True)
+    (d / "last.pt").write_bytes(b"x")
+    assert inventory.checkpoints(str(project)) == []
 
 
 def test_a_folder_without_a_manifest_is_not_listed_as_a_dataset(project):
@@ -892,13 +907,27 @@ def test_ablation_arms_report_their_average_score(project):
 
 
 def test_ablation_checkpoints_join_the_picker_under_their_arm(project):
-    _ablate_fold(project, "reflectivity", "pointnet-geom", "run1", 0.8)
+    """A sweep arm is offered under its plain-English name, not its directory."""
+    from rocklabel.train import catalog
+
+    _ablate_fold(project, "stray", "cls-base", "run1", 0.8)
     cks = inventory.checkpoints(str(project))
-    arm = next(c for c in cks if c["experiment"] == "reflectivity")
-    assert arm["group"] == "reflectivity · pointnet-geom" and arm["fold"] == "run1"
+    arm = next(c for c in cks if c["experiment"] == "stray")
+    assert arm["group"] == catalog.title("stray", "cls-base") != "stray · cls-base"
+    assert arm["fold"] == "run1"
+    assert arm["verdict"] == catalog.note("stray", "cls-base")
     assert arm["path"].endswith(os.path.join("loro_run1", "best.pt"))
-    # the plain compare checkpoint is still there, under its own group
-    assert any(c["group"] == "compare · pointnet" for c in cks)
+
+
+def test_a_settled_question_is_archived_rather_than_offered(project):
+    """Settings that answer a closed question stay reachable, behind the same
+    toggle as superseded runs, instead of filling a picker nobody can read."""
+    _ablate_fold(project, "fullsweep", "pointnet-geom", "run1", 0.8)
+    ck = next(c for c in inventory.checkpoints(str(project))
+              if c["experiment"] == "fullsweep")
+    assert ck["status"] == "settled"
+    assert ck["archived"] is True and ck["group"].endswith("· archived")
+    assert ck["best_of_experiment"] is False
 
 
 def test_snapshot_exposes_ablation_totals(project):
@@ -1140,8 +1169,8 @@ def test_snapshot_carries_the_training_view(project):
 # the model picker
 # --------------------------------------------------------------------------- #
 def test_superseded_runs_are_marked_archived_rather_than_hidden(project):
-    stale = (project / "training" / "experiments" / "compare"
-             / "pointnet_loro_run1.superseded-20260815T104225")
+    stale = (project / "training" / "experiments" / "stray" / "cls-base"
+             / "loro_run1.superseded-20260815T104225")
     stale.mkdir(parents=True)
     (stale / "best.pt").write_bytes(b"old weights")
 
@@ -1157,18 +1186,18 @@ def test_superseded_runs_are_marked_archived_rather_than_hidden(project):
 
 def test_checkpoints_sort_best_first_inside_their_group(project):
     for fold, pr in (("run1", 0.40), ("run2", 0.90), ("run3", 0.65)):
-        _ablate_fold(project, "reflectivity", "pointnet-geom", fold, pr)
+        _ablate_fold(project, "stray", "cls-base", fold, pr)
     arm = [c for c in inventory.checkpoints(str(project))
-           if c["arm"] == "pointnet-geom"]
+           if c["arm"] == "cls-base"]
     assert [c["fold"] for c in arm] == ["run2", "run3", "run1"]
     assert arm[0]["best_of_experiment"] is True
 
 
 def test_a_checkpoint_names_the_recording_it_never_saw(project):
-    _ablate_fold(project, "reflectivity", "pointnet2-refl", "run2", 0.77)
+    _ablate_fold(project, "stray", "cls-stray", "run2", 0.77)
     ck = next(c for c in inventory.checkpoints(str(project)) if c["fold"] == "run2")
     assert "run2" in ck["name"] and "0.77" in ck["name"]
-    assert ck["experiment"] == "reflectivity" and ck["arm"] == "pointnet2-refl"
+    assert ck["experiment"] == "stray" and ck["arm"] == "cls-stray"
 
 
 # --------------------------------------------------------------------------- #
@@ -1230,3 +1259,44 @@ def test_every_ablation_suite_names_the_cache_the_form_describes():
                  if p.name == "suite")
     for name, declared in SUITES.items():
         assert declared["cache"] in suite.help, name
+
+
+# --------------------------------------------------------------------------- #
+# the run catalog: what each trained setting is, and whether to still show it
+# --------------------------------------------------------------------------- #
+def test_every_catalogued_status_is_one_the_picker_understands():
+    """A typo in a status would silently make a setting visible again, which
+    is the exact clutter the catalog exists to remove."""
+    from rocklabel.train import catalog
+
+    known = {"deploy", "active", "reference"} | set(catalog.HIDDEN) | set(catalog.NEVER_LISTED)
+    for key, (title, state, note) in catalog.CATALOG.items():
+        assert state in known, f"{key} has unknown status {state!r}"
+        assert title and not title.startswith(key.split("/")[0] + " ·"), \
+            f"{key} still reads as its directory name"
+    assert not set(catalog.HIDDEN) & set(catalog.NEVER_LISTED)
+
+
+def test_an_uncatalogued_setting_still_works():
+    """A sweep started tomorrow must appear without anyone editing a table."""
+    from rocklabel.train import catalog
+
+    title, state, note = catalog.entry("brand-new", "arm-1")
+    assert state == "active" and note == "" and title == "brand-new · arm-1"
+
+
+def test_the_deployment_model_is_the_shortcut_not_the_top_score(project):
+    """Ranking purely on score is what recommended a segmenter that finds 7
+    rocks in 54: PR-AUC is rank-based and cannot see a model whose confidences
+    have collapsed. A catalogued deployment model wins the star outright."""
+    d = project / "training" / "experiments" / "deploy" / "cls-stray" / "trainall"
+    d.mkdir(parents=True)
+    (d / "best.pt").write_bytes(b"weights")
+    (d / "config.json").write_text(json.dumps({"model": "pointnet", "test_run": ""}))
+
+    ck = next(c for c in inventory.checkpoints(str(project))
+              if c["experiment"] == "deploy")
+    assert ck["status"] == "deploy"
+    assert ck["best_of_experiment"] is True, "unscored, but still the one to offer"
+    # A deployment fit holds nothing out, so the label must not claim it did.
+    assert "held out" not in ck["name"] and "trained on everything" in ck["name"]

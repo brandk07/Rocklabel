@@ -234,7 +234,7 @@ def test_resuming_labels_pins_the_frame_before_accumulating(tmp_path, monkeypatc
 
     seen = {}
 
-    def fake_accumulate(mcap_path, cfg, stride):
+    def fake_accumulate(mcap_path, cfg, stride, min_hits=1):
         seen["mode"] = cfg["level"]["mode"]
         raise SystemExit("stop after the config is settled")
 

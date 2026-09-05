@@ -18,7 +18,7 @@ import torch
 
 from ..gui.preview import (COLOR_CELL_IGNORE, COLOR_CENTER_CLEAR, COLOR_CENTER_ROCK,
                        DEFAULT_WINDOW, WINDOW_OPTIONS, _FrameCache, open_dataset)
-from .models import build_model
+from .models import build_model, model_task
 
 CELL_DIM = (0.32, 0.32, 0.35)      # BEV context, deliberately muted
 COLOR_TP = (0.20, 0.85, 0.35)      # green: correctly called rock
@@ -64,6 +64,16 @@ def run_confview(out_dir: str, run_id: str | None, checkpoint: str,
 
     ck = torch.load(checkpoint, map_location="cpu", weights_only=False)
     cfg = ck["config"]
+    # This viewer reads the dataset's format-A neighborhoods (one 0.5 m ball per
+    # sample center). A segmenter wants a whole frame and returns a label per
+    # point, and handing it a ball produced a [samples, 256] array that happened
+    # to survive every length check here and painted nonsense on screen.
+    if model_task(cfg["model"]) == "segment":
+        raise SystemExit(
+            f"{cfg['model']} labels every point of a whole frame, and this "
+            "viewer only knows how to show one probability per sample center. "
+            "Use `rocklabel-train replay <recording.mcap> --checkpoint "
+            f"{checkpoint}` to see it on a recording instead.")
     if ck.get("config_hash") != _dataset_hash(out_dir):
         print(f"WARNING: checkpoint config_hash {str(ck.get('config_hash'))[:12]} != "
               f"dataset hash {_dataset_hash(out_dir)[:12]} - neighborhood geometry may differ")
@@ -75,7 +85,9 @@ def run_confview(out_dir: str, run_id: str | None, checkpoint: str,
     model = build_model(cfg["model"], tnet=cfg["tnet"], dropout=cfg.get("dropout"),
                         features=cfg.get("features"),
                         seg_npoints=cfg.get("seg_npoints"),
-                        seg_radii=cfg.get("seg_radii"))
+                        seg_radii=cfg.get("seg_radii"),
+                        seg_height_ref=cfg.get("seg_height_ref"),
+                        seg_coord_ref=cfg.get("seg_coord_ref"))
     model.load_state_dict(ck["model"])
     probs_by_frame = _predict_run(ds, model, dev)
 

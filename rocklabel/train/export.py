@@ -68,7 +68,9 @@ def export_model(checkpoint_path: str, out_dir: str) -> None:
     model = build_model(cfg["model"], tnet=cfg["tnet"], dropout=cfg.get("dropout"),
                         features=cfg.get("features"),
                         seg_npoints=cfg.get("seg_npoints"),
-                        seg_radii=cfg.get("seg_radii"))
+                        seg_radii=cfg.get("seg_radii"),
+                        seg_height_ref=cfg.get("seg_height_ref"),
+                        seg_coord_ref=cfg.get("seg_coord_ref"))
     model.load_state_dict(ck["model"])
     wrapped = InferenceModel(model).eval()
 

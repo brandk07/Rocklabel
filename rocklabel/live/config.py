@@ -247,6 +247,40 @@ class OutlierConfig:
 
 
 @dataclass
+class FloatingConfig:
+    """Phantom-point rejection: drop returns hanging above their own ground.
+
+    The multiScan's shallowest beam rings graze the floor at 3-6 m and now and
+    then report a range well short of the real one. Reprojected, those returns
+    hang in mid-air over the arena and pile up into fog as sweeps accumulate.
+    Measured on the competition recording they are ~29% of the shallowest
+    ring's returns and 0% of the steep, down-looking ones.
+
+    Nothing about the return itself gives them away — they are ordinary first
+    echoes at ordinary brightness — so the test is purely geometric: how high
+    does this point sit above the ground directly beneath it. No labelled rock
+    in any recording rises more than 0.44 m above its own base, so the 0.5 m
+    default keeps every real rock return.
+
+    Applied per sweep before fusion. It must be: once sweeps are accumulated
+    the phantom returns fill in every column and can no longer be picked out.
+    """
+
+    #: Master toggle (CLI: --keep-floating to turn off).
+    enabled: bool = True
+    #: Drop a point more than this far above its column's ground (m).
+    max_height: float = 0.5
+    #: Side length (m) of the column used to estimate the local ground.
+    cell_size: float = 1.0
+    #: Percentile of z within the column taken as "the ground".
+    ground_pct: float = 5.0
+    #: Columns with fewer points than this are left alone.
+    min_cell_points: int = 4
+    #: Skip the test entirely for batches smaller than this.
+    min_points: int = 32
+
+
+@dataclass
 class MotionConfig:
     """IMU-based motion compensation (multiScan onboard IMU over Compact UDP).
 
@@ -354,6 +388,7 @@ class AppConfig:
     slam: SlamConfig = field(default_factory=SlamConfig)
     kalman: KalmanConfig = field(default_factory=KalmanConfig)
     outlier: OutlierConfig = field(default_factory=OutlierConfig)
+    floating: FloatingConfig = field(default_factory=FloatingConfig)
     display: DisplayConfig = field(default_factory=DisplayConfig)
     record: RecordConfig = field(default_factory=RecordConfig)
 

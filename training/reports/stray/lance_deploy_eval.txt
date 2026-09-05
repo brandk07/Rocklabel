@@ -1,0 +1,38 @@
+/tmp/claude-1000/-home-brandon-Documents-perception-2026-testing/12ded052-edfe-447e-9ad0-d6258d1d0e4e/scratchpad/lance_deploy_eval.py:147: RuntimeWarning: best-F1 threshold pinned to the sweep endpoint 0.99; the true optimum lies outside the grid and this model is likely miscalibrated
+  best_thr = M.best_f1_threshold(y.astype(np.int8), q)
+intensity: rescaling by 1.5259e-05 (driver publishes raw counts in a float field)
+
+=== levelling ===
+  levelling:             manual
+  mount roll / pitch:    -0.74 deg / -2.96 deg (tilt 3.05 deg)
+intensity: rescaling by 1.5259e-05 (driver publishes raw counts in a float field)
+
+########## lance arena (never trained on, by design)
+  30 frames, ~3188 points each
+  checkpoint                                 calls    prec  recall  PR-AUC  best F1   @thr
+  segmenter, deploy, no stray                3.44%   58.4%   42.0%   0.454    0.507   0.93
+  segmenter, deploy, WITH stray              0.83%   68.3%   11.9%   0.348    0.401   0.57
+  classifier, deploy, no stray               5.48%   54.7%   39.6%   0.440    0.462   0.77
+  classifier, deploy, WITH stray            16.57%   37.6%   82.2%   0.612    0.619   0.94
+  reference: segdeploy-frame-18              0.69%   82.7%   12.3%   0.342    0.372   0.76
+  reference: the segmenter now deployed      5.70%   22.5%   26.8%   0.168    0.268   0.99
+
+=== levelling ===
+  levelling:             manual
+  mount roll / pitch:    +0.22 deg / +30.97 deg (tilt 30.97 deg)
+  floor (levelled):      z = -0.813 m
+
+########## VolleyBallTest11 (TRAINING data for the deploy models - sanity only)
+  17 frames, ~1240 points each
+  checkpoint                                 calls    prec  recall  PR-AUC  best F1   @thr
+  segmenter, deploy, no stray                1.28%   83.1%   55.5%   0.725    0.687   0.95
+  segmenter, deploy, WITH stray              1.27%   84.0%   55.8%   0.690    0.671   0.96
+  classifier, deploy, no stray               4.89%   39.7%   85.5%   0.786    0.739   0.95
+  classifier, deploy, WITH stray             4.97%   37.8%   82.8%   0.789    0.744   0.93
+  reference: segdeploy-frame-18              0.98%   92.8%   45.9%   0.675    0.640   0.93
+  reference: the segmenter now deployed      1.00%   84.5%   44.2%   0.612    0.600   0.92
+
+calls/prec/recall use each model's own validation-picked threshold - what the live viewer
+actually uses. PR-AUC is threshold-free and is the number to compare models on.
+'best F1 @thr' is an ORACLE: the threshold is picked on this very recording, so it is
+an upper bound on what retuning could buy, not a score anyone could have achieved blind.

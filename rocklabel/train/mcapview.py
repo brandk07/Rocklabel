@@ -19,9 +19,9 @@ from dataclasses import dataclass
 import numpy as np
 import torch
 
-from ..dataset.neighborhoods import build_inference_samples
+from ..dataset.neighborhoods import build_inference_frame, build_inference_samples
 from ..recording.pipeline import ScanStream, WindowedScanStream
-from .models import build_model
+from .models import build_model, model_task
 
 MAX_CLOUD_POINTS = 30_000   # per-frame context cloud cap (display only)
 CLOUD_DIM = 0.40            # context cloud brightness relative to height colors
@@ -39,11 +39,47 @@ class FrameRec:
     probs: np.ndarray      # [S]
 
 
+def _score_balls(xyz, inten, gcfg, model, device, rng, batch):
+    """Classifier: one probability per candidate ball center."""
+    samples = build_inference_samples(xyz, inten, gcfg, rng)
+    if samples is None:
+        return np.empty((0, 3), np.float32), np.empty(0, np.float32)
+    pts = torch.from_numpy(samples["neighborhoods"])
+    cnt = torch.from_numpy(samples["true_counts"].astype(np.int64))
+    out = []
+    with torch.no_grad():
+        for i in range(0, len(pts), batch):
+            logits = model(pts[i:i + batch].to(device), cnt[i:i + batch].to(device))
+            out.append(torch.sigmoid(logits).float().cpu().numpy())
+    return samples["centers_odom"], np.concatenate(out)
+
+
+def _score_frame(xyz, inten, base, gcfg, model, device, rng):
+    """Segmenter: one probability per point of the whole frame.
+
+    The same ``(positions, probabilities)`` pair the classifier returns, so the
+    browser downstream needs no idea which produced it. Without this branch a
+    segmentation checkpoint was handed the classifier's 0.5 m balls instead of a
+    frame: the shapes happen to fit, nothing raised, and every number on screen
+    was meaningless.
+    """
+    frame = build_inference_frame(xyz, inten, base, gcfg, rng)
+    if frame is None:
+        return np.empty((0, 3), np.float32), np.empty(0, np.float32)
+    n_real = int(frame["true_count"])
+    with torch.no_grad():
+        logits = model(torch.from_numpy(frame["points"])[None].to(device),
+                       torch.tensor([n_real], dtype=torch.long).to(device))
+        probs = torch.sigmoid(logits)[0].float().cpu().numpy()
+    keep = frame["index"][:n_real]
+    return xyz[keep], probs[:n_real]
+
+
 def _score_recording(mcap_path: str, cfg: dict, gcfg: dict, model, device,
                      stride: int | None, window_s: float | None,
                      z_min: float | None = None, z_max: float | None = None,
                      max_range: float | None = None,
-                     batch: int = 512) -> list[FrameRec]:
+                     batch: int = 512, task: str = "classify") -> list[FrameRec]:
     from ..gui import viewer  # height_colors, without importing open3d at module load
 
     eff_stride = stride if stride is not None else gcfg["frame_stride"]
@@ -79,19 +115,10 @@ def _score_recording(mcap_path: str, cfg: dict, gcfg: dict, model, device,
 
         # Same per-frame seeding as generate: identical frames score identically.
         rng = np.random.default_rng([int(gcfg["seed"]), scan.index])
-        samples = build_inference_samples(xyz, inten, gcfg, rng)
-
-        centers = np.empty((0, 3), np.float32)
-        probs = np.empty(0, np.float32)
-        if samples is not None:
-            pts = torch.from_numpy(samples["neighborhoods"])
-            cnt = torch.from_numpy(samples["true_counts"].astype(np.int64))
-            out = []
-            with torch.no_grad():
-                for i in range(0, len(pts), batch):
-                    logits = model(pts[i:i + batch].to(device), cnt[i:i + batch].to(device))
-                    out.append(torch.sigmoid(logits).float().cpu().numpy())
-            centers, probs = samples["centers_odom"], np.concatenate(out)
+        if task == "segment":
+            centers, probs = _score_frame(xyz, inten, base, gcfg, model, device, rng)
+        else:
+            centers, probs = _score_balls(xyz, inten, gcfg, model, device, rng, batch)
 
         if len(xyz) > MAX_CLOUD_POINTS:
             keep = rng.choice(len(xyz), MAX_CLOUD_POINTS, replace=False)
@@ -116,18 +143,22 @@ def run_mcap_replay(mcap_path: str, checkpoint: str, cfg: dict,
     model = build_model(tcfg["model"], tnet=tcfg["tnet"], dropout=tcfg.get("dropout"),
                         features=tcfg.get("features"),
                         seg_npoints=tcfg.get("seg_npoints"),
-                        seg_radii=tcfg.get("seg_radii"))
+                        seg_radii=tcfg.get("seg_radii"),
+                        seg_height_ref=tcfg.get("seg_height_ref"),
+                        seg_coord_ref=tcfg.get("seg_coord_ref"))
     model.load_state_dict(ck["model"])
     print(f"model: {tcfg['model']} (trained on {', '.join(tcfg['train_runs'])}; "
           f"held out {tcfg['test_run']}), threshold {ck.get('threshold', 0.5):.2f}")
     print(f"input channels: {', '.join(model.features)}")
 
     recs = _score_recording(mcap_path, cfg, gcfg, model, dev, stride, window_s,
-                            z_min=z_min, z_max=z_max, max_range=max_range)
+                            z_min=z_min, z_max=z_max, max_range=max_range,
+                            task=model_task(tcfg["model"]))
     if not recs:
         raise SystemExit("no scorable frames (no pose? empty crop? try rocklabel inspect)")
     n = sum(len(r.probs) for r in recs)
-    print(f"scored {n} samples over {len(recs)} frames")
+    unit = "points" if model_task(tcfg["model"]) == "segment" else "samples"
+    print(f"scored {n} {unit} over {len(recs)} frames")
 
     if dump:
         np.savez_compressed(
@@ -179,7 +210,7 @@ def run_mcap_replay(mcap_path: str, checkpoint: str, cfg: dict,
         stats = [
             f"model: {tcfg['model']}",
             f"threshold: {thr:.2f}",
-            f"samples in view: {len(probs)} ({int((probs >= thr).sum())} >= thr)",
+            f"{unit} in view: {len(probs)} ({int((probs >= thr).sum())} >= thr)",
             f"cloud points: {len(cloud)}",
         ]
         return viewer.FrameView(index=cur.index, time_s=cur.time_s,

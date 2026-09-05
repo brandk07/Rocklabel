@@ -26,6 +26,8 @@ import shutil
 import threading
 from datetime import datetime, timezone
 
+from ..train import catalog
+
 #: The project layout, one entry per folder anything here reads.
 #:
 #: Every derived thing sits under a root that says what produced it:
@@ -47,6 +49,12 @@ DIRS = {
 #: Experiment folders holding flat ``<model>_loro_<run>`` directories rather
 #: than the ``<arm>/<fold>`` matrix a sweep writes. They are `compare` output,
 #: not ablation suites, and the suite progress view must not count them.
+#: The directory a fit with nothing held out lands in — see the ``--test-run
+#: all`` mode of ``rocklabel-train train``.
+_TRAINALL_DIR = "trainall"
+
+#: Kept for the flat ``<model>_loro_<fold>`` directory layout those two
+#: experiments use; which experiments are *offered* is now the catalog's call.
 FLAT_EXPERIMENTS = ("compare", "compare-fused")
 
 _info_cache: dict[tuple, dict] = {}
@@ -652,11 +660,13 @@ def checkpoints(root: str) -> list[dict]:
     The retired flat ``compare`` experiments are not listed: their weights
     answer a population nothing current matches.
 
-    ``last.pt`` is listed but flagged unusable: it is the resume point, carrying
+    ``last.pt`` is not listed at all. It is the resume point, carrying
     optimizer/scheduler state but none of the config, generator settings or
     threshold every consumer of this list needs, so loading one raises
-    KeyError. Showing it greyed out beats hiding it — the file is on disk and
-    people go looking for it.
+    KeyError. It was once listed greyed out, on the theory that the file is on
+    disk and people go looking for it — but that doubled the length of every
+    picker with entries nobody can choose, which is worse than not mentioning
+    a file that only the training loop ever opens.
 
     ``.superseded-*`` directories are marked ``archived`` rather than dropped:
     they are old settings kept for the record, and the browser hides them
@@ -670,59 +680,102 @@ def checkpoints(root: str) -> list[dict]:
     for run_dir in _checkpoint_dirs(base):
         parts = os.path.relpath(run_dir, base).split(os.sep)
         experiment = parts[0]
-        # The retired flat compare experiments trained on a population nothing
-        # current matches; their weights are not offered next to sweep arms.
-        if experiment in FLAT_EXPERIMENTS:
-            continue
         # <experiment>/<arm>/<fold> for a sweep.
         if len(parts) >= 3:
             arm, fold_dir = parts[1], parts[-1]
         else:
             fold_dir = parts[-1]
             arm = fold_dir.split(_FOLD_PREFIX, 1)[0].rstrip("_") or "run"
-        archived = any(".superseded-" in p for p in parts)
+        # What this setting is, what it concluded, and whether it is still
+        # worth offering — see rocklabel/train/catalog.py. Without it the
+        # picker was 43 groups of directory names, which is not a list anyone
+        # can choose from.
+        title, state, verdict = catalog.entry(experiment, arm)
+        if state in catalog.NEVER_LISTED:
+            continue
+        # Settled questions, measured dead ends and abandoned runs go behind
+        # the same toggle that already hides superseded directories: still
+        # reachable, out of the way.
+        archived = (any(".superseded-" in p for p in parts)
+                    or state in catalog.HIDDEN)
         metrics = _read_json(os.path.join(run_dir, "test_metrics.json")) or {}
         pr_auc = metrics.get("pr_auc")
         fold = metrics.get("test_run") or _fold_of(fold_dir)
+        # A deployment fit (`--test-run all`) holds nothing out, so it writes
+        # val_metrics.json and lands in a "trainall" directory. Its score is a
+        # validation score off the tail of its own training recordings, which
+        # must never be ranked against a held-out one — so it is carried in a
+        # separate field and left out of `pr_auc` entirely.
+        val = _read_json(os.path.join(run_dir, "val_metrics.json")) or {}
+        held_out = not (fold_dir == _TRAINALL_DIR or val.get("held_out") is False)
+        if not held_out:
+            fold, pr_auc = "", None
 
-        for ck in ("best.pt", "last.pt"):
+        # Only the loadable one. A fold that is still training has just a
+        # last.pt and so contributes nothing here yet, which is right for a
+        # picker — the training panel is what reports work in progress.
+        for ck in ("best.pt",):
             full = os.path.join(run_dir, ck)
             if not os.path.exists(full):
                 continue
             st = _stat(full)
-            score = f" · PR-AUC {pr_auc:.3f}" if pr_auc is not None else " · not yet scored"
+            if pr_auc is not None:
+                score = f" · PR-AUC {pr_auc:.3f}"
+            elif not held_out and val.get("pr_auc") is not None:
+                score = f" · val PR-AUC {val['pr_auc']:.3f} (not held out)"
+            else:
+                score = " · not yet scored"
+            # A deployment fit holds nothing out, so "held out ..." would be a
+            # lie about the only thing this label is for.
+            where = f"held out {fold}" if fold else "trained on everything"
             out.append({
                 # What the dropdown shows inside its group: the recording this
                 # model has never seen, and how well it did on it.
-                "name": f"held out {fold}{score}",
+                "name": f"{where}{score}",
                 "path": os.path.relpath(full, root),
-                "group": f"{experiment} · {arm}" + (" · archived" if archived else ""),
+                "group": title + (" · archived" if archived else ""),
+                "title": title,
+                "status": state,
+                "verdict": verdict,
                 "experiment": experiment,
                 "arm": arm,
                 "fold": fold,
                 "pr_auc": pr_auc,
+                # The one flag a consumer needs to avoid mistaking a
+                # deployment fit's validation score for a held-out one.
+                "held_out": held_out,
                 "archived": archived,
                 "size": st["size"],
                 "mtime": st["mtime"],
                 "modified": _iso(st["mtime"]),
                 "best_of_experiment": False,
-                "disabled": ck == "last.pt",
-                "note": "resume point, not loadable" if ck == "last.pt" else "",
+                # Kept so the browser and the live picker keep their shape;
+                # nothing unloadable reaches this list any more.
+                "disabled": False,
+                "note": "",
             })
 
     # Best-first inside a group; groups in name order, live ones before archives.
     out.sort(key=lambda c: (
-        c["archived"], c["group"], c["disabled"],
+        c["archived"], c["group"],
         -(c["pr_auc"] if c["pr_auc"] is not None else -1.0), c["fold"],
     ))
-    # The shortcut: for each experiment, the single loadable checkpoint that
-    # scored highest. Usually the only one anybody wants.
+    # The shortcut: for each experiment, the one checkpoint worth offering
+    # first. A model the catalog calls a deployment model wins outright —
+    # ranking purely on PR-AUC is what recommended a segmenter that finds 7
+    # rocks in 54, because PR-AUC is rank-based and cannot see a model whose
+    # confidences have collapsed. Within an experiment nothing marks, the
+    # highest score is still the best guess available.
     for experiment in {c["experiment"] for c in out}:
         pool = [c for c in out if c["experiment"] == experiment
-                and not c["disabled"] and not c["archived"]
-                and c["pr_auc"] is not None]
-        if pool:
-            max(pool, key=lambda c: c["pr_auc"])["best_of_experiment"] = True
+                and not c["archived"]]
+        deploys = [c for c in pool if c["status"] == "deploy"]
+        if deploys:
+            deploys[0]["best_of_experiment"] = True
+            continue
+        scored = [c for c in pool if c["pr_auc"] is not None]
+        if scored:
+            max(scored, key=lambda c: c["pr_auc"])["best_of_experiment"] = True
     return out
 
 

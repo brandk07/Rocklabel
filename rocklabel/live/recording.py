@@ -438,8 +438,16 @@ class McapReplaySource(PointSource):
                     self._t0_ns = log_time
                 self._t1_ns = log_time
             self._close_scan()
-        self._pos_ns = self._t0_ns
         self._open_iter()
+        # An mcap's advertised start time spans every topic in it, including
+        # /tf and a latched /tf_static that can predate the first cloud by
+        # minutes — which is exactly what a trimmed bag looks like. Starting
+        # there means staring at an empty viewer, with the timeline stuck at
+        # 0:00, until the clouds finally begin. Anchor on the first cloud we
+        # actually have instead.
+        if self._next is not None and self._next[0] > self._t0_ns:
+            self._t0_ns = self._next[0]
+        self._pos_ns = self._t0_ns
         self._reanchor()
 
     def stop(self) -> None:
@@ -523,10 +531,16 @@ class McapReplaySource(PointSource):
         for a cloud reflects every transform logged before it — including
         during seek fast-forwards, which iterate this same generator.
         """
-        from rocklabel.live.ros2bag import TfTree, decode_pointcloud2, decode_tfmessage
+        from rocklabel.live.ros2bag import (DEFAULT_WORLD_FRAME, TfTree,
+                                            decode_pointcloud2, decode_tfmessage)
 
         assert self._reader is not None
         tf = TfTree()
+        # Resolve poses into the same world frame the offline labeler and
+        # dataset generator use, not the tree root — see TfTree.pose. Bags
+        # without that frame keep the old walk-to-root behaviour.
+        world_frame: str | None = DEFAULT_WORLD_FRAME
+        announced = False
         topics = [self._cloud_topic, *self._tf_topics]
         for _s, ch, m in _guarded(self._reader.iter_messages(topics=topics)):
             if ch.topic != self._cloud_topic:
@@ -542,7 +556,17 @@ class McapReplaySource(PointSource):
                     inten = inten[keep]
             if pts.shape[0] == 0:
                 continue
-            pos, quat = tf.pose(cloud.frame_id)
+            if not announced:
+                announced = True
+                if not tf.has_frame(world_frame):
+                    print(f"[rocklabel] note: no {world_frame!r} frame in this bag's "
+                          "TF tree; composing poses to the tree root instead",
+                          flush=True)
+                    world_frame = None
+                else:
+                    print(f"[rocklabel] poses resolved in the {world_frame!r} frame "
+                          "(matching the labeler and dataset generator)", flush=True)
+            pos, quat = tf.pose(cloud.frame_id, world_frame=world_frame)
             yield (
                 m.log_time,
                 RecordedFrame(

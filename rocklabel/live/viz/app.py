@@ -904,13 +904,19 @@ class VizApp(PivotCamera):
                    "margin. Legacy mode keeps its original automatic padding.")
         sec.add_child(ogrid)
 
-        sec.add_child(self._heading("Scoring region  (relative to the sensor)"))
+        sec.add_child(self._heading("Scoring region"))
         rgrid = self._grid(em)
+        floor_rel = gui.Checkbox("Anchor z band to detected floor")
+        floor_rel.checked = bool(s.floor_relative)
+        floor_rel.tooltip = ("Measure z min/max from the detected floor instead "
+                             "of the moving sensor.")
+        floor_rel.set_on_checked(
+            lambda v: self.set_score_setting("floor_relative", bool(v)))
+        sec.add_child(floor_rel)
         zmin = self._make_number(gui.NumberEdit.DOUBLE, -5.0, 2.0, s.z_min,
                                  lambda v: self.set_score_setting("z_min", v))
         self._pair(rgrid, "z min (m)", zmin,
-                   "Lower edge of the band kept around the sensor. Handheld rig "
-                   "~1 m above the floor: -1.5.")
+                   "Lower edge of the band. With floor anchoring, use -0.10.")
         zmax = self._make_number(gui.NumberEdit.DOUBLE, -3.0, 4.0, s.z_max,
                                  lambda v: self.set_score_setting("z_max", v))
         self._pair(rgrid, "z max (m)", zmax,
@@ -1213,7 +1219,7 @@ class VizApp(PivotCamera):
         # display caches, which are its own.
         setattr(self._scorer.settings, name, value)
         self._mirror("set_score_setting", name, value)
-        if name in ("z_min", "z_max", "range_max"):
+        if name in ("z_min", "z_max", "floor_relative", "range_max"):
             self._accum_model_key = None  # region moved: recolor/crop the cloud
             self._post_update()
         elif name.startswith("cluster_"):

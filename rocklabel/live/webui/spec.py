@@ -258,6 +258,36 @@ SECTIONS: list[Section] = [
     ),
 
     Section(
+        "floating", "Phantom points",
+        "Drops returns left hanging in mid-air. The shallowest beam rings skim "
+        "the floor several metres out and now and then report a distance "
+        "shorter than the real one, which strands that return above the "
+        "ground; over a run they build up into the fog of floating specks. "
+        "Applied per sweep before anything stores the points — it has to be, "
+        "because once sweeps are stacked the strays fill in every column and "
+        "can no longer be told apart. Changes apply to the next sweep; points "
+        "already accumulated stay until you clear the cloud.",
+        controls=[
+            Control("floating.enabled", "bool", "Drop floating points",
+                    help="Off keeps every return however high it hangs — the "
+                         "raw problem, and what you want if you would rather "
+                         "see walls and ceiling in the accumulated cloud."),
+            Control("floating.max_height", "float", "Max height above ground",
+                    "How far above the ground under it a point may sit before "
+                    "it is thrown away. 0.5 m clears 86% of the strays on the "
+                    "competition recording without losing one labelled rock "
+                    "return; the tallest rock on record is 0.44 m.",
+                    min=0.1, max=5.0, step=0.05, unit="m"),
+            Control("floating.cell_size", "float", "Ground-estimate column",
+                    "Width of the square column used to find the ground under "
+                    "each point. Wider still finds ground beside a big "
+                    "obstacle; narrower tracks steep terrain but judges from "
+                    "fewer points.",
+                    min=0.2, max=5.0, step=0.1, unit="m"),
+        ],
+    ),
+
+    Section(
         "level", "Levelling",
         "Gravity levelling of the world frame, so a tilt-mounted sensor does "
         "not tilt the whole map.",
@@ -486,13 +516,21 @@ SECTIONS: list[Section] = [
         "otherwise to the sensor.",
         requires="scorer",
         controls=[
+            Control("region.floor_relative", "bool", "Anchor to floor",
+                    "Measure z min/max from the detected floor instead of the "
+                    "moving sensor. Turn this on for a robot or handheld replay "
+                    "whose sensor height differs from the training rig."),
             Control("region.z_min", "float", "z min",
-                    "Lower edge of the band. Handheld rig ~1 m above the floor: "
-                    "-1.5.",
+                    "Lower edge of the band. With floor anchoring, -0.10 keeps "
+                    "ten centimetres below the fitted ground.",
                     min=-5.0, max=2.0, step=0.05, unit="m"),
             Control("region.z_max", "float", "z max",
-                    "Upper edge. Keeping it below the sensor (-0.5) throws away "
-                    "walls and ceiling before they ever reach the model.",
+                    "Upper edge. With floor anchoring, 0.60 keeps rocks through "
+                    "sixty centimetres above the fitted ground. A per-point "
+                    "segmenter (model name ending _seg) needs this much lower — "
+                    "about 0.25 — because it reads the whole band at once and "
+                    "was trained on frames holding only ~20 cm of anything; "
+                    "give it 0.60 in a real arena and it goes silent.",
                     min=-3.0, max=4.0, step=0.05, unit="m"),
             Control("region.range_max", "float", "Max range",
                     "Horizontal radius to keep. 0 disables it. 8 m covers a room.",

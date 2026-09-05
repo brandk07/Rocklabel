@@ -40,9 +40,19 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from ..dataset.neighborhoods import FEATURES, GEOMETRY, resolve_features  # noqa: F401  (re-exported)
-from .models_meta import MODELS, model_task  # noqa: F401  (re-exported)
+from .models_meta import (BEV_CHANNELS, BEV_DENSITY, MODELS,  # noqa: F401  (re-exported)
+                          model_task)
 
 SENTINEL = 1.0e3  # farther than any real neighborhood coordinate (meters)
+
+#: Which height in a frame counts as "the floor" when the segmenter re-references
+#: its z channel. Not the minimum: a single low outlier would drag the whole
+#: frame. Rocks are ~2.6% of points, so the 10th percentile is solidly ground
+#: while still sitting below the arena's own unevenness. It is a module constant
+#: rather than a setting because train and inference MUST compute it identically
+#: - a reference that differs between the two is the bug this whole mechanism
+#: exists to prevent.
+FLOOR_QUANTILE = 0.10
 
 
 def _feature_buffer(names: list[str]) -> torch.Tensor:
@@ -52,6 +62,21 @@ def _feature_buffer(names: list[str]) -> torch.Tensor:
 def valid_mask(counts: torch.Tensor, n: int) -> torch.Tensor:
     """[B, N] bool; real points come first (see neighborhoods.build_...)."""
     return torch.arange(n, device=counts.device)[None, :] < counts[:, None]
+
+
+def _masked_low_quantile(z: torch.Tensor, mask: torch.Tensor, q: float) -> torch.Tensor:
+    """[B] nearest-rank q-quantile of ``z`` over valid points only.
+
+    torch.quantile has no mask, and padded rows repeat real points, so quantiling
+    the raw tensor would weight duplicated points twice. Sorting with invalids
+    pushed to +inf puts every real value in the low block, where a per-sample
+    rank picked from that sample's own count lands on a real point.
+    """
+    filled = z.masked_fill(~mask, torch.finfo(z.dtype).max)
+    srt = filled.sort(dim=1).values
+    counts = mask.sum(dim=1).clamp_min(1)
+    k = (q * (counts - 1).to(z.dtype)).round().long()
+    return srt.gather(1, k[:, None]).squeeze(1)
 
 
 def _mlp1d(channels: list[int]) -> nn.Sequential:
@@ -294,11 +319,12 @@ class SegSetAbstraction(nn.Module):
     """Downsampling level: FPS centroids, kNN-in-ball grouping, max pool."""
 
     def __init__(self, npoint: int, radius: float, nsample: int,
-                 in_channel: int, mlp: list[int]):
+                 in_channel: int, mlp: list[int], *, absolute_xyz: bool = True):
         super().__init__()
         self.npoint, self.radius, self.nsample = npoint, radius, nsample
+        self.absolute_xyz = bool(absolute_xyz)
         layers: list[nn.Module] = []
-        last = in_channel + 6  # relative offset + absolute position, as above
+        last = in_channel + (6 if self.absolute_xyz else 3)
         for out in mlp:
             layers += [nn.Conv2d(last, out, 1), nn.BatchNorm2d(out), nn.ReLU(inplace=True)]
             last = out
@@ -311,7 +337,8 @@ class SegSetAbstraction(nn.Module):
         grp_idx = _knn_group(xyz, new_xyz, self.radius, self.nsample)
         grouped_xyz = _gather(xyz, grp_idx)
         local = grouped_xyz - new_xyz[:, :, None]
-        grouped = torch.cat([local, grouped_xyz, _gather(feats, grp_idx)], -1)
+        geometry = [local, grouped_xyz] if self.absolute_xyz else [local]
+        grouped = torch.cat([*geometry, _gather(feats, grp_idx)], -1)
         x = self.mlp(grouped.permute(0, 3, 1, 2))
         return new_xyz, x.max(dim=3).values.transpose(1, 2)
 
@@ -350,6 +377,40 @@ class FeaturePropagation(nn.Module):
         return self.mlp(interp.transpose(1, 2)).transpose(1, 2)
 
 
+def frame_floor_offset(points: torch.Tensor, counts: torch.Tensor) -> torch.Tensor:
+    """[B] where each frame's own ground sits in the stored dz channel.
+
+    Public because three places need this number and they must agree: the model
+    subtracts it, training records the range it saw, and live scoring compares
+    the frame in front of the robot against that range. Two implementations of
+    "the floor" that drift apart would reintroduce the failure exactly.
+    """
+    mask = valid_mask(counts, points.shape[1])
+    return _masked_low_quantile(points[..., 2], mask, FLOOR_QUANTILE)
+
+
+#: Where the top of a frame is measured, for :func:`frame_height_span`. The 99th
+#: percentile rather than the maximum for the same reason the floor uses the
+#: 10th: one stray return off a ceiling or a passing head would otherwise decide
+#: how tall the whole frame is called.
+CEILING_QUANTILE = 0.99
+
+
+def frame_height_span(points: torch.Tensor, counts: torch.Tensor) -> torch.Tensor:
+    """[B] how much vertical structure each frame holds, floor to 99th pct.
+
+    A whole-frame segmenter reads the shape of everything it is given, so the
+    height of the slab it is handed is part of its input contract - and unlike
+    the floor offset, nothing in the model cancels it. Training records the
+    range it saw and live scoring compares the region in front of the robot
+    against that range, from this one function so the two cannot drift.
+    """
+    mask = valid_mask(counts, points.shape[1])
+    z = points[..., 2]
+    return (_masked_low_quantile(z, mask, CEILING_QUANTILE)
+            - _masked_low_quantile(z, mask, FLOOR_QUANTILE))
+
+
 class PointNetPPSeg(nn.Module):
     """Per-point rock/clear segmentation over a whole cropped frame.
 
@@ -361,12 +422,35 @@ class PointNetPPSeg(nn.Module):
     sees a 1 m sphere and works in centimeters, this sees an 8 x 8 m crop and
     has to find 20-30 cm rocks in it, which is the hard part. Rocks are ~2.6%
     of points, so the loss is prevalence-weighted.
+
+    Height reference: the stored dz channel is measured from the robot base,
+    which is not a stable reference across recordings - the base rode 0.87-0.97 m
+    above the floor in all twelve volleyball recordings (9.5 cm of variation in
+    total) and ~0.37 m above it in the competition bag. Measured on the trained
+    seg-fine checkpoint, shifting every height by a constant collapsed it
+    completely: 270 points over threshold at +0.0 m, 162 at +0.2 m, zero at
+    +0.3 m, and a highest-confidence-anywhere of 0.0026 at +0.51 m. With
+    ``height_ref="floor"`` the frame's own ground is subtracted first, which
+    makes that shift cancel exactly. The classifier never had the problem
+    because its builder re-levels every ball to that ball's lowest point.
+
+    ``height_ref`` defaults to "base" so checkpoints trained before this existed
+    load and behave as they were trained; new runs default to "floor" via
+    TRAIN_DEFAULTS.
     """
 
     def __init__(self, dropout: float = 0.3, features: list[str] | None = None,
                  npoints: tuple[int, int, int] = (512, 128, 32),
-                 radii: tuple[float, float, float] = (0.25, 0.6, 1.4)):
+                 radii: tuple[float, float, float] = (0.25, 0.6, 1.4),
+                 height_ref: str = "base", coord_ref: str = "scene"):
         super().__init__()
+        if height_ref not in ("base", "floor"):
+            raise ValueError(f"height_ref must be 'base' or 'floor'; got {height_ref!r}")
+        self.height_ref = height_ref
+        if coord_ref not in ("scene", "frame", "local"):
+            raise ValueError(
+                f"coord_ref must be 'scene', 'frame' or 'local'; got {coord_ref!r}")
+        self.coord_ref = coord_ref
         self.features = resolve_features(features)
         if self.features[:3] != list(GEOMETRY):
             raise ValueError("segmentation samples and groups by position, so it needs "
@@ -384,9 +468,13 @@ class PointNetPPSeg(nn.Module):
         extra = self.features[3:]
         self.register_buffer("extra_idx", _feature_buffer(extra), persistent=False)
         c0 = len(extra)
-        self.sa1 = SegSetAbstraction(npoints[0], radii[0], 32, c0, [32, 32, 64])
-        self.sa2 = SegSetAbstraction(npoints[1], radii[1], 32, 64, [64, 64, 128])
-        self.sa3 = SegSetAbstraction(npoints[2], radii[2], 32, 128, [128, 128, 256])
+        absolute_xyz = coord_ref != "local"
+        self.sa1 = SegSetAbstraction(npoints[0], radii[0], 32, c0, [32, 32, 64],
+                                     absolute_xyz=absolute_xyz)
+        self.sa2 = SegSetAbstraction(npoints[1], radii[1], 32, 64, [64, 64, 128],
+                                     absolute_xyz=absolute_xyz)
+        self.sa3 = SegSetAbstraction(npoints[2], radii[2], 32, 128, [128, 128, 256],
+                                     absolute_xyz=absolute_xyz)
         self.fp3 = FeaturePropagation(256 + 128, [128, 128])
         self.fp2 = FeaturePropagation(128 + 64, [128, 64])
         self.fp1 = FeaturePropagation(64 + c0, [64, 64])
@@ -398,8 +486,25 @@ class PointNetPPSeg(nn.Module):
 
     def forward(self, points: torch.Tensor, counts: torch.Tensor) -> torch.Tensor:
         mask = valid_mask(counts, points.shape[1])
-        xyz0 = torch.where(mask[..., None], points[..., :3],
-                           torch.full_like(points[..., :3], SENTINEL))
+        xyz = points[..., :3]
+        if self.height_ref == "floor":
+            # Re-reference height to the frame's own ground instead of the robot
+            # base. Subtracting a per-frame constant makes the model exactly
+            # invariant to how high the base rides above the floor, which is the
+            # one thing the stored dz channel cannot be trusted to hold steady
+            # across recordings (see frame_floor_offset).
+            floor = _masked_low_quantile(points[..., 2], mask, FLOOR_QUANTILE)
+            xyz = torch.cat([xyz[..., :2], (xyz[..., 2] - floor[:, None])[..., None]], -1)
+        if self.coord_ref == "frame":
+            # Preserve position *within* the observed scene, which the feature
+            # propagation decoder needs to assign local evidence back to the
+            # right points, while denying it the robot/arena origin as a
+            # shortcut. Only real rows contribute; repeated padding must not
+            # drag the center toward whichever points happened to be copied.
+            weight = mask[..., None].to(xyz.dtype)
+            center_xy = (xyz[..., :2] * weight).sum(1) / weight.sum(1).clamp_min(1.0)
+            xyz = torch.cat([xyz[..., :2] - center_xy[:, None], xyz[..., 2:]], -1)
+        xyz0 = torch.where(mask[..., None], xyz, torch.full_like(xyz, SENTINEL))
         f0 = points.index_select(-1, self.extra_idx)
         xyz1, f1 = self.sa1(xyz0, f0, mask)
         full1 = torch.ones(xyz1.shape[:2], dtype=torch.bool, device=xyz1.device)
@@ -417,15 +522,229 @@ class PointNetPPSeg(nn.Module):
         return torch.zeros((), device=next(self.parameters()).device)
 
 
+# ===========================================================================
+# Bird's-eye-view CNN (whole frame in, a label per point out)
+# ===========================================================================
+
+def _conv_block(cin: int, cout: int) -> nn.Sequential:
+    return nn.Sequential(
+        nn.Conv2d(cin, cout, 3, padding=1, bias=False),
+        nn.BatchNorm2d(cout), nn.ReLU(inplace=True),
+        nn.Conv2d(cout, cout, 3, padding=1, bias=False),
+        nn.BatchNorm2d(cout), nn.ReLU(inplace=True),
+    )
+
+
+class BEVCNN(nn.Module):
+    """Rock/clear segmentation by rasterizing the frame and convolving it.
+
+    Input and output contract are exactly the segmenter's - points [B, N, 4]
+    plus counts [B] in, one logit per point out - so this trains, scores and
+    reports through the existing segmentation path with nothing changed. The
+    raster is built inside ``forward`` rather than read from disk on purpose:
+    every augmentation the engine applies (heading rotation, ground tilt,
+    thinning, and above all the stray-return jitter) happens to the points
+    before they reach a model, and a model handed a pre-built raster would see
+    none of it. Building the grid here also means this model and the PointNet++
+    segmenter are fed byte-identical frames, so a difference between them is a
+    difference in the models.
+
+    Grid geometry. Cells are ``cell`` metres square and the grid is centred on
+    the frame's own valid centroid, not on the robot base: the engine rotates
+    every training frame by a random angle about the base, which swings a
+    corner of the 8 x 8 m crop box well outside it. Measured over every cached
+    full-sweep frame, the furthest point from a frame's centroid is 6.90 m, so
+    a 144-cell grid at 0.10 m (+/- 7.2 m) contains every frame under any
+    rotation; 128 contains 97.7% of them and clamps a handful of corner points
+    on the rest. Points are clamped rather than dropped so that the scored
+    population stays identical to the segmenter's, whatever the grid size.
+
+    Height reference. Same argument and same default as PointNetPPSeg: the
+    stored dz is measured from the robot base, which rode 0.87-0.97 m above the
+    floor across the training recordings and ~0.37 m above it in the
+    competition bag. ``height_ref="floor"`` subtracts the frame's own ground
+    first, which makes that difference cancel exactly.
+    """
+
+    def __init__(self, cell: float = 0.10, grid: int = 144, width: int = 32,
+                 depth: int = 3, dropout: float = 0.3,
+                 features: list[str] | None = None,
+                 height_ref: str = "floor",
+                 bev_channels: list[str] | None = None,
+                 density_norm: bool = False):
+        super().__init__()
+        self.density_norm = bool(density_norm)
+        if height_ref not in ("base", "floor"):
+            raise ValueError(f"height_ref must be 'base' or 'floor'; got {height_ref!r}")
+        self.height_ref = height_ref
+        self.cell, self.grid = float(cell), int(grid)
+        if self.grid % (2 ** depth):
+            raise ValueError(f"grid {self.grid} must divide by 2^depth ({2 ** depth}) "
+                             "so the U-net's halvings land on whole cells")
+        self.features = resolve_features(features)
+        if self.features[:3] != list(GEOMETRY):
+            raise ValueError("the BEV grid is built from position, so it needs all of "
+                             f"{list(GEOMETRY)} selected; got {self.features}")
+        self.has_intensity = "intensity" in self.features
+
+        chosen = list(BEV_CHANNELS if bev_channels is None else bev_channels)
+        unknown = [c for c in chosen if c not in BEV_CHANNELS]
+        if unknown:
+            raise ValueError(f"unknown BEV channel(s) {unknown}; pick from {list(BEV_CHANNELS)}")
+        # Intensity channels are meaningless without the intensity input, and
+        # silently feeding zeros would make a channel ablation unreadable.
+        if not self.has_intensity:
+            chosen = [c for c in chosen if not c.startswith("intensity")]
+        if not chosen:
+            raise ValueError("at least one BEV channel must be selected")
+        self.bev_channels = [c for c in BEV_CHANNELS if c in chosen]  # storage order
+
+        cin = len(self.bev_channels)
+        chs = [width * (2 ** i) for i in range(depth + 1)]
+        self.enc = nn.ModuleList()
+        prev = cin
+        for c in chs[:-1]:
+            self.enc.append(_conv_block(prev, c))
+            prev = c
+        self.bottleneck = _conv_block(prev, chs[-1])
+        self.up = nn.ModuleList()
+        self.dec = nn.ModuleList()
+        for i in range(depth - 1, -1, -1):
+            self.up.append(nn.ConvTranspose2d(chs[i + 1], chs[i], 2, 2))
+            self.dec.append(_conv_block(chs[i] * 2, chs[i]))
+        self.head = nn.Sequential(
+            nn.Conv2d(chs[0], chs[0], 1, bias=False),
+            nn.BatchNorm2d(chs[0]), nn.ReLU(inplace=True),
+            nn.Dropout2d(dropout),
+            nn.Conv2d(chs[0], 1, 1),
+        )
+        self.pool = nn.MaxPool2d(2)
+
+    # -- rasterize -------------------------------------------------------
+    def _rasterize(self, xyz: torch.Tensor, inten: torch.Tensor,
+                   mask: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """(channels [B, C, G, G], flat cell index [B, N]) for a batch of frames.
+
+        Invalid (padded) rows are routed to a scratch cell that is dropped
+        before the grid is reshaped, so repeated padding can never inflate a
+        cell's count - which would defeat the one channel this model exists to
+        test.
+        """
+        b, n, _ = xyz.shape
+        g, ncell = self.grid, self.grid * self.grid
+        weight = mask.to(xyz.dtype)
+
+        # Centre on the frame's own valid points; padded rows repeat real ones,
+        # so they must not drag the centre toward whatever happened to be copied.
+        denom = weight.sum(1).clamp_min(1.0)
+        centre = (xyz[..., :2] * weight[..., None]).sum(1) / denom[:, None]
+        xy = xyz[..., :2] - centre[:, None, :]
+
+        idx = torch.floor(xy / self.cell).long() + g // 2
+        idx = idx.clamp(0, g - 1)
+        flat = idx[..., 0] * g + idx[..., 1]
+        # Scratch cell for padded rows.
+        flat_w = torch.where(mask, flat, torch.full_like(flat, ncell))
+
+        z = xyz[..., 2]
+        zero = torch.zeros(b, ncell + 1, device=xyz.device, dtype=xyz.dtype)
+        ones = weight
+
+        count = zero.clone().scatter_add_(1, flat_w, ones)
+        z_sum = zero.clone().scatter_add_(1, flat_w, z * ones)
+        z_sq = zero.clone().scatter_add_(1, flat_w, z * z * ones)
+        big = torch.finfo(xyz.dtype).max
+        z_max = zero.clone().fill_(-big).scatter_reduce_(
+            1, flat_w, torch.where(mask, z, torch.full_like(z, -big)), "amax")
+        z_min = zero.clone().fill_(big).scatter_reduce_(
+            1, flat_w, torch.where(mask, z, torch.full_like(z, big)), "amin")
+
+        occ = (count > 0).to(xyz.dtype)
+        safe = count.clamp_min(1.0)
+        z_mean = z_sum / safe
+        z_var = (z_sq / safe - z_mean * z_mean).clamp_min(0.0)
+        z_max = torch.where(occ > 0, z_max, torch.zeros_like(z_max))
+        z_min = torch.where(occ > 0, z_min, torch.zeros_like(z_min))
+
+        if self.density_norm:
+            # Cell count divided by this frame's own average occupied cell, so
+            # the channel says "denser or sparser than the rest of this frame"
+            # instead of an absolute number of returns. The absolute number is
+            # not portable: a frame is subsampled or padded to a fixed budget
+            # before a model sees it, so a competition frame holding 3,479
+            # points in the crop box arrives with 2,048 real rows where a
+            # volleyball frame holding 1,145 arrives with 1,145 - a 1.8x shift
+            # in every cell of the raster, in the one channel this model leans
+            # on. A stray return is still the cell far below its frame's
+            # average, which is what the channel is for.
+            occupied_mean = (count.sum(1) / occ.sum(1).clamp_min(1.0))[:, None]
+            density = count / occupied_mean.clamp_min(1e-6)
+        else:
+            density = count
+        built = {
+            "occupied": occ,
+            "count": torch.log1p(density),
+            "z_max": z_max,
+            "z_min": z_min,
+            "z_span": z_max - z_min,
+            "z_std": z_var.sqrt(),
+        }
+        if self.has_intensity:
+            i_sum = zero.clone().scatter_add_(1, flat_w, inten * ones)
+            i_max = zero.clone().fill_(-big).scatter_reduce_(
+                1, flat_w, torch.where(mask, inten, torch.full_like(inten, -big)), "amax")
+            built["intensity_mean"] = i_sum / safe
+            built["intensity_max"] = torch.where(occ > 0, i_max, torch.zeros_like(i_max))
+
+        # Drop the scratch cell, then lay the flat cells out as a picture.
+        chans = torch.stack([built[c][:, :ncell] for c in self.bev_channels], 1)
+        return chans.reshape(b, len(self.bev_channels), g, g), flat
+
+    def forward(self, points: torch.Tensor, counts: torch.Tensor) -> torch.Tensor:
+        mask = valid_mask(counts, points.shape[1])
+        xyz = points[..., :3]
+        if self.height_ref == "floor":
+            floor = _masked_low_quantile(points[..., 2], mask, FLOOR_QUANTILE)
+            xyz = torch.cat([xyz[..., :2],
+                             (xyz[..., 2] - floor[:, None])[..., None]], -1)
+        inten = points[..., 3]
+        x, flat = self._rasterize(xyz, inten, mask)
+
+        skips = []
+        for enc in self.enc:
+            x = enc(x)
+            skips.append(x)
+            x = self.pool(x)
+        x = self.bottleneck(x)
+        for up, dec, skip in zip(self.up, self.dec, reversed(skips)):
+            x = dec(torch.cat([up(x), skip], 1))
+        cells = self.head(x).flatten(1)              # [B, G*G] one logit per cell
+        # Read each point's answer out of the cell it landed in. Padded rows get
+        # whatever their duplicated original got, which the loss masks anyway.
+        return cells.gather(1, flat)
+
+    def pop_regularizer(self) -> torch.Tensor:
+        return torch.zeros((), device=next(self.parameters()).device)
+
+
 def build_model(name: str, tnet: bool = False, dropout: float | None = None,
                 features: list[str] | None = None,
-                seg_npoints=None, seg_radii=None) -> nn.Module:
+                seg_npoints=None, seg_radii=None,
+                seg_height_ref: str | None = None,
+                seg_coord_ref: str | None = None,
+                bev_cell: float | None = None, bev_grid: int | None = None,
+                bev_width: int | None = None, bev_depth: int | None = None,
+                bev_channels: list[str] | None = None,
+                bev_density_norm: bool | None = None) -> nn.Module:
     """``features=None`` means all of :data:`FEATURES` — the historical
     behavior, so checkpoints trained before the setting existed still load.
 
     ``seg_npoints``/``seg_radii`` size the segmenter's three levels; ``None``
     keeps the geometry every segmentation run before them was trained with, so
     those checkpoints still load into the shape they were saved from.
+
+    ``seg_height_ref=None`` likewise means "base", the reference every
+    segmentation run before this setting was trained against.
     """
     if name == "pointnet":
         return PointNet(tnet=tnet, dropout=0.3 if dropout is None else dropout,
@@ -433,12 +752,34 @@ def build_model(name: str, tnet: bool = False, dropout: float | None = None,
     if name == "pointnet2":
         return PointNetPP(dropout=0.4 if dropout is None else dropout,
                           features=features)
+    if name == "bev_cnn":
+        kw = {}
+        if bev_cell is not None:
+            kw["cell"] = float(bev_cell)
+        if bev_grid is not None:
+            kw["grid"] = int(bev_grid)
+        if bev_width is not None:
+            kw["width"] = int(bev_width)
+        if bev_depth is not None:
+            kw["depth"] = int(bev_depth)
+        if bev_channels is not None:
+            kw["bev_channels"] = list(bev_channels)
+        if bev_density_norm is not None:
+            kw["density_norm"] = bool(bev_density_norm)
+        if seg_height_ref is not None:
+            kw["height_ref"] = str(seg_height_ref)
+        return BEVCNN(dropout=0.3 if dropout is None else dropout,
+                      features=features, **kw)
     if name == "pointnet2_seg":
         kw = {}
         if seg_npoints is not None:
             kw["npoints"] = tuple(int(n) for n in seg_npoints)
         if seg_radii is not None:
             kw["radii"] = tuple(float(r) for r in seg_radii)
+        if seg_height_ref is not None:
+            kw["height_ref"] = str(seg_height_ref)
+        if seg_coord_ref is not None:
+            kw["coord_ref"] = str(seg_coord_ref)
         return PointNetPPSeg(dropout=0.3 if dropout is None else dropout,
                              features=features, **kw)
     raise ValueError(f"unknown model {name!r} (pick from {sorted(MODELS)})")

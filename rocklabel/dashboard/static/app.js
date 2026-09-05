@@ -2228,7 +2228,10 @@ let sensorTimer = null;
 function renderLive() {
   const box = $('#liveActions');
   if (!box.dataset.built) {
-    const pre = { z_min: -1.5, z_max: -0.5, max_range: 8, source: 'udp' };
+    // A sensor-relative band only works while the sensor stays at the height
+    // it was chosen for.  The robot and handheld recordings differ by roughly
+    // half a metre, so make every one-click launch follow the measured floor.
+    const pre = { floor_band: '-0.10, 0.60', max_range: 8, source: 'udp' };
     box.appendChild(quickButton('live', 'Live view', 'Sensor stream, no recording.', pre));
     box.appendChild(quickButton('record', 'Record now', 'Capture straight to disk.', pre));
     const best = S.inv.checkpoints.find((c) => c.name.endsWith('best.pt'));
@@ -2238,9 +2241,9 @@ function renderLive() {
       { ...pre, play: (S.inv.recordings[0] || {}).path || '' }));
     box.dataset.built = '1';
     $('#liveHint').innerHTML =
-      'The handheld presets assume the sensor sits about <b>1&nbsp;m above the floor</b> ' +
-      '(<code>--z-min -1.5 --z-max -0.5 --max-range 8</code>). Adjust them in the drawer ' +
-      'if the rig is mounted differently.';
+      'Quick launches follow the detected floor ' +
+      '(<code>--floor-band -0.10 0.60 --max-range 8</code>), so changing sensor ' +
+      'height does not move the rocks out of the scoring region.';
   }
   refreshSensor();
   if (!sensorTimer) sensorTimer = setInterval(refreshSensor, 5000);

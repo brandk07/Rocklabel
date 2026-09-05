@@ -1,13 +1,54 @@
 {
-  "schema_version": 4,
+  "schema_version": 5,
   "mcap_file": "VolleyBallTest1.mcap",
   "run_id": "VolleyBallTest1",
   "odom_frame": "world",
-  "created": "2026-08-16T21:40:48Z",
+  "created": "2026-08-29T00:06:02Z",
   "tool_version": "0.2.0",
   "intensity_available": true,
   "accumulator_voxel_m": 0.03,
-  "rocks": [],
+  "rocks": [
+    {
+      "id": 1,
+      "shape": "polygon",
+      "center": [
+        1.0075,
+        -1.4657,
+        -0.6297
+      ],
+      "radius": 0.373,
+      "vertices": [
+        [
+          0.7068,
+          -1.4836
+        ],
+        [
+          0.9975,
+          -1.6642
+        ],
+        [
+          1.2636,
+          -1.6424
+        ],
+        [
+          1.3082,
+          -1.4422
+        ],
+        [
+          1.0379,
+          -1.3347
+        ],
+        [
+          0.8597,
+          -1.2673
+        ]
+      ],
+      "z_range": [
+        -0.7263,
+        -0.5331
+      ]
+    }
+  ],
   "arena": {
     "vertices": [
       [
@@ -27,5 +68,11 @@
         -5.5354
       ]
     ]
+  },
+  "level": {
+    "mode": "auto",
+    "roll_deg": -0.507,
+    "pitch_deg": 39.7219,
+    "floor_z": -0.6513
   }
 }

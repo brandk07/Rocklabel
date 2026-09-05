@@ -401,6 +401,40 @@ there is also a binary detections view at the decision threshold); points
 with no prediction keep dimmed height colors. A per-scan pass runs in tens of
 milliseconds on a GPU — comfortably real time.
 
+Two things about that picture regularly get misread:
+
+* **"Most of the map has no prediction."** Usually it does have one. Turbo's
+  zero end is a dark plum that sits very close to the dimmed height color used
+  for unscored points, so a large field of confident *clear* looks like a large
+  field of nothing. On the competition recording, after four minutes with the
+  floor-band preset, 74% of the displayed points carried a prediction; the
+  genuinely unscored quarter was almost entirely points **above the z band** —
+  walls, bleachers, anything over 60 cm — with only 1.5% of in-band points left
+  out by the region.
+* **The z band matters far more to a segmenter than to a classifier.** The
+  sliding-window classifiers see one 0.5 m ball at a time, re-levelled to that
+  ball's own lowest point, so band height only decides where they look. The
+  per-point segmenter reads the whole slab in one pass and its shape is an
+  input. Every training recording is flat arena floor with rocks on it and
+  nothing else — those frames hold about **0.2 m** of vertical structure. Feed
+  a segmenter more and it walks off its distribution fast. Measured on the
+  competition recording with the deployment segmenter:
+
+  | vertical structure in the band | mean confidence | points over threshold |
+  | --- | --- | --- |
+  | 0.15 m | 0.49 | 2537 |
+  | 0.25 m | 0.27 | 1290 |
+  | 0.35 m | 0.074 | 148 |
+  | 0.50 m | 0.017 | 52 |
+  | 0.70 m (`--floor-band -0.10 0.60`) | 0.015 | 6 |
+  | 1.10 m | 0.004 | 1 |
+
+  Thinning the cloud to the same point count leaves those numbers unchanged, so
+  it is the extra structure and not the sampling. Use `--floor-band -0.05 0.25`
+  (the dashboard's **Thin slab (segmenter)** preset) for any `_seg` checkpoint.
+  Checkpoints trained from now on record the frame height they saw, and the
+  scoring panel says so when the band is letting in much more than that.
+
 **Rock outlines** are the third view, and the one that answers "how many rocks
 are there" instead of "which points are rock". The default **Robust density +
 tight contour** grouping starts from every detection above the threshold but
@@ -593,6 +627,27 @@ to re-check this on any new recording before committing to a re-solve.
 > Scoring both against a single up-vector tilts the ground plane under one of
 > them and invents about 20 mm of thickness that is not real. `--score-only`
 > now handles this per-frame.
+
+#### Which frame a competition bag's poses land in
+
+A competition bag's transform tree is `map -> odom -> base_link -> lidar_link`,
+and `map -> odom` is the robot's *own* localisation correction — on the lance
+recording a constant 2.6 degree rotation, not a rounding error. So "apply the
+bag's poses" has two different answers depending on where you stop walking that
+chain, and the two world frames are 2.5 degrees apart.
+
+Everything now stops at `odom` (`topics.odom_frame`), which is what the labeler
+and the dataset generator have always used. The replay viewer and the SLAM
+loader used to walk all the way to `map`, which put them in the other frame.
+That mattered more than the tilt itself: the levelling angle stored in a label
+file is measured in `odom`, so replaying a labelled recording applied a
+correction meant for one frame to the other and ended up **4.7 degrees** off the
+frame the model was trained in — a tilt in the opposite direction to the one it
+was supposed to remove. Measured on a lance frame, that flipped about 8% of the
+neighborhood classifier's calls.
+
+`TfTree.pose(..., world_frame=None)` restores the walk-to-root behaviour, and a
+bag whose tree has no `odom` frame falls back to it automatically.
 
 ### 2. `rocklabel label` — interactive labeling
 
@@ -1157,6 +1212,14 @@ labeled or not) - it rebuilds neighborhoods on the fly with the exact geometry
 stored in the checkpoint, scores every candidate center, and browses the run
 with confidence coloring and a threshold slider.
 
+Both know which kind of checkpoint they were given. `replay` takes a
+**segmentation** checkpoint too: it builds whole frames instead of balls and
+colors every point of the frame. `view` cannot - it reads the dataset's
+format-A neighborhoods, which is not what a segmenter eats - so it refuses one
+and points you at `replay`. Before September 2026 neither noticed: a segmenter
+handed a 0.5 m ball still returned numbers (one per point of the ball rather
+than one per center), nothing raised, and the screen filled with nonsense.
+
 Key design points (see the module docstrings for the details):
 
 - **Evaluation is leave-one-run-out, on purpose.** Candidate centers sit on a
@@ -1251,6 +1314,7 @@ a suite are only comparable if every one of them saw the same frames.
 | `reflectivity` | Does the brightness channel earn its place beside shape? | `raw-burst` cache |
 | `fullsweep` | Do whole sensor rotations beat raw bursts, and is per-point segmentation viable? | `full-sweep` cache |
 | `segdense` | Does the whole-frame segmenter improve when given four times the frames, twice the epochs, and a finer look? | `full-sweep-dense` cache, **12 folds** (VolleyBallTest13 joins as a fold here) |
+| `stray` | Does training against stray returns — clutter that sits on no surface — cost anything on clean data? | `full-sweep` cache, both model families, each with and without the augmentation |
 
 The built-in `reflectivity` suite covers PointNet and PointNet++ with and
 without the intensity channel, both models with the intensity augmentation
@@ -1266,6 +1330,29 @@ effect against it.
 Both commands are on the dashboard's Train stage ("Reflectivity check" and
 "Ablation sweep"), and the sweep's progress, per-arm ranking and figures appear
 on the Models page while it runs.
+
+#### Training on everything, with nothing held out
+
+Every command above holds one recording out, because that is the only honest
+way to score a model. When the goal is not a score but a *deployable* model,
+holding a recording out just throws away one recording's worth of training
+data:
+
+```bash
+rocklabel-train train --model pointnet2_seg --test-run all \
+    --runs-root training/experiments/deploy/seg-stray
+```
+
+`--test-run all` fits every run in the cache. Because nothing is held out
+there is nothing left to score it on, so it writes **`val_metrics.json`**
+rather than `test_metrics.json`, and lands in a `..._trainall` directory rather
+than a `..._loro_<run>` one. Both differences are deliberate: a validation
+score from the tail of the same recordings the model trained on is not a
+held-out result, and nothing downstream should be able to mistake it for one.
+Such a run therefore never appears in a leave-one-run-out table.
+
+Use it to build the checkpoint you actually ship, *after* the leave-one-run-out
+folds have told you the settings are right — never instead of them.
 
 #### Reading a per-fold table: raw and normalized PR-AUC
 
@@ -1308,6 +1395,17 @@ stage.
 On the full-sweep data this is what says segmentation **ties** the
 sliding-window classifier (+0.003 PR-AUC, p = 0.97) rather than losing badly,
 and that it is much steadier on the hardest recordings.
+
+> **That tie does not survive contact with the competition arena, and the
+> absolute numbers here should never be quoted as live performance.** The
+> shared population is the classifier's candidate set, which the generator
+> builds by keeping every rock candidate and discarding 95% of the clear ones
+> (`negative_keep_prob`) — so it is ~19% rock where the arena is 1-5%, and both
+> models are excused twenty times more bare ground than they really have to
+> reject. Measured properly on the competition bag, the segmenter finds 30-78
+> rocks out of 138 and the classifier 135-137. See
+> [training/reports/stray/WHY-SEGMENTATION-IS-NOT-A-BASELINE.md](training/reports/stray/WHY-SEGMENTATION-IS-NOT-A-BASELINE.md)
+> before using either number.
 
 #### The segmenter's three levels
 

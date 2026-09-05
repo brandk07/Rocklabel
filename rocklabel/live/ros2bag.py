@@ -154,8 +154,14 @@ def decode_tfmessage(data: bytes) -> list[tuple[str, str, np.ndarray, np.ndarray
     return out
 
 
+#: Frame the pose walk stops at by default, matching ``topics.odom_frame`` in
+#: the offline config. Walking past it lands in the robot's corrected ``map``
+#: frame, which is a *different* world frame — see :meth:`TfTree.pose`.
+DEFAULT_WORLD_FRAME = "odom"
+
+
 class TfTree:
-    """Latest-value TF store: composes a frame's pose up to the tree root.
+    """Latest-value TF store: composes a frame's pose up to a chosen world frame.
 
     Each edge holds the most recent parent->child transform seen (no time
     interpolation — at bag rates the odometry is far denser than the clouds,
@@ -168,15 +174,36 @@ class TfTree:
     def update(self, parent: str, child: str, pos: np.ndarray, quat: np.ndarray) -> None:
         self._edges[child] = (parent, pos, quat_to_matrix(quat))
 
-    def pose(self, frame: str, max_depth: int = 16) -> tuple[np.ndarray, np.ndarray]:
-        """World pose ``(position, quat wxyz)`` of ``frame`` via its ancestors.
+    def has_frame(self, frame: str) -> bool:
+        """True once ``frame`` has been seen as either end of a transform."""
+        return frame in self._edges or any(e[0] == frame for e in self._edges.values())
 
-        Walks parent links until the root (or a not-yet-seen edge); missing
-        edges early in a bag simply mean an identity contribution.
+    def pose(self, frame: str, max_depth: int = 16,
+             world_frame: str | None = DEFAULT_WORLD_FRAME
+             ) -> tuple[np.ndarray, np.ndarray]:
+        """Pose ``(position, quat wxyz)`` of ``frame`` in ``world_frame``.
+
+        Walks parent links until ``world_frame`` is reached (or the tree root,
+        or a not-yet-seen edge — missing edges early in a bag simply mean an
+        identity contribution).
+
+        **``world_frame`` is not cosmetic.** A competition bag's tree is
+        ``map -> odom -> base_link -> lidar_link``, and ``map -> odom`` is the
+        robot's own localisation correction: on the lance recording it is a
+        constant 2.6 degree rotation. The offline labeler and dataset generator
+        resolve poses to ``odom`` (``topics.odom_frame``), so walking all the
+        way to ``map`` here put the live viewer in a world frame tilted 2.5
+        degrees away from the one every label and training tensor was built in
+        — and the levelling angle stored in a label file, measured in ``odom``,
+        then made it worse rather than better when replayed. Stopping at the
+        same frame the offline path uses keeps the two in step. Pass ``None``
+        to walk to the root (the old behaviour).
         """
         pos = np.zeros(3)
         rot = np.eye(3)
         for _ in range(max_depth):
+            if world_frame is not None and frame == world_frame:
+                break
             edge = self._edges.get(frame)
             if edge is None:
                 break

@@ -19,13 +19,61 @@ scene fills one monitor while the controls sit on another. It also works with
 from __future__ import annotations
 
 import argparse
+import json
 import time
+from pathlib import Path
 
 from rocklabel.live.colormap import clamp_range
 from rocklabel.live.config import AppConfig
 from rocklabel.live.pipeline import IngestEngine
 from rocklabel.live.sources import make_source
 from rocklabel.live.surfaces import make_surface_builder
+
+
+def _frame_key(mcap_name: str) -> str:
+    """Recording name reduced to the recordings that share one world frame.
+
+    ``rocklabel selfhits`` writes a cleaned copy that drops points and copies
+    every pose, timestamp and topic through untouched, so ``RUN.mcap`` and
+    ``RUN.noselfhits.mcap`` are the same scene in the same frame and may share
+    a label file's levelling angle. Anything else — a re-solved ``.reslam``
+    copy above all, which deliberately changes the poses — must not.
+    """
+    stem = mcap_name[:-len(".mcap")] if mcap_name.endswith(".mcap") else mcap_name
+    if stem.endswith(".noselfhits"):
+        stem = stem[: -len(".noselfhits")]
+    return stem
+
+
+def _label_level_for_replay(play_path: str, labels_root: str = "labels") -> dict | None:
+    """Return the labelled coordinate frame for an exact recording match.
+
+    Dataset generation deliberately pins every recording to the angle stored in
+    its label file. Re-fitting that same recording in the live viewer can differ
+    by several degrees; unlike a constant height offset, that rotates the whole
+    scene and can make a segmenter miss every rock. An exact ``mcap_file`` match
+    is safe to reuse, while no match (the ordinary deployment case) leaves live
+    levelling unchanged.
+    """
+    root = Path(labels_root)
+    if not root.is_dir():
+        return None
+    wanted = _frame_key(Path(play_path).name)
+    found: list[dict] = []
+    for path in root.rglob("*.labels.json"):
+        try:
+            data = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        level = data.get("level")
+        name = data.get("mcap_file")
+        if isinstance(name, str) and _frame_key(name) == wanted and isinstance(level, dict):
+            found.append(level)
+    if not found:
+        return None
+    angles = {(round(float(x.get("roll_deg", 0.0)), 4),
+               round(float(x.get("pitch_deg", 0.0)), 4)) for x in found}
+    return found[0] if len(angles) == 1 else None
 
 
 def add_live_args(p: argparse.ArgumentParser, record_cmd: bool) -> None:
@@ -67,6 +115,22 @@ def add_live_args(p: argparse.ArgumentParser, record_cmd: bool) -> None:
                    help="crop: drop points beyond this range (m) from the sensor; with "
                         "--model this also bounds the scoring region")
     p.add_argument("--no-crop", action="store_true", help="disable the region-of-interest crop")
+    p.add_argument("--max-height-above-ground", type=float, metavar="M",
+                   help="phantom-point filter: drop a return sitting more than this far "
+                        "(m) above the ground directly beneath it (default 0.5). The "
+                        "shallowest beam rings graze the floor at 3-6 m and sometimes "
+                        "report short, leaving returns hanging in mid-air that pile up "
+                        "into fog as sweeps accumulate. On the competition recording the "
+                        "default clears 86%% of them and keeps every labelled rock return. "
+                        "Raise it if your rocks are taller than 0.5 m, or to keep walls "
+                        "and other tall structure in the accumulated view")
+    p.add_argument("--floating-cell", type=float, metavar="M",
+                   help="phantom-point filter: side length (m) of the column used to "
+                        "estimate the local ground (default 1.0). Larger sees the ground "
+                        "past a wide obstacle; smaller follows steep terrain more closely")
+    p.add_argument("--keep-floating", action="store_true",
+                   help="turn the phantom-point filter off and keep every return, "
+                        "however high above the ground it floats")
     p.add_argument("--level", choices=["auto", "imu", "ground", "manual", "off"],
                    help="gravity-level the world frame so a tilt-mounted sensor does not "
                         "tilt the whole map: 'auto' (default) seeds from the IMU and "
@@ -145,6 +209,39 @@ def _build_config(args: argparse.Namespace, record_cmd: bool) -> AppConfig:
     if cfg is None:
         cfg = AppConfig.from_yaml(args.rig_config) if args.rig_config else AppConfig()
 
+    # A labelled replay has one authoritative coordinate frame: the frame its
+    # labels and generated training tensors used. CLI level flags below still
+    # win when the operator explicitly asks for something else.
+    if play:
+        labelled = _label_level_for_replay(play)
+        if labelled is not None:
+            cfg.level.mode = "manual"
+            cfg.level.mount_roll_deg = float(labelled.get("roll_deg", 0.0))
+            cfg.level.mount_pitch_deg = float(labelled.get("pitch_deg", 0.0))
+            print(
+                f"[rocklabel] replay frame pinned to labels: "
+                f"roll{cfg.level.mount_roll_deg:+.2f}° "
+                f"pitch{cfg.level.mount_pitch_deg:+.2f}°",
+                flush=True,
+            )
+        elif (cfg.level.mode or "auto").lower() not in ("off", "manual"):
+            # Unpinned, the world angle comes from a few seconds of ground fit
+            # at startup. In a big arena that is not enough to see the floor
+            # properly — measured on the lance recording it landed anywhere
+            # from 0.7° to 10.4° depending only on where playback began — and
+            # a frame that disagrees with the one the model trained in tilts
+            # every height the model looks at. Say so rather than guessing
+            # quietly.
+            print(
+                f"[rocklabel] WARNING: no label file matches {Path(play).name}, so the "
+                "world angle will be guessed from the first few seconds of ground.\n"
+                "[rocklabel]          On a large or cluttered site that guess can be "
+                "several degrees off, which tilts the whole map.\n"
+                "[rocklabel]          Label the recording first, or pass the known "
+                "angle with --mount-roll/--mount-pitch.",
+                flush=True,
+            )
+
     if args.source:
         cfg.source.kind = args.source
     if args.sensor_ip:
@@ -169,6 +266,14 @@ def _build_config(args: argparse.Namespace, record_cmd: bool) -> AppConfig:
         cfg.crop.enabled = True
     if args.no_crop:
         cfg.crop.enabled = False
+    if args.max_height_above_ground is not None:
+        cfg.floating.max_height = args.max_height_above_ground
+        cfg.floating.enabled = True
+    if args.floating_cell is not None:
+        cfg.floating.cell_size = args.floating_cell
+        cfg.floating.enabled = True
+    if args.keep_floating:
+        cfg.floating.enabled = False
     if args.mount_roll is not None or args.mount_pitch is not None:
         cfg.level.mode = "manual"
         cfg.level.mount_roll_deg = args.mount_roll or 0.0

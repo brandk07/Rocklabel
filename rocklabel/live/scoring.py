@@ -41,6 +41,17 @@ from . import clusters
 #: center get no prediction (the viewer dims them instead of coloring).
 _MATCH_VOXELS = 3.0
 
+#: How far outside its trained floor band a recording may sit before the panel
+#: says so. 0.2 m was measured survivable and 0.3 m was measured fatal, so the
+#: warning fires in the gap rather than after the model has already gone quiet.
+_FLOOR_SLACK_M = 0.2
+
+#: Same idea for how tall a frame the z band lets through. Measured on the
+#: competition bag, the deployment segmenter still detects at 0.10 m of extra
+#: structure over its trained band and is down an order of magnitude by 0.25 m,
+#: so the warning fires in between rather than once it has already gone quiet.
+_FRAME_SPAN_SLACK_M = 0.1
+
 
 @dataclass
 class ScoreSettings:
@@ -107,6 +118,14 @@ class LiveScorer:
     Call :meth:`start` after the engine started, :meth:`stop` on shutdown.
     """
 
+    #: Class-level so a scorer built without ``__init__`` (the viewer tests do
+    #: exactly this to skip loading torch) still answers ``status_dict``.
+    floor_band: tuple[float, float] | None = None
+    floor_warning: str | None = None
+    frame_band: tuple[float, float] | None = None
+    height_warning: str | None = None
+    _last_thin: tuple[int, int] | None = None
+
     def __init__(
         self,
         checkpoint: str,
@@ -133,6 +152,20 @@ class LiveScorer:
         #: they share one slider, so the value each was tuned to is the only
         #: record of what its author intended.
         self.tuned_threshold = self.threshold
+        #: (low, high) of where the floor sat relative to the sensor in the
+        #: frames this checkpoint was trained on.  This is only a serving
+        #: warning for legacy base-relative segmenters.  A floor-referenced
+        #: model subtracts the observed floor before inference, so a uniform
+        #: mounting-height change cancels and must not trigger the warning.
+        self.floor_band = ck.get("floor_band")
+        #: Set on each pass when the measured floor is outside that band.
+        self.floor_warning: str | None = None
+        #: (low, high) metres of vertical structure the frames this checkpoint
+        #: trained on held. Segmenters only: a classifier is handed one 0.5 m
+        #: ball at a time and never sees a whole slab.
+        self.frame_band = ck.get("frame_band")
+        #: Set on each pass when the z band lets in a much taller frame.
+        self.height_warning: str | None = None
         #: Where this model came from, for the panel and for the comparison's
         #: "am I already running this one" check.
         self.checkpoint = str(checkpoint)
@@ -159,6 +192,14 @@ class LiveScorer:
             features=self._tcfg.get("features"),
             seg_npoints=self._tcfg.get("seg_npoints"),
             seg_radii=self._tcfg.get("seg_radii"),
+            # This is part of the checkpoint's input contract, just like the
+            # feature list and level geometry.  Omitting it silently rebuilt a
+            # floor-referenced segmenter in the legacy base-relative mode: the
+            # weights still loaded because the setting changes no tensor
+            # shapes, but every live prediction was made from the wrong z
+            # values.
+            seg_height_ref=self._tcfg.get("seg_height_ref"),
+            seg_coord_ref=self._tcfg.get("seg_coord_ref"),
         )
         self._model.load_state_dict(ck["model"])
         self._model.eval().to(self._device)
@@ -182,6 +223,10 @@ class LiveScorer:
         #: ``(scan_z_lo, scan_z_hi, band_lo, band_hi)`` of the last pass that
         #: found nothing in the region, else None.
         self._last_miss: tuple[float, float, float, float] | None = None
+        #: ``(points_in_region, minimum_needed)`` of the last pass a segmenter
+        #: refused for being too sparse, else None. Without this the panel goes
+        #: on showing the previous pass's numbers as though nothing happened.
+        self._last_thin: tuple[int, int] | None = None
         #: Last exception from the scoring thread. Printing it to the terminal
         #: was not enough: a scorer that raises every pass looks exactly like
         #: one that is still warming up, and the panel said "warming up…"
@@ -324,16 +369,80 @@ class LiveScorer:
         torch, g = self._torch, self._gcfg
         frame = build_inference_frame(xyz, vals, base, g, self._rng)
         if frame is None:
+            # Too few points for a whole-frame pass. Said out loud because the
+            # panel is otherwise indistinguishable from a healthy scorer: the
+            # last successful pass's numbers just sit there unchanged.
+            self._last_thin = (len(xyz), int(g["segmentation_min_points"]))
             return None
+        self._last_thin = None
         n_real = int(frame["true_count"])
         self._last_centers_capped = len(xyz) > int(g["segmentation_points"])
         pts = torch.from_numpy(frame["points"])[None]           # [1, N, 4]
         cnt = torch.tensor([n_real], dtype=torch.long)
+        self._check_floor(pts, cnt)
+        self._check_frame_height(pts, cnt)
         with torch.no_grad():
             logits = self._model(pts.to(self._device), cnt.to(self._device))
             probs = torch.sigmoid(logits)[0].float().cpu().numpy()
         keep = frame["index"][:n_real]
         return xyz[keep].astype(np.float64), probs[:n_real]
+
+    def _check_floor(self, pts, cnt) -> None:
+        """Warn a base-relative model when ground is far outside training.
+
+        Measured on the trained seg-fine checkpoint, a uniform height shift of
+        0.2 m was survivable, 0.3 m returned zero detections, and 0.51 m - the
+        gap between the volleyball recordings and the competition bag - took its
+        highest confidence anywhere to 0.0026. A model reading heights it has
+        never seen reports an empty arena, which is indistinguishable from a
+        clean one, so the panel has to say it out loud.
+        """
+        from rocklabel.train.models import frame_floor_offset
+
+        if not self.floor_band or getattr(self._model, "height_ref", None) == "floor":
+            self.floor_warning = None
+            return
+        lo, hi = self.floor_band
+        here = float(frame_floor_offset(pts, cnt)[0])
+        if lo - _FLOOR_SLACK_M <= here <= hi + _FLOOR_SLACK_M:
+            self.floor_warning = None
+            return
+        off = here - (lo if here < lo else hi)
+        self.floor_warning = (
+            f"floor is {here:+.2f} m in this recording but this model was "
+            f"trained on {lo:+.2f}..{hi:+.2f} m ({off:+.2f} m out) - "
+            "expect it to report no rocks anywhere"
+        )
+
+    def _check_frame_height(self, pts, cnt) -> None:
+        """Warn when the z band hands a segmenter a much taller frame than it saw.
+
+        A whole-frame segmenter reads everything in the slab at once, and unlike
+        a floor offset nothing in the model cancels a taller slab. The arena
+        recordings are flat ground with rocks on it and nothing else: their
+        frames hold about 0.2 m of vertical structure. Measured on the competition
+        bag with the deployment segmenter, widening the band walks the model out:
+        0.15 m of structure -> mean confidence 0.49, 0.25 m -> 0.27, 0.35 m ->
+        0.07, 0.50 m -> 0.017, and the 0.70 m the floor-band preset lets in ->
+        0.015 with six points over threshold in twelve frames. Thinning the cloud
+        to the same point count changes nothing, so it is the extra structure and
+        not the sampling. Narrow the z band until this clears.
+        """
+        from rocklabel.train.models import frame_height_span
+
+        if not self.frame_band:
+            self.height_warning = None
+            return
+        lo, hi = self.frame_band
+        here = float(frame_height_span(pts, cnt)[0])
+        if here <= hi + _FRAME_SPAN_SLACK_M:
+            self.height_warning = None
+            return
+        self.height_warning = (
+            f"the z band is letting in {here:.2f} m of vertical structure but "
+            f"this model trained on frames holding {lo:.2f}..{hi:.2f} m - "
+            "narrow z min/max towards the floor or it will report no rocks"
+        )
 
     def _score_once(self) -> None:
         t0 = time.perf_counter()
@@ -461,6 +570,7 @@ class LiveScorer:
             n_in = self._last_in_region
             capped = self._last_centers_capped
             miss = self._last_miss
+            thin = self._last_thin
             error = self._last_error
         warning = ""
         if error is not None:
@@ -469,6 +579,14 @@ class LiveScorer:
             s_lo, s_hi, b_lo, b_hi = miss
             warning = (f"region empty: scan z {s_lo:+.2f}..{s_hi:+.2f} m, "
                        f"band {b_lo:+.2f}..{b_hi:+.2f} m")
+        elif thin is not None:
+            n_have, n_need = thin
+            warning = (f"region has {n_have} points, a whole-frame pass needs "
+                       f"{n_need}: widen the z band or the range")
+        elif self.floor_warning:
+            warning = self.floor_warning
+        elif self.height_warning:
+            warning = self.height_warning
         return {
             "enabled": bool(self.settings.enabled),
             "ready": res is not None,
