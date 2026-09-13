@@ -36,6 +36,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from . import clusters
+from .evidence import EvidenceMap, EvidenceSettings
 
 #: Points farther than this many candidate-voxel edges from every scored
 #: center get no prediction (the viewer dims them instead of coloring).
@@ -79,6 +80,25 @@ class ScoreSettings:
     #: Merge passes into a persistent per-voxel prediction map (latest prob
     #: wins) instead of showing only the current scan's stripe.
     persist: bool = True
+    #: Retract remembered detections the beams have since gone through. Off by
+    #: default, and never touches the current pass: it only removes entries
+    #: from the persistent map, and only where a later beam crossed the spot
+    #: and came back from beyond it. Measured on the competition recording it
+    #: is safe but small - at the default separation it clears a few percent of
+    #: the wrongly-claimed ground, never the weakest rock, and at most a few
+    #: percent of one rock's cells - because most of that recording's false
+    #: detections sit ON the ground rather than above it.
+    #: See :mod:`rocklabel.live.evidence` and
+    #: training/reports/map-evidence/summary.md.
+    clear_looked_through: bool = False
+    #: How far above the fitted local ground a detection must stand before
+    #: clearing will consider it at all. The rocks measured here are
+    #: 0.10-0.15 m tall, so this is what stands between the cleanup and
+    #: deleting their tops.
+    clear_separation_m: float = EvidenceSettings.min_separation_m
+    #: Windows of "a beam went through here and came back from further away"
+    #: needed to retract, counted from no evidence either way.
+    clear_free_windows: float = EvidenceSettings.free_windows
     #: Cloud points fed to sampling per pass (random subsample above this).
     max_cloud_points: int = 60_000
     #: Candidate centers scored per pass (random subsample above this).
@@ -125,6 +145,7 @@ class LiveScorer:
     frame_band: tuple[float, float] | None = None
     height_warning: str | None = None
     _last_thin: tuple[int, int] | None = None
+    _cleared = 0
 
     def __init__(
         self,
@@ -192,11 +213,19 @@ class LiveScorer:
         self._rng = np.random.default_rng(int(self._gcfg["seed"]))
         self._inten_scale: float | None = None
 
+        #: Geometric free-space evidence beside the prediction map, rebuilt
+        #: whenever the settings that define it change (they are live knobs and
+        #: half-accumulated evidence under two different rules means nothing).
+        self._evidence: EvidenceMap | None = None
+        self._evidence_key: tuple | None = None
+
         #: Persistent prediction map: voxel key -> (center xyz, prob).
         #: Touched ONLY on the scorer thread; the GUI requests a clear via
         #: the flag so no lock is needed around the (possibly large) merge.
         self._map: dict[tuple[int, int, int], tuple[np.ndarray, float]] = {}
         self._clear_requested = False
+        #: How many remembered detections the free-space layer has retracted.
+        self._cleared = 0
 
         self._lock = threading.Lock()
         self._result: _Result | None = None
@@ -314,6 +343,62 @@ class LiveScorer:
         all_probs = np.array([v[1] for v in self._map.values()], np.float32)
         match_radius = max(_MATCH_VOXELS * voxel, 0.15)
         return _Result(all_centers, all_probs, match_radius)
+
+    def _evidence_map(self) -> EvidenceMap | None:
+        """The free-space accumulator for the current settings, or None.
+
+        Rebuilt whenever a setting that defines what the evidence *means*
+        changes. These are live sliders, and evidence banked under one
+        separation and spent under another describes nothing.
+        """
+        s = self.settings
+        if not s.clear_looked_through or not s.persist:
+            self._evidence, self._evidence_key = None, None
+            return None
+        key = (float(s.clear_separation_m), float(s.clear_free_windows))
+        if self._evidence is None or key != self._evidence_key:
+            self._evidence = EvidenceMap(
+                float(self._gcfg["centers_voxel_m"]),
+                EvidenceSettings(enabled=True, min_separation_m=key[0],
+                                 free_windows=key[1]))
+            self._evidence_key = key
+        return self._evidence
+
+    def _observe_free_space(self, pts: np.ndarray, origins: np.ndarray,
+                            stamps: np.ndarray) -> None:
+        ev = self._evidence_map()
+        if ev is not None and len(pts):
+            # Stamped per point, because two consecutive windows overlap by
+            # everything but the newest batch and a paused source hands over
+            # the same one indefinitely. Only returns the layer has not already
+            # folded in count.
+            ev.observe(origins, pts, stamps)
+
+    def _clear_looked_through(self):
+        """Drop remembered detections later beams went straight through.
+
+        Only detections are judged: everything below threshold is left alone,
+        which keeps the cost proportional to what is actually being displayed
+        rather than to the whole map. Returns a refreshed result when anything
+        was dropped, else None.
+        """
+        ev = self._evidence_map()
+        if ev is None or not self._map:
+            return None
+        hot = [(k, v) for k, v in self._map.items() if v[1] >= self.threshold]
+        if not hot:
+            return None
+        drop = ev.retract(np.stack([v[0] for _, v in hot]))
+        if not drop.any():
+            return None
+        for (key, _), gone in zip(hot, drop):
+            if gone:
+                del self._map[key]
+        self._cleared += int(drop.sum())
+        voxel = float(self._gcfg["centers_voxel_m"])
+        all_centers = np.array([v[0] for v in self._map.values()])
+        all_probs = np.array([v[1] for v in self._map.values()], np.float32)
+        return _Result(all_centers, all_probs, max(_MATCH_VOXELS * voxel, 0.15))
 
     def _score_balls(self, xyz: np.ndarray, vals: np.ndarray):
         """Classifier path: cut the frame into candidate balls, one probability
@@ -437,13 +522,22 @@ class LiveScorer:
         if self._clear_requested:
             self._clear_requested = False
             self._map.clear()
-        pts, inten = self._engine.recent_snapshot(float(s.window_sec or 0.0))
+            self._evidence, self._evidence_key = None, None
+            self._cleared = 0
+        pts, inten, origins, stamps = self._engine.recent_snapshot(
+            float(s.window_sec or 0.0), with_origins=True, with_stamps=True)
         if pts.shape[0] < int(g["min_neighbors"]):
             return
 
         base = self._engine.current_pose()[0]
         keep = self.crop_mask(pts, base)
         n_in = int(keep.sum())
+        # Free-space evidence is fed the WHOLE fresh window, not the cropped
+        # and subsampled cloud the model is about to see. A beam that ends on
+        # the floor beyond a false detection is the evidence being looked for,
+        # and the crop that keeps walls and ceilings out of the model would
+        # throw exactly those beams away.
+        self._observe_free_space(pts, origins, stamps)
         self._last_in_region = n_in
         if n_in < int(g["min_neighbors"]):
             # An empty region is the single most common live-scoring failure
@@ -476,6 +570,7 @@ class LiveScorer:
         # Merge outside the lock (the map can be large); only swap under it.
         if s.persist:
             result = self._update_map(centers, probs)
+            result = self._clear_looked_through() or result
         else:
             self._map.clear()
             result = _Result(
@@ -589,6 +684,7 @@ class LiveScorer:
             "threshold": float(self.threshold),
             "model_name": self.model_name,
             "task": self.task,
+            "cleared": int(self._cleared),
         }
 
     def status(self) -> str:

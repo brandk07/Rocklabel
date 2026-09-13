@@ -224,7 +224,8 @@ def test_scorer_crop_mask_region():
 def test_inference_samples_max_centers_cap():
     """max_centers bounds the number of scored candidates (live memory cap)."""
     pytest.importorskip("scipy")
-    from rocklabel.dataset.neighborhoods import build_inference_samples
+    from rocklabel.dataset.neighborhoods import (SAMPLE_CHANNELS,
+                                                 build_inference_samples)
 
     rng = np.random.default_rng(0)
     xyz = rng.uniform(0, 2.0, (4000, 3)).astype(np.float32)
@@ -236,7 +237,7 @@ def test_inference_samples_max_centers_cap():
                                      max_centers=50)
     assert len(full["centers_odom"]) > 50
     assert len(capped["centers_odom"]) <= 50
-    assert capped["neighborhoods"].shape[1:] == (32, 4)
+    assert capped["neighborhoods"].shape[1:] == (32, SAMPLE_CHANNELS)
 
 
 # --------------------------------------------------------------------------- #

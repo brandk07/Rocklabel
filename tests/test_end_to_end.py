@@ -43,13 +43,16 @@ def test_rock_fraction_in_expected_bounds(generated):
 
 
 def test_point_sample_shapes_and_canonicalization(generated):
+    from rocklabel.dataset.neighborhoods import (QUERY_HEIGHT_CHANNEL,
+                                                 SAMPLE_CHANNELS)
+
     _, _, out_dir, cfg, _ = generated
     files = sorted(glob.glob(os.path.join(out_dir, "points", "synthetic", "*.npz")))
     assert files
     d = np.load(files[0])
     n_points = cfg["generator"]["neighborhood_points"]
     S = len(d["labels"])
-    assert d["neighborhoods"].shape == (S, n_points, 4)
+    assert d["neighborhoods"].shape == (S, n_points, SAMPLE_CHANNELS)
     assert d["neighborhoods"].dtype == np.float32
     assert d["labels"].dtype == np.int8
     assert set(np.unique(d["labels"])) <= {0, 1}
@@ -61,6 +64,11 @@ def test_point_sample_shapes_and_canonicalization(generated):
     # xy is center-relative, so bounded by the neighborhood radius.
     r = cfg["generator"]["neighborhood_radius_m"]
     assert np.abs(d["neighborhoods"][..., :2]).max() <= r + 1e-5
+    # The candidate's own height above that same lowest neighbor, repeated on
+    # every row: one fact about the query, not a per-point measurement.
+    qz = d["neighborhoods"][..., QUERY_HEIGHT_CHANNEL]
+    assert np.all(qz == qz[:, :1])
+    assert qz.min() >= 0.0 and qz.max() <= 2 * r + 1e-5
 
 
 def test_bev_rock_cells_at_expected_positions(generated):
@@ -204,7 +212,7 @@ def test_pipeline_normalizes_raw_counts_in_a_float_intensity_field(tmp_path):
     unscaled, generating from such a bag would write intensity ~40000 while
     every lidarrig recording writes ~0.6, silently poisoning any pooled cache.
     """
-    from tests import make_synthetic_mcap as synth
+    import make_synthetic_mcap as synth
 
     from rocklabel.recording.pipeline import ScanStream
 

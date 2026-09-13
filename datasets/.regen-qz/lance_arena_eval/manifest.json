@@ -1,0 +1,107 @@
+{
+  "tool_version": "0.2.0",
+  "profile": null,
+  "config": {
+    "topics": {
+      "pointcloud_topic": "/multiscan/lidar_scan",
+      "odom_frame": "odom",
+      "base_frame": "base_link",
+      "lidar_frame": "lidar_link",
+      "tf_topic": "/tf",
+      "tf_static_topic": "/tf_static",
+      "pose_tolerance_s": 0.15,
+      "static_lidar_to_base": null,
+      "min_range_m": 0.0
+    },
+    "level": {
+      "mode": "auto",
+      "mount_roll_deg": 0.0,
+      "mount_pitch_deg": 0.0,
+      "fit_scans": 0,
+      "range_min_m": 0.6,
+      "range_max_m": 6.0,
+      "fit_voxel_m": 0.05,
+      "plane_thresh_m": 0.05,
+      "ransac_iters": 512,
+      "max_tilt_deg": 50.0,
+      "min_inlier_frac": 0.15,
+      "ceiling_margin_m": 0.2
+    },
+    "labeler": {
+      "accumulator_voxel_m": 0.03,
+      "default_rock_radius_m": 0.15,
+      "stride": 1,
+      "z_min": null,
+      "z_max": null
+    },
+    "generator": {
+      "frame_stride": 240,
+      "frame_window_s": 0.05,
+      "crop_forward_m": 6.0,
+      "crop_backward_m": 2.0,
+      "crop_left_m": 4.0,
+      "crop_right_m": 4.0,
+      "crop_up_m": 1.5,
+      "crop_down_m": 1.0,
+      "boundary_shell_m": 0.05,
+      "centers_voxel_m": 0.05,
+      "neighborhood_radius_m": 0.5,
+      "min_neighbors": 20,
+      "neighborhood_points": 256,
+      "negative_keep_prob": 1.0,
+      "segmentation_points": 2048,
+      "segmentation_min_points": 512,
+      "bev_cell_m": 0.1,
+      "seed": 42
+    }
+  },
+  "config_hash": "41de577f55e1f49c3c147f197f5881784515ff5b8daf296b2541af01161d80fa",
+  "runs": {
+    "lance_raw_data_2026_05_20-12_50_53_0.lidar.noselfhits": {
+      "run_id": "lance_raw_data_2026_05_20-12_50_53_0.lidar.noselfhits",
+      "mcap_path": "/home/brandon/Documents/Rocklabel/rocklabel/recordings/archive/misc/lance_raw_data_2026_05_20-12_50_53_0.lidar.noselfhits.mcap",
+      "labels_path": "/home/brandon/Documents/Rocklabel/rocklabel/labels/archive/lance_raw_data_2026_05_20-12_50_53_0.lidar.noselfhits.labels.json",
+      "rock_count": 12,
+      "arena_vertices": 4,
+      "z_band": [
+        -12.4104,
+        0.511
+      ],
+      "level": {
+        "mode": "manual",
+        "roll_deg": -0.7447,
+        "pitch_deg": -2.959
+      },
+      "intensity_available": true,
+      "generated": "2026-09-13T05:18:10Z",
+      "frames_kept": 109,
+      "frames_skipped_pose": 0,
+      "frames_skipped_empty": 0,
+      "point_samples": 89612,
+      "bev_frames": 109,
+      "seg_frames": 106,
+      "seg_points": 190364,
+      "seg_point_labels": {
+        "rock": 13135,
+        "clear": 172720,
+        "ignore": 4509
+      },
+      "sample_labels": {
+        "rock": 7988,
+        "clear": 81624
+      },
+      "point_labels": {
+        "rock": 18450,
+        "clear": 317765,
+        "ignore": 6269
+      },
+      "bev_cells": {
+        "rock": 3758,
+        "clear": 49056,
+        "ignore": 644786
+      },
+      "stamp_fallbacks": 0
+    }
+  },
+  "generated": "2026-09-13T05:18:10Z"
+}

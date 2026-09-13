@@ -29,6 +29,8 @@ from tqdm import tqdm
 from . import TRAIN_DEFAULTS
 from . import data as D
 from . import metrics as M
+from ..dataset.neighborhoods import QUERY_HEIGHT_CHANNEL, has_query_height
+from .phantom_modes import PHANTOM_MODES  # noqa: F401  (re-exported)
 from .models import (FEATURES, build_model_from_config, frame_floor_offset, frame_height_span,
                      model_task, resolve_features)
 
@@ -233,6 +235,12 @@ def _stray(pts: torch.Tensor, counts: torch.Tensor, frac: float, reach: float,
     few go metres, matching the per-beam range wander measured on a parked
     robot. Strays are labelled **clear**, because that is what they are — a
     return off nothing is not part of a rock.
+
+    Only the coordinates move. A displaced stray can become the lowest point of
+    its ball, which would in principle shift the height reference under both dz
+    and the candidate-height channel — but dz has never been re-referenced here
+    either, so re-referencing one and not the other would be the inconsistency
+    that actually matters. Both are left as the generator wrote them.
     """
     b, n, _ = pts.shape
     dev = pts.device
@@ -260,6 +268,48 @@ def _stray(pts: torch.Tensor, counts: torch.Tensor, frac: float, reach: float,
         # than promoting an unscored point into supervised ground truth.
         labels = torch.where(pick & (labels > 0), torch.zeros_like(labels), labels)
     return out, labels
+
+
+def _synthetic_query_height(clump: torch.Tensor, real: torch.Tensor,
+                            gen: torch.Generator) -> torch.Tensor:
+    """Where to put a synthetic clump's candidate, in its own height reference.
+
+    A phantom clump has no candidate of its own - it is invented whole - but a
+    real one gets its candidate from the voxel grid, which puts it on top of an
+    actual return. So the synthetic query takes the height of one of the
+    returns the clump kept: a draw from the same distribution the clump
+    occupies, which is what the generator would have produced had this clump
+    been real.
+
+    Deliberately not a constant, and deliberately not chosen by label. A fixed
+    height for every phantom would be a giveaway the model could read off this
+    one channel, and the whole point of the arm is to test a coordinate, not to
+    hand it a marker for the synthetic negatives.
+    """
+    pick = (torch.rand(len(clump), generator=gen, device=clump.device)
+            * real.clamp_min(1).to(clump.dtype)).long().clamp_max(clump.shape[1] - 1)
+    return clump[..., 2].gather(1, pick[:, None]).squeeze(1)
+
+
+def phantom_frac_for_mode(frac: float, mode: str, rock_frac: float) -> float:
+    """The replacement probability that delivers ``frac`` phantoms per batch.
+
+    "legacy" draws from the whole batch, so its own setting is already the
+    dose. "clear-only" draws from the clear samples only, which are a
+    (1 - rock_frac) share of the batch, so the same dose needs a
+    correspondingly higher probability. Without this correction an arm that
+    only stops replacing positives would also be getting ~19% fewer phantoms,
+    and the two changes could not be told apart.
+
+    "matched" is deliberately left uncorrected. It also draws from the clear
+    samples only, so it under-doses in exactly this way - but the checkpoints
+    already on disk were trained that way, and quietly changing what the mode
+    means would make them incomparable with anything trained after. Its known
+    under-dose is one of the reasons "clear-only" exists.
+    """
+    if mode != "clear-only" or frac <= 0.0:
+        return float(frac)
+    return min(float(frac) / max(1.0 - float(rock_frac), 1e-6), 1.0)
 
 
 def _phantom_clumps(pts: torch.Tensor, counts: torch.Tensor, y: torch.Tensor,
@@ -297,6 +347,15 @@ def _phantom_clumps(pts: torch.Tensor, counts: torch.Tensor, y: torch.Tensor,
     size and the configured loss weight stay fixed, but the effective positive
     prevalence falls by (1 - frac). Account for that when interpreting results.
 
+    ``mode="clear-only"`` keeps that geometry exactly and changes one thing:
+    only clear samples are eligible, so no positive exposure is spent. On its
+    own that would also cut the number of synthetic negatives, so the caller
+    raises ``frac`` to ``frac / (1 - rock_frac)`` first (see
+    :func:`phantom_frac_for_mode`) and the expected dose comes out the same.
+    That isolates "does losing 8% of the positives cost anything" from the
+    separate question ``mode="matched"`` asks, which changes the clump's shape,
+    its point count and its dose all at once.
+
     Args:
         pts: ``(B, N, C)`` samples; channels 0-2 are dx, dy, dz with dz already
             measured from each ball's own lowest point.
@@ -310,12 +369,12 @@ def _phantom_clumps(pts: torch.Tensor, counts: torch.Tensor, y: torch.Tensor,
     """
     b, n, c = pts.shape
     dev = pts.device
-    if mode not in ("legacy", "matched"):
-        raise ValueError(f"unknown phantom mode {mode!r}")
+    if mode not in PHANTOM_MODES:
+        raise ValueError(f"unknown phantom mode {mode!r} (pick from {list(PHANTOM_MODES)})")
     pick = torch.rand(b, generator=gen, device=dev) < frac
-    if mode == "matched":
-        # An explicit ablation: retain every positive and match the clear
-        # sample's valid count instead of making all phantoms 20..59 points.
+    if mode in ("matched", "clear-only"):
+        # Retain every positive. "matched" additionally replaces the clump's
+        # geometry and point count; "clear-only" keeps legacy's sparse clump.
         pick &= y == 0
     if not bool(pick.any()):
         return pts, counts, y
@@ -333,6 +392,9 @@ def _phantom_clumps(pts: torch.Tensor, counts: torch.Tensor, y: torch.Tensor,
         xyz[..., 2] -= xyz[..., 2].amin(dim=1, keepdim=True)
         clump = pts.clone()
         clump[..., :3] = xyz
+        if has_query_height(clump):
+            clump[..., QUERY_HEIGHT_CHANNEL] = _synthetic_query_height(
+                clump, real, gen)[:, None]
         return torch.where(pick[:, None, None], clump, pts), counts, y
 
     # A loose scatter: uniform across the ball horizontally, spread through the
@@ -358,6 +420,12 @@ def _phantom_clumps(pts: torch.Tensor, counts: torch.Tensor, y: torch.Tensor,
     # Reference only surviving real points. Taking the minimum before the
     # sparse sample is selected can leave its entire valid cloud above zero.
     clump[..., 2] -= clump[..., 2].amin(dim=1, keepdim=True)
+    # The invented candidate, in the same reference. Without this the clump
+    # would inherit the height of the real candidate it replaced, which is a
+    # number from a different sample entirely.
+    if has_query_height(clump):
+        clump[..., QUERY_HEIGHT_CHANNEL] = _synthetic_query_height(
+            clump, new_counts, gen)[:, None]
 
     out = torch.where(pick[:, None, None], clump, pts)
     counts = torch.where(pick, new_counts.to(counts.dtype), counts)
@@ -522,10 +590,31 @@ def train_fold(cfg: dict, run_dir: str, resume: bool = True) -> dict:
           + (f" (capped from {n_neg / max(n_pos, 1.0):.1f})" if cap and n_neg / max(n_pos, 1.0) > cap else ""))
     loss_fn = torch.nn.BCEWithLogitsLoss(pos_weight=torch.tensor(pos_weight, device=device))
 
+    # Synthetic phantom negatives, classifier only. The stored setting is the
+    # dose (phantoms per batch); a mode that only draws from the clear samples
+    # needs a higher probability to deliver it, and the loss weight stays where
+    # the config put it, so the class exposure this actually produces is worth
+    # printing rather than inferring.
+    phantom_mode = cfg.get("aug_phantom_mode", "legacy")
+    phantom_frac = phantom_frac_for_mode(
+        float(cfg.get("aug_phantom_frac") or 0.0), phantom_mode,
+        n_pos / max(n_scored, 1.0))
+    if phantom_frac > 0.0 and task != "segment":
+        rock = n_pos / max(n_scored, 1.0)
+        # Positives survive under every mode but "legacy", which replaces them
+        # at the same rate as anything else.
+        kept = rock * (1.0 - phantom_frac) if phantom_mode == "legacy" else rock
+        print(f"  phantom clumps: {phantom_mode}, drawn at p={phantom_frac:.4f}"
+              + (f" (raised from {float(cfg['aug_phantom_frac']):.4f} to keep the "
+                 "dose after excluding positives)"
+                 if phantom_frac != float(cfg["aug_phantom_frac"]) else "")
+              + f"; rock exposure {rock:.2%} -> {kept:.2%} of each batch")
+
     start_epoch, best_metric, bad_epochs = 0, -1.0, 0
     resumed_rng = None
     history: list[dict] = []
     last_path, best_path = os.path.join(run_dir, "last.pt"), os.path.join(run_dir, "best.pt")
+    epochs_dir = os.path.join(run_dir, "epochs")
     if resume and os.path.exists(last_path):
         ck = torch.load(last_path, map_location=device, weights_only=False)
         model.load_state_dict(ck["model"])
@@ -567,12 +656,11 @@ def train_fold(cfg: dict, run_dir: str, resume: bool = True) -> dict:
                 # Whole-sample phantom clumps, classifier only: the arena's bad
                 # returns arrive as a candidate centred on nothing, which is a
                 # sample the training set has never held (see _phantom_clumps).
-                ph = float(cfg.get("aug_phantom_frac") or 0.0)
-                if ph > 0.0 and task != "segment":
+                if phantom_frac > 0.0 and task != "segment":
                     pts, cnt, y = _phantom_clumps(
-                        pts, cnt, y, ph, gen,
+                        pts, cnt, y, phantom_frac, gen,
                         extent=float(cfg.get("aug_phantom_extent") or 0.54),
-                        mode=cfg.get("aug_phantom_mode", "legacy"),
+                        mode=phantom_mode,
                         radius=float(meta["generator"]["neighborhood_radius_m"]),
                     )
             logits = model(pts, cnt)
@@ -611,15 +699,20 @@ def train_fold(cfg: dict, run_dir: str, resume: bool = True) -> dict:
               f"val_roc_auc {row['val_roc_auc']:.4f}")
 
         improved = row[VAL_METRIC] > best_metric
+        # Same shape as best.pt, so anything that scores a checkpoint - the
+        # arena benchmark, the exporter - loads an epoch without special cases.
+        weights = {"model": model.state_dict(), "config": cfg, "epoch": epoch,
+                   "config_hash": meta["config_hash"], "generator": meta["generator"],
+                   "floor_band": floor_band, "frame_band": frame_band,
+                   "threshold": M.best_f1_threshold(y_va, p_va)}
         if improved:
             best_metric, bad_epochs = row[VAL_METRIC], 0
-            _save_checkpoint({"model": model.state_dict(), "config": cfg, "epoch": epoch,
-                        "config_hash": meta["config_hash"], "generator": meta["generator"],
-                        "floor_band": floor_band, "frame_band": frame_band,
-                        "threshold": M.best_f1_threshold(y_va, p_va)},
-                       best_path)
+            _save_checkpoint(weights, best_path)
         else:
             bad_epochs += 1
+        if cfg.get("save_every_epoch"):
+            os.makedirs(epochs_dir, exist_ok=True)
+            _save_checkpoint(weights, os.path.join(epochs_dir, f"epoch-{epoch:03d}.pt"))
         _save_checkpoint({"model": model.state_dict(), "optimizer": opt.state_dict(),
                     "scheduler": sched.state_dict(), "epoch": epoch, "history": history,
                     "best_metric": best_metric, "bad_epochs": bad_epochs,

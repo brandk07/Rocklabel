@@ -210,6 +210,35 @@ def add_live_args(p: argparse.ArgumentParser, record_cmd: bool) -> None:
     p.add_argument("--score-interval", type=float, default=0.5,
                    help="seconds between live model scoring passes (default 0.5; "
                         "also adjustable in the GUI)")
+    p.add_argument("--clear-looked-through", action="store_true",
+                   help="forget a remembered detection once later beams have "
+                        "passed straight through where it sits and come back "
+                        "from further away. Remembered predictions are "
+                        "otherwise only ever replaced by scoring that exact "
+                        "spot again, so a false one hanging in mid-air stays on "
+                        "the map for the rest of the run and seeing the floor "
+                        "underneath it does not touch it. Never changes what "
+                        "the model says this pass, and never touches space "
+                        "nothing has looked through. Measured on the "
+                        "competition recording it is safe but small - a few "
+                        "percent of the wrongly-claimed ground, never the weakest "
+                        "rock, and at most a few percent of one rock's cells "
+                        "- because most of the false detections there sit on "
+                        "the ground rather than above it. Also a tick-box in "
+                        "the GUI and the browser panel")
+    p.add_argument("--clear-separation", type=float, default=None, metavar="M",
+                   help="with --clear-looked-through, how far above the local "
+                        "ground a detection has to stand before clearing will "
+                        "consider it at all (default 0.20 m). The rocks "
+                        "measured here are 0.10-0.15 m tall, so below about "
+                        "0.15 this starts taking the tops off real ones")
+    p.add_argument("--clear-free-windows", type=float, default=None, metavar="N",
+                   help="with --clear-looked-through, how many separate sweeps "
+                        "have to send a beam through a spot and get something "
+                        "back from beyond it before the detection there is "
+                        "dropped (default 3). A fresh return puts evidence "
+                        "back, so an obstacle coming into view again is "
+                        "restored rather than lost")
     p.add_argument("--web-ui", action="store_true",
                    help="serve a browser control panel for every runtime knob "
                         "(put it on a second monitor) and drop the Open3D "
@@ -407,7 +436,13 @@ def _build_scorer(args: argparse.Namespace, engine: IngestEngine):
         z_max=z_max,
         floor_relative=floor_rel,
         range_max=args.max_range if args.max_range is not None else 8.0,
+        clear_looked_through=bool(args.clear_looked_through),
     )
+    for flag, field in (("clear_separation", "clear_separation_m"),
+                        ("clear_free_windows", "clear_free_windows")):
+        value = getattr(args, flag, None)
+        if value is not None:
+            setattr(settings, field, float(value))
     scorer = LiveScorer(args.model, engine, device=args.device, settings=settings)
     win = float(settings.window_sec or 0.0)
     anchor = "floor" if floor_rel else "sensor"

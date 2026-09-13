@@ -357,6 +357,41 @@ SECTIONS: list[Section] = [
                     "trained on. Raising it densifies the input and drifts out "
                     "of distribution — predictions decay.",
                     min=0.0, max=2.0, step=0.05, unit="s"),
+            Control("model.clear_looked_through", "bool",
+                    "Forget predictions the beams go through",
+                    help="Remembered detections are only ever replaced by "
+                         "scoring that exact spot again, so a false one hanging "
+                         "in mid-air stays on the map for the rest of the run - "
+                         "seeing the floor underneath it later does not touch "
+                         "it. With this on, a remembered detection is taken "
+                         "back once later beams have passed straight through "
+                         "where it sits and come back from further away. It "
+                         "never changes what the model says this pass, and it "
+                         "leaves alone anything nothing has looked through. "
+                         "Measured on the competition recording it is safe but "
+                         "small: a few percent of the wrongly-claimed ground, "
+                         "never the weakest rock, and at most a few percent of "
+                         "one rock's cells, because most of the false "
+                         "detections there sit on the ground rather than above "
+                         "it."),
+            Control("model.clear_separation_m", "float",
+                    "Clearing: height above the ground",
+                    "How far above the local ground a detection has to stand "
+                    "before clearing will consider it at all. The rocks "
+                    "measured here are 0.10-0.15 m tall, so below about 0.15 "
+                    "this starts taking the tops off real ones.",
+                    min=0.05, max=1.0, step=0.01, unit="m"),
+            Control("model.clear_free_windows", "float",
+                    "Clearing: contradictions needed",
+                    "How many separate sweeps have to send a beam through a "
+                    "spot and get something back from beyond it before the "
+                    "detection there is dropped. A fresh return puts evidence "
+                    "back, so a real obstacle coming into view again is "
+                    "restored rather than lost.",
+                    min=1.0, max=10.0, step=1.0),
+            Control("model.cleared", "readout", "Forgotten so far",
+                    "Remembered detections retracted since the map was last "
+                    "cleared."),
             Control("model.clear", "action", "Clear predictions",
                     "Empty the prediction map and start accumulating again.",
                     style="danger"),

@@ -807,6 +807,25 @@ class VizApp(PivotCamera):
         persist.set_on_checked(lambda v: self.set_score_setting("persist", bool(v)))
         sec.add_child(persist)
 
+        looked = gui.Checkbox("Forget predictions the beams go through")
+        looked.checked = s.clear_looked_through
+        looked.tooltip = (
+            "A remembered detection is only ever replaced by scoring that exact "
+            "spot again, so a false one hanging in mid-air stays on the map for "
+            "the rest of the run - seeing the floor underneath it later does "
+            "not touch it. With this on, a remembered detection is taken back "
+            "once later beams have passed straight through where it sits and "
+            "come back from further away. It never changes what the model says "
+            "this pass, and it leaves alone anything nothing has looked "
+            "through. Measured on the competition recording it is safe but "
+            "small: it clears a few percent of the wrongly-claimed ground, never "
+            "the weakest rock, and at most a few percent of one rock's cells, "
+            "because most of the false detections there sit on the ground "
+            "rather than above it.")
+        looked.set_on_checked(
+            lambda v: self.set_score_setting("clear_looked_through", bool(v)))
+        sec.add_child(looked)
+
         grid = self._grid(em)
         disp = gui.Combobox()
         disp.add_item("Confidence")

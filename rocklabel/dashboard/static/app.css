@@ -1794,6 +1794,8 @@ tbody tr.is-open td { background: var(--raised); }
   margin-top: 6px;
 }
 .chart-scroll { overflow-x: auto; }
+.chart-line { width: 100%; }
+.chart-line svg { display: block; width: 100%; height: auto; }
 .chart-table { margin-top: 8px; }
 .chart-table summary {
   cursor: pointer;
@@ -2162,3 +2164,21 @@ tbody tr.is-open td { background: var(--raised); }
   background: var(--inset);
   border: 1px solid var(--line);
 }
+/* Lance checkpoint scores use one fixed target recording, split by prediction unit. */
+.lance-score-scroll { overflow-x: auto; }
+.lance-score-table { width: 100%; border-collapse: collapse; margin: 12px 0 28px; font-size: .82rem; }
+.lance-score-table th, .lance-score-table td { padding: 8px 10px; border-bottom: 1px solid var(--line, #333); text-align: right; }
+.lance-score-table th:nth-child(2), .lance-score-table td:nth-child(2) { text-align: left; }
+.lance-score-table .lance-checkpoint { max-width: 32rem; overflow-wrap: anywhere; }
+
+/* Epoch snapshots: thirty-odd chips per run, so they wrap rather than scroll,
+   and the two that matter — the epoch that was kept, the epoch that scored
+   best — are the only ones marked. */
+.epoch-list { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 10px; }
+.epoch-chip {
+  font: 11px/1.6 var(--mono, ui-monospace, monospace);
+  padding: 1px 6px; border-radius: 4px;
+  border: 1px solid var(--line, #d8d8d8); color: var(--muted, #666);
+}
+.epoch-chip-kept { border-color: #8a6d3b; color: #8a6d3b; }
+.epoch-chip-best { border-color: #2e7d32; color: #2e7d32; font-weight: 600; }

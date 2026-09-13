@@ -1370,6 +1370,50 @@ fixes the floor, not the unit, so a segmenter graded per point and a
 classifier graded per candidate ball still need `matched`, below, to be put
 side by side.
 
+#### `rocklabel-train mapeval` — grading the map, not the ranking
+
+```bash
+rocklabel-train mapeval --checkpoint .../best.pt \
+    --recording recordings/arena.mcap --labels labels/arena.labels.json \
+    --out training/reports/map-evidence/mymodel --clean
+```
+
+Every other score in this tool ranks candidates. The robot does not drive on a
+ranking: it drives on an accumulated map, in which the newest answer per 5 cm
+cell is kept and a cell is only ever rewritten by scoring that exact cell
+again. A model can rank rocks correctly and still leave the arena covered in
+detections that were wrong when they were made and are never revisited.
+
+`mapeval` replays a labelled recording start to finish through the real
+inference preparation — operational floor band, 8 m range, the model's own
+input builder — accumulates exactly as `LiveScorer` does, and grades the
+result: per rock, how much of it ended up covered and how long after the robot
+first saw it; for the arena, how much ground was claimed with no rock on it and
+for how many cell-seconds. Coverage denominators are ground cells a real return
+actually landed on, so they are the same for every model.
+
+`--clean` builds a **second map beside the first**, from the same scores in the
+same pass, in which a detection can be retracted once later beams have passed
+through where it sits and returned from beyond it (see
+`rocklabel/live/evidence.py`). Both maps share every input and denominator, so
+the difference between them is the retraction policy and nothing else.
+
+Outputs land in `--out`: `summary.md`, `per-rock.csv`, `timeline.csv`,
+`threshold-curve.csv` (the same map read at every threshold, so two checkpoints
+can be compared at **equal wrongly-claimed area** instead of at whichever
+threshold each happens to carry), `map.png` (both maps looking down, rocks
+outlined) and `map-*.npz`. The replayed geometry and each checkpoint's scores
+are cached under `--frames-dir`, so the first run on a recording costs a few
+minutes and everything after it costs seconds.
+
+It is a card on the dashboard's Deploy stage, and finished evaluations are
+listed on the Training tab.
+
+> **Its vertical band is not the sampled Lance benchmark's.** `mapeval` uses
+> the operational band, −0.10 to +0.60 m about the measured floor;
+> `training/caches/lance-arena` carries the labeller's own world-frame z clip.
+> The two are different contracts and their numbers are not interchangeable.
+
 #### `rocklabel-train matched` — comparing a segmenter to a classifier
 
 ```bash

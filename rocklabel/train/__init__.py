@@ -37,6 +37,12 @@ TRAIN_DEFAULTS: dict = {
     # Has to outlast the cosine schedule's slow tail, or every run stops while
     # the LR is still high and no fold sees the low-LR refinement phase.
     "patience": 10,
+    # Keep a copy of every epoch's weights under <run>/epochs/, not just the one
+    # the validation score picked. Off by default because it costs a few
+    # megabytes an epoch and nothing downstream reads them - it exists for the
+    # experiment that asks whether the validation score picks the right epoch at
+    # all, which cannot be asked once the other epochs have been overwritten.
+    "save_every_epoch": False,
     "augment": True,
     # Wider than the ~0.045 gap between this arena's rock and clear intensity
     # levels, so the absolute reflectivity cue is denied and only the

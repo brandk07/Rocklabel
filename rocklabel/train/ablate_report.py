@@ -174,7 +174,51 @@ def _verdict(c: dict, floor: float | None) -> str:
     return f"{direction} ({d:+.4f}, p={p:.3f}{times})"
 
 
-def write_markdown(data: dict, path: str) -> None:
+#: Where `rocklabel-train lancebench` leaves its scores on the labelled
+#: competition cache. Read, never written, by this report.
+LANCE_RESULTS = os.path.join("training", "reports", "lance-checkpoints",
+                             "results.json")
+
+
+def _lance_scores(root: str, suite: str) -> dict[str, list[float]]:
+    """{arm name: (average precisions on the competition cache, which fits)}.
+
+    This report's own headline is a held-out *volleyball* recording, and that
+    is the wrong question for any setting aimed at the competition arena: the
+    best-scoring classifier this project has ever trained scored 0.52 on its
+    held-out volleyball run. So where the competition scores exist, they are
+    put on the same page rather than left in a separate file nobody opens.
+
+    Missing scores are not an error - they just mean the benchmark has not been
+    run since these folds finished.
+    """
+    try:
+        with open(LANCE_RESULTS) as f:
+            rows = json.load(f)["results"]
+    except (OSError, KeyError, ValueError):
+        return {}
+    marker = os.sep + suite + os.sep
+    by_fit: dict[str, dict[str, list[float]]] = {}
+    for r in rows:
+        path = r.get("checkpoint", "")
+        if marker not in path or "error" in r:
+            continue
+        parts = path.split(marker, 1)[1].split(os.sep)
+        if len(parts) < 2:
+            continue
+        arm, fold = parts[0], parts[1]
+        kind = "trainall" if fold == "trainall" else "fold"
+        by_fit.setdefault(arm, {}).setdefault(kind, []).append(float(r["pr_auc"]))
+    # One row, one training set. A no-holdout fit and a leave-one-out fit saw
+    # different data, so averaging them together would make the column say
+    # nothing; where both exist the no-holdout fits win, because that is what a
+    # suite scored on a different arena is meant to be run as.
+    return {arm: ((v["trainall"], "no holdout") if v.get("trainall")
+                  else (v.get("fold", []), "folds"))
+            for arm, v in by_fit.items()}
+
+
+def write_markdown(data: dict, path: str, lance: dict | None = None) -> None:
     floor = _noise_floor(data)
     L = [f"# {data['title']}", "", data["blurb"], "",
          f"Leave-one-run-out over {len(data['folds'])} recordings: every setting is "
@@ -187,6 +231,24 @@ def write_markdown(data: dict, path: str) -> None:
               "setting with only the random seed changed. Any effect smaller than "
               "that is noise, whatever the average says.", ""]
 
+    lance = lance or {}
+    if lance:
+        L += ["**The column that decides anything here is the last one.** These "
+              "folds are scored on a held-out volleyball recording, and the "
+              "best classifier this project has trained scored 0.52 on its own "
+              "held-out volleyball run while beating everything else on the "
+              "competition arena. Where a setting's checkpoints have been "
+              "scored on the labelled competition cache "
+              "(`rocklabel-train lancebench`), that average is shown beside the "
+              "volleyball one. Each row's competition score is over one "
+              "training set: the no-holdout fits where a setting has them, its "
+              "leave-one-out folds otherwise. A setting fitted without a "
+              "holdout has no volleyball column at all, because there is no "
+              "unseen recording left to score it on - which is rather the "
+              "point. Each competition cell says which fits it covers; where a "
+              "row's two columns describe different fits, they are different "
+              "checkpoints and the competition one is the one to read.", ""]
+
     L += ["## Every setting", "",
           "**Normalized PR-AUC** is the same score with the fold's own rock "
           "share divided out: `(PR-AUC - rock share) / (1 - rock share)`. "
@@ -196,18 +258,35 @@ def write_markdown(data: dict, path: str) -> None:
           "are never comparable *across* tasks — a segmenter graded per point "
           "and a classifier graded per candidate ball are still two different "
           "measurements after normalizing.", "",
-          "| setting | folds | PR-AUC | normalized | ROC-AUC | F1 | what it is |",
-          "|---|---|---|---|---|---|---|"]
-    for a in sorted(data["arms"], key=lambda r: -(r[PRIMARY]["mean"] or 0)):
-        if not a["folds_done"]:
+          "| setting | folds | PR-AUC | normalized | ROC-AUC | F1 |"
+          + (" competition PR-AUC |" if lance else "") + " what it is |",
+          "|---|---|---|---|---|---|" + ("---|" if lance else "") + "---|"]
+    def rank(r):
+        # Rank by the competition score where there is one: that is the column
+        # this report says to read, so it should also be the order.
+        v = (lance.get(r["arm"]) or ([], ""))[0]
+        return (-np.mean(v) if v else 1.0, -(r[PRIMARY]["mean"] or 0))
+
+    for a in sorted(data["arms"], key=rank if lance
+                    else (lambda r: -(r[PRIMARY]["mean"] or 0))):
+        if not a["folds_done"] and not (lance.get(a["arm"]) or ([], ""))[0]:
             continue
         def cell(k):
             m = a[k]
+            if m["mean"] is None:
+                return "—"
             s = f"{m['mean']:.3f}"
             return s + (f" ± {m['std']:.3f}" if m["std"] is not None else "")
+        arena = ""
+        if lance:
+            v, kind = lance.get(a["arm"]) or ([], "")
+            arena = (" — |" if not v else
+                     f" **{np.mean(v):.3f}**"
+                     + (f" ± {np.std(v, ddof=1):.3f}" if len(v) > 1 else "")
+                     + f" ({len(v)}, {kind}) |")
         L.append(f"| {a['label']} | {a['folds_done']} | **{cell('pr_auc')}** | "
-                 f"{cell(NORMALIZED)} | {cell('roc_auc')} | {cell('f1')} | "
-                 f"{a['what']} |")
+                 f"{cell(NORMALIZED)} | {cell('roc_auc')} | {cell('f1')} |"
+                 f"{arena} {a['what']} |")
 
     L += ["", "## Head to head, paired fold by fold", "",
           "Each row trains two settings on the exact same folds and compares them "
@@ -285,7 +364,8 @@ def render_ablation(root: str, suite: str, out_dir: str) -> dict:
     fig_arm_ranking(data, os.path.join(out_dir, "arm_ranking.png"))
     fig_paired_deltas(data, os.path.join(out_dir, "paired_deltas.png"))
     fig_per_fold_lines(data, os.path.join(out_dir, "per_fold.png"))
-    write_markdown(data, os.path.join(out_dir, "summary.md"))
+    write_markdown(data, os.path.join(out_dir, "summary.md"),
+                   lance=_lance_scores(root, suite))
     print(f"reported {done} finished folds across "
           f"{sum(1 for a in data['arms'] if a['folds_done'])} settings")
     return data

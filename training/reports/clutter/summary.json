@@ -1,0 +1,1656 @@
+{
+  "suite": "clutter",
+  "title": "The combined-clutter recipe, repeated and taken apart",
+  "blurb": "One PointNet checkpoint - the stray-plus-phantom classifier held out on VolleyBallTest4 - scores better on the labelled competition cache than anything else this project has trained, and its own held-out volleyball score is mediocre, so no sweep picked by volleyball would ever have found it. This suite does not chase that number. It repeats the recipe under three seeds to find out whether it repeats at all, and changes one thing at a time around it: half the stray jitter, phantom clumps that stop eating 8% of the rock examples, and an extra input telling the model how high its candidate sits in its own neighborhood - the one coordinate the sample tensor has never carried. It also asks whether PointNet++, dismissed on volleyball scores, is worth another look now that there is an arena to judge on. Run it with --folds all, which fits every recording and leaves the competition cache as the only held-out thing; --folds VolleyBallTest4.reslam reproduces the original winner's exact split, which is the control for whether that checkpoint was luck.",
+  "folds": [
+    "VolleyBallTest4.reslam"
+  ],
+  "arms": [
+    {
+      "arm": "cls-both",
+      "label": "Classifier \u00b7 combined reference",
+      "what": "The winning recipe, retrained on today's code: 5% of each ball's points slid along their line of sight, and 8% of samples replaced outright by a synthetic phantom clump labelled clear. The reference every other arm here is a single change away from. It is also the replication: the checkpoint being reproduced was trained before a height-referencing fix in the phantom generator, and carries no source hash, so nothing on disk can certify what executable produced it. Treat these three fits as the measurement and the old checkpoint as history.",
+      "model": "pointnet",
+      "features": [
+        "dx",
+        "dy",
+        "dz"
+      ],
+      "seed": 42,
+      "overrides": {
+        "aug_stray_frac": 0.05,
+        "aug_stray_reach": 1.0,
+        "aug_phantom_frac": 0.08
+      },
+      "folds_done": 1,
+      "folds": [
+        "VolleyBallTest4.reslam"
+      ],
+      "prevalence": {
+        "VolleyBallTest4.reslam": 0.19834997828918802
+      },
+      "pr_auc": {
+        "mean": 0.549624875603898,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.549624875603898
+        }
+      },
+      "norm_pr_auc": {
+        "mean": 0.438189843199966,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.438189843199966
+        }
+      },
+      "roc_auc": {
+        "mean": 0.7505391393236185,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.7505391393236185
+        }
+      },
+      "f1": {
+        "mean": 0.42545227698066124,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.42545227698066124
+        }
+      },
+      "precision": {
+        "mean": 0.7396963123644251,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.7396963123644251
+        }
+      },
+      "recall": {
+        "mean": 0.29859894921190894,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.29859894921190894
+        }
+      }
+    },
+    {
+      "arm": "cls-both-s43",
+      "label": "Classifier \u00b7 combined reference (seed 43)",
+      "what": "The 'cls-both' setting again under seed 43, changing nothing else. Repeats like this are the only scale there is for reading a difference between two settings: on this data two seeds of one setting land as far apart as the effects being compared.",
+      "model": "pointnet",
+      "features": [
+        "dx",
+        "dy",
+        "dz"
+      ],
+      "seed": 43,
+      "overrides": {
+        "aug_stray_frac": 0.05,
+        "aug_stray_reach": 1.0,
+        "aug_phantom_frac": 0.08
+      },
+      "folds_done": 1,
+      "folds": [
+        "VolleyBallTest4.reslam"
+      ],
+      "prevalence": {
+        "VolleyBallTest4.reslam": 0.19834997828918802
+      },
+      "pr_auc": {
+        "mean": 0.5286084003888587,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.5286084003888587
+        }
+      },
+      "norm_pr_auc": {
+        "mean": 0.411973321468715,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.411973321468715
+        }
+      },
+      "roc_auc": {
+        "mean": 0.7011708244947116,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.7011708244947116
+        }
+      },
+      "f1": {
+        "mean": 0.4413919413919414,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.4413919413919414
+        }
+      },
+      "precision": {
+        "mean": 0.7288306451612904,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.7288306451612904
+        }
+      },
+      "recall": {
+        "mean": 0.31654991243432573,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.31654991243432573
+        }
+      }
+    },
+    {
+      "arm": "cls-both-s44",
+      "label": "Classifier \u00b7 combined reference (seed 44)",
+      "what": "The 'cls-both' setting again under seed 44, changing nothing else. Repeats like this are the only scale there is for reading a difference between two settings: on this data two seeds of one setting land as far apart as the effects being compared.",
+      "model": "pointnet",
+      "features": [
+        "dx",
+        "dy",
+        "dz"
+      ],
+      "seed": 44,
+      "overrides": {
+        "aug_stray_frac": 0.05,
+        "aug_stray_reach": 1.0,
+        "aug_phantom_frac": 0.08
+      },
+      "folds_done": 1,
+      "folds": [
+        "VolleyBallTest4.reslam"
+      ],
+      "prevalence": {
+        "VolleyBallTest4.reslam": 0.19834997828918802
+      },
+      "pr_auc": {
+        "mean": 0.49325402204769797,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.49325402204769797
+        }
+      },
+      "norm_pr_auc": {
+        "mean": 0.3678713101374978,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.3678713101374978
+        }
+      },
+      "roc_auc": {
+        "mean": 0.6486400522415428,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.6486400522415428
+        }
+      },
+      "f1": {
+        "mean": 0.40309079201545395,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.40309079201545395
+        }
+      },
+      "precision": {
+        "mean": 0.7615571776155717,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.7615571776155717
+        }
+      },
+      "recall": {
+        "mean": 0.27408056042031526,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.27408056042031526
+        }
+      }
+    },
+    {
+      "arm": "cls-lowstray",
+      "label": "Classifier \u00b7 half the stray jitter",
+      "what": "The reference with the stray fraction halved, 5% to 2.5%. Stray jitter on its own is the one clutter setting measured to HURT on the competition cache - it loses on every fold - and it works by teaching tolerance to corrupted returns, which is also how a model learns to call clutter a rock. The phantom clump supplies the opposing signal. This asks whether the recipe still needs a full dose of the half that costs precision.",
+      "model": "pointnet",
+      "features": [
+        "dx",
+        "dy",
+        "dz"
+      ],
+      "seed": 42,
+      "overrides": {
+        "aug_stray_frac": 0.025,
+        "aug_stray_reach": 1.0,
+        "aug_phantom_frac": 0.08
+      },
+      "folds_done": 1,
+      "folds": [
+        "VolleyBallTest4.reslam"
+      ],
+      "prevalence": {
+        "VolleyBallTest4.reslam": 0.19834997828918802
+      },
+      "pr_auc": {
+        "mean": 0.5407817709560343,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.5407817709560343
+        }
+      },
+      "norm_pr_auc": {
+        "mean": 0.42715871439266984,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.42715871439266984
+        }
+      },
+      "roc_auc": {
+        "mean": 0.709459824800352,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.709459824800352
+        }
+      },
+      "f1": {
+        "mean": 0.4195309990362994,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.4195309990362994
+        }
+      },
+      "precision": {
+        "mean": 0.7876960193003619,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.7876960193003619
+        }
+      },
+      "recall": {
+        "mean": 0.28590192644483364,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.28590192644483364
+        }
+      }
+    },
+    {
+      "arm": "cls-lowstray-s43",
+      "label": "Classifier \u00b7 half the stray jitter (seed 43)",
+      "what": "The 'cls-lowstray' setting again under seed 43, changing nothing else. Repeats like this are the only scale there is for reading a difference between two settings: on this data two seeds of one setting land as far apart as the effects being compared.",
+      "model": "pointnet",
+      "features": [
+        "dx",
+        "dy",
+        "dz"
+      ],
+      "seed": 43,
+      "overrides": {
+        "aug_stray_frac": 0.025,
+        "aug_stray_reach": 1.0,
+        "aug_phantom_frac": 0.08
+      },
+      "folds_done": 1,
+      "folds": [
+        "VolleyBallTest4.reslam"
+      ],
+      "prevalence": {
+        "VolleyBallTest4.reslam": 0.19834997828918802
+      },
+      "pr_auc": {
+        "mean": 0.5234118609842897,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.5234118609842897
+        }
+      },
+      "norm_pr_auc": {
+        "mean": 0.4054910171415986,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.4054910171415986
+        }
+      },
+      "roc_auc": {
+        "mean": 0.7026827339386568,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.7026827339386568
+        }
+      },
+      "f1": {
+        "mean": 0.42504626773596543,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.42504626773596543
+        }
+      },
+      "precision": {
+        "mean": 0.7192066805845512,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.7192066805845512
+        }
+      },
+      "recall": {
+        "mean": 0.30166374781085814,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.30166374781085814
+        }
+      }
+    },
+    {
+      "arm": "cls-lowstray-s44",
+      "label": "Classifier \u00b7 half the stray jitter (seed 44)",
+      "what": "The 'cls-lowstray' setting again under seed 44, changing nothing else. Repeats like this are the only scale there is for reading a difference between two settings: on this data two seeds of one setting land as far apart as the effects being compared.",
+      "model": "pointnet",
+      "features": [
+        "dx",
+        "dy",
+        "dz"
+      ],
+      "seed": 44,
+      "overrides": {
+        "aug_stray_frac": 0.025,
+        "aug_stray_reach": 1.0,
+        "aug_phantom_frac": 0.08
+      },
+      "folds_done": 1,
+      "folds": [
+        "VolleyBallTest4.reslam"
+      ],
+      "prevalence": {
+        "VolleyBallTest4.reslam": 0.19834997828918802
+      },
+      "pr_auc": {
+        "mean": 0.5227320013836977,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.5227320013836977
+        }
+      },
+      "norm_pr_auc": {
+        "mean": 0.40464294181922644,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.40464294181922644
+        }
+      },
+      "roc_auc": {
+        "mean": 0.7053750155808276,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.7053750155808276
+        }
+      },
+      "f1": {
+        "mean": 0.41687817258883253,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.41687817258883253
+        }
+      },
+      "precision": {
+        "mean": 0.7569124423963134,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.7569124423963134
+        }
+      },
+      "recall": {
+        "mean": 0.28765323992994746,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.28765323992994746
+        }
+      }
+    },
+    {
+      "arm": "cls-keeppos",
+      "label": "Classifier \u00b7 phantoms that spare the rocks",
+      "what": "The reference with one accounting change: a phantom clump may only replace a clear sample, and its draw probability is raised so the number of phantoms per batch is unchanged. As written, the augmentation replaces any sample, so 8% of the rock examples in every batch are thrown away and the loss weight is not adjusted for it. Nobody chose that; it fell out of how the augmentation was written. This is what the recipe scores when it is not also a 8% cut to the positives.",
+      "model": "pointnet",
+      "features": [
+        "dx",
+        "dy",
+        "dz"
+      ],
+      "seed": 42,
+      "overrides": {
+        "aug_stray_frac": 0.05,
+        "aug_stray_reach": 1.0,
+        "aug_phantom_frac": 0.08,
+        "aug_phantom_mode": "clear-only"
+      },
+      "folds_done": 1,
+      "folds": [
+        "VolleyBallTest4.reslam"
+      ],
+      "prevalence": {
+        "VolleyBallTest4.reslam": 0.19834997828918802
+      },
+      "pr_auc": {
+        "mean": 0.54958166444725,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.54958166444725
+        }
+      },
+      "norm_pr_auc": {
+        "mean": 0.43813594043008164,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.43813594043008164
+        }
+      },
+      "roc_auc": {
+        "mean": 0.7495108995596768,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.7495108995596768
+        }
+      },
+      "f1": {
+        "mean": 0.4352108341028009,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.4352108341028009
+        }
+      },
+      "precision": {
+        "mean": 0.7326424870466322,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.7326424870466322
+        }
+      },
+      "recall": {
+        "mean": 0.3095446584938704,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.3095446584938704
+        }
+      }
+    },
+    {
+      "arm": "cls-keeppos-s43",
+      "label": "Classifier \u00b7 phantoms that spare the rocks (seed 43)",
+      "what": "The 'cls-keeppos' setting again under seed 43, changing nothing else. Repeats like this are the only scale there is for reading a difference between two settings: on this data two seeds of one setting land as far apart as the effects being compared.",
+      "model": "pointnet",
+      "features": [
+        "dx",
+        "dy",
+        "dz"
+      ],
+      "seed": 43,
+      "overrides": {
+        "aug_stray_frac": 0.05,
+        "aug_stray_reach": 1.0,
+        "aug_phantom_frac": 0.08,
+        "aug_phantom_mode": "clear-only"
+      },
+      "folds_done": 1,
+      "folds": [
+        "VolleyBallTest4.reslam"
+      ],
+      "prevalence": {
+        "VolleyBallTest4.reslam": 0.19834997828918802
+      },
+      "pr_auc": {
+        "mean": 0.5390377234490128,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.5390377234490128
+        }
+      },
+      "norm_pr_auc": {
+        "mean": 0.4249831421856118,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.4249831421856118
+        }
+      },
+      "roc_auc": {
+        "mean": 0.7251821605072833,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.7251821605072833
+        }
+      },
+      "f1": {
+        "mean": 0.43115264797507785,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.43115264797507785
+        }
+      },
+      "precision": {
+        "mean": 0.7473002159827213,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.7473002159827213
+        }
+      },
+      "recall": {
+        "mean": 0.30297723292469353,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.30297723292469353
+        }
+      }
+    },
+    {
+      "arm": "cls-keeppos-s44",
+      "label": "Classifier \u00b7 phantoms that spare the rocks (seed 44)",
+      "what": "The 'cls-keeppos' setting again under seed 44, changing nothing else. Repeats like this are the only scale there is for reading a difference between two settings: on this data two seeds of one setting land as far apart as the effects being compared.",
+      "model": "pointnet",
+      "features": [
+        "dx",
+        "dy",
+        "dz"
+      ],
+      "seed": 44,
+      "overrides": {
+        "aug_stray_frac": 0.05,
+        "aug_stray_reach": 1.0,
+        "aug_phantom_frac": 0.08,
+        "aug_phantom_mode": "clear-only"
+      },
+      "folds_done": 1,
+      "folds": [
+        "VolleyBallTest4.reslam"
+      ],
+      "prevalence": {
+        "VolleyBallTest4.reslam": 0.19834997828918802
+      },
+      "pr_auc": {
+        "mean": 0.5000700061600736,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.5000700061600736
+        }
+      },
+      "norm_pr_auc": {
+        "mean": 0.3763737537572579,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.3763737537572579
+        }
+      },
+      "roc_auc": {
+        "mean": 0.6557575260851988,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.6557575260851988
+        }
+      },
+      "f1": {
+        "mean": 0.4145569620253165,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.4145569620253165
+        }
+      },
+      "precision": {
+        "mean": 0.747716894977169,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.747716894977169
+        }
+      },
+      "recall": {
+        "mean": 0.28677758318739055,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.28677758318739055
+        }
+      }
+    },
+    {
+      "arm": "cls-qz",
+      "label": "Classifier \u00b7 clutter, plus the candidate's height",
+      "what": "The reference with one extra input: how high the candidate center sits above the lowest point of its own ball. The classifier is asked to label a point, and its tensor measures dx and dy from that point but dz from the ball's floor - so the query's own height is the one coordinate never written down. Lift a candidate half a metre without moving a neighbour and the stored sample does not change. A rock and a return floating over that rock are exactly that pair, and floating returns are the competition arena's failure mode. Measured on the training cache the channel alone separates rock from clear at ROC-AUC 0.80, so it is not a null input - but on this flat court 'high' means 'on a rock', and in the arena it has to mean 'suspect'. Which way it generalizes is the question.",
+      "model": "pointnet_qz",
+      "features": [
+        "dx",
+        "dy",
+        "dz"
+      ],
+      "seed": 42,
+      "overrides": {
+        "aug_stray_frac": 0.05,
+        "aug_stray_reach": 1.0,
+        "aug_phantom_frac": 0.08
+      },
+      "folds_done": 1,
+      "folds": [
+        "VolleyBallTest4.reslam"
+      ],
+      "prevalence": {
+        "VolleyBallTest4.reslam": 0.19834997828918802
+      },
+      "pr_auc": {
+        "mean": 0.5237991711907993,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.5237991711907993
+        }
+      },
+      "norm_pr_auc": {
+        "mean": 0.40597415840776235,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.40597415840776235
+        }
+      },
+      "roc_auc": {
+        "mean": 0.6944203182719615,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.6944203182719615
+        }
+      },
+      "f1": {
+        "mean": 0.4280768020144791,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.4280768020144791
+        }
+      },
+      "precision": {
+        "mean": 0.761478163493841,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.761478163493841
+        }
+      },
+      "recall": {
+        "mean": 0.29772329246935203,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.29772329246935203
+        }
+      }
+    },
+    {
+      "arm": "cls-qz-s43",
+      "label": "Classifier \u00b7 clutter, plus the candidate's height (seed 43)",
+      "what": "The 'cls-qz' setting again under seed 43, changing nothing else. Repeats like this are the only scale there is for reading a difference between two settings: on this data two seeds of one setting land as far apart as the effects being compared.",
+      "model": "pointnet_qz",
+      "features": [
+        "dx",
+        "dy",
+        "dz"
+      ],
+      "seed": 43,
+      "overrides": {
+        "aug_stray_frac": 0.05,
+        "aug_stray_reach": 1.0,
+        "aug_phantom_frac": 0.08
+      },
+      "folds_done": 1,
+      "folds": [
+        "VolleyBallTest4.reslam"
+      ],
+      "prevalence": {
+        "VolleyBallTest4.reslam": 0.19834997828918802
+      },
+      "pr_auc": {
+        "mean": 0.5433722854631645,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.5433722854631645
+        }
+      },
+      "norm_pr_auc": {
+        "mean": 0.43039019251525723,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.43039019251525723
+        }
+      },
+      "roc_auc": {
+        "mean": 0.7426347269660348,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.7426347269660348
+        }
+      },
+      "f1": {
+        "mean": 0.43817121816508137,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.43817121816508137
+        }
+      },
+      "precision": {
+        "mean": 0.7323076923076923,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.7323076923076923
+        }
+      },
+      "recall": {
+        "mean": 0.3126094570928196,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.3126094570928196
+        }
+      }
+    },
+    {
+      "arm": "cls-qz-s44",
+      "label": "Classifier \u00b7 clutter, plus the candidate's height (seed 44)",
+      "what": "The 'cls-qz' setting again under seed 44, changing nothing else. Repeats like this are the only scale there is for reading a difference between two settings: on this data two seeds of one setting land as far apart as the effects being compared.",
+      "model": "pointnet_qz",
+      "features": [
+        "dx",
+        "dy",
+        "dz"
+      ],
+      "seed": 44,
+      "overrides": {
+        "aug_stray_frac": 0.05,
+        "aug_stray_reach": 1.0,
+        "aug_phantom_frac": 0.08
+      },
+      "folds_done": 1,
+      "folds": [
+        "VolleyBallTest4.reslam"
+      ],
+      "prevalence": {
+        "VolleyBallTest4.reslam": 0.19834997828918802
+      },
+      "pr_auc": {
+        "mean": 0.5078575561524377,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.5078575561524377
+        }
+      },
+      "norm_pr_auc": {
+        "mean": 0.38608815503145055,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.38608815503145055
+        }
+      },
+      "roc_auc": {
+        "mean": 0.6852434716569331,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.6852434716569331
+        }
+      },
+      "f1": {
+        "mean": 0.38587311968606935,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.38587311968606935
+        }
+      },
+      "precision": {
+        "mean": 0.7622739018087855,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.7622739018087855
+        }
+      },
+      "recall": {
+        "mean": 0.2583187390542907,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.2583187390542907
+        }
+      }
+    },
+    {
+      "arm": "pp-plain",
+      "label": "PointNet++ \u00b7 no clutter training",
+      "what": "PointNet++ with no clutter augmentation at all - the control for the pair below. It is back in this project on the strength of the competition rescoring rather than on anything measured at the volleyball court: its geometry-only checkpoints average 0.6418 there against plain PointNet's 0.6169, which is the opposite of the ordering the volleyball folds gave, and is why the older dismissal of the architecture does not stand. The other half of that dismissal was its cost, and that does not stand either: measured on this card, a thousand candidate balls take 39 ms through PointNet++ and 40 ms through PointNet. Whatever it is three times as much of, it is not scoring latency here.",
+      "model": "pointnet2",
+      "features": [
+        "dx",
+        "dy",
+        "dz"
+      ],
+      "seed": 42,
+      "overrides": {},
+      "folds_done": 0,
+      "folds": [],
+      "prevalence": {},
+      "pr_auc": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "norm_pr_auc": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "roc_auc": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "f1": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "precision": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "recall": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      }
+    },
+    {
+      "arm": "pp-plain-s43",
+      "label": "PointNet++ \u00b7 no clutter training (seed 43)",
+      "what": "The 'pp-plain' setting again under seed 43, changing nothing else. Repeats like this are the only scale there is for reading a difference between two settings: on this data two seeds of one setting land as far apart as the effects being compared.",
+      "model": "pointnet2",
+      "features": [
+        "dx",
+        "dy",
+        "dz"
+      ],
+      "seed": 43,
+      "overrides": {},
+      "folds_done": 0,
+      "folds": [],
+      "prevalence": {},
+      "pr_auc": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "norm_pr_auc": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "roc_auc": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "f1": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "precision": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "recall": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      }
+    },
+    {
+      "arm": "pp-plain-s44",
+      "label": "PointNet++ \u00b7 no clutter training (seed 44)",
+      "what": "The 'pp-plain' setting again under seed 44, changing nothing else. Repeats like this are the only scale there is for reading a difference between two settings: on this data two seeds of one setting land as far apart as the effects being compared.",
+      "model": "pointnet2",
+      "features": [
+        "dx",
+        "dy",
+        "dz"
+      ],
+      "seed": 44,
+      "overrides": {},
+      "folds_done": 0,
+      "folds": [],
+      "prevalence": {},
+      "pr_auc": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "norm_pr_auc": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "roc_auc": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "f1": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "precision": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "recall": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      }
+    },
+    {
+      "arm": "pp-both",
+      "label": "PointNet++ \u00b7 combined clutter training",
+      "what": "PointNet++ with the reference recipe's stray jitter and phantom clumps. The two directions that have shown anything on the competition arena are a better architecture and better clutter negatives, and neither has been tried with the other. This is whether they add up or overlap.",
+      "model": "pointnet2",
+      "features": [
+        "dx",
+        "dy",
+        "dz"
+      ],
+      "seed": 42,
+      "overrides": {
+        "aug_stray_frac": 0.05,
+        "aug_stray_reach": 1.0,
+        "aug_phantom_frac": 0.08
+      },
+      "folds_done": 0,
+      "folds": [],
+      "prevalence": {},
+      "pr_auc": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "norm_pr_auc": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "roc_auc": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "f1": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "precision": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "recall": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      }
+    },
+    {
+      "arm": "pp-both-s43",
+      "label": "PointNet++ \u00b7 combined clutter training (seed 43)",
+      "what": "The 'pp-both' setting again under seed 43, changing nothing else. Repeats like this are the only scale there is for reading a difference between two settings: on this data two seeds of one setting land as far apart as the effects being compared.",
+      "model": "pointnet2",
+      "features": [
+        "dx",
+        "dy",
+        "dz"
+      ],
+      "seed": 43,
+      "overrides": {
+        "aug_stray_frac": 0.05,
+        "aug_stray_reach": 1.0,
+        "aug_phantom_frac": 0.08
+      },
+      "folds_done": 0,
+      "folds": [],
+      "prevalence": {},
+      "pr_auc": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "norm_pr_auc": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "roc_auc": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "f1": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "precision": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "recall": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      }
+    },
+    {
+      "arm": "pp-both-s44",
+      "label": "PointNet++ \u00b7 combined clutter training (seed 44)",
+      "what": "The 'pp-both' setting again under seed 44, changing nothing else. Repeats like this are the only scale there is for reading a difference between two settings: on this data two seeds of one setting land as far apart as the effects being compared.",
+      "model": "pointnet2",
+      "features": [
+        "dx",
+        "dy",
+        "dz"
+      ],
+      "seed": 44,
+      "overrides": {
+        "aug_stray_frac": 0.05,
+        "aug_stray_reach": 1.0,
+        "aug_phantom_frac": 0.08
+      },
+      "folds_done": 0,
+      "folds": [],
+      "prevalence": {},
+      "pr_auc": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "norm_pr_auc": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "roc_auc": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "f1": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "precision": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      },
+      "recall": {
+        "mean": null,
+        "std": null,
+        "per_fold": {}
+      }
+    },
+    {
+      "arm": "cls-qz-plain",
+      "label": "Classifier \u00b7 the candidate's height alone",
+      "what": "The height input with no clutter augmentation at all, against plain PointNet. The paired arm above adds the channel to a recipe whose synthetic phantoms are tall by construction, so a model there could reach a good score by reading the new channel as a phantom detector. This arm cannot: it never sees a phantom. It is what says whether the coordinate is worth anything by itself.",
+      "model": "pointnet_qz",
+      "features": [
+        "dx",
+        "dy",
+        "dz"
+      ],
+      "seed": 42,
+      "overrides": {},
+      "folds_done": 1,
+      "folds": [
+        "VolleyBallTest4.reslam"
+      ],
+      "prevalence": {
+        "VolleyBallTest4.reslam": 0.19834997828918802
+      },
+      "pr_auc": {
+        "mean": 0.509938117278481,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.509938117278481
+        }
+      },
+      "norm_pr_auc": {
+        "mean": 0.38868350346243197,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.38868350346243197
+        }
+      },
+      "roc_auc": {
+        "mean": 0.6794890475081965,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.6794890475081965
+        }
+      },
+      "f1": {
+        "mean": 0.417617237008872,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.417617237008872
+        }
+      },
+      "precision": {
+        "mean": 0.7557339449541285,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.7557339449541285
+        }
+      },
+      "recall": {
+        "mean": 0.28852889667250436,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.28852889667250436
+        }
+      }
+    },
+    {
+      "arm": "cls-qz-plain-s43",
+      "label": "Classifier \u00b7 the candidate's height alone (seed 43)",
+      "what": "The 'cls-qz-plain' setting again under seed 43, changing nothing else. Repeats like this are the only scale there is for reading a difference between two settings: on this data two seeds of one setting land as far apart as the effects being compared.",
+      "model": "pointnet_qz",
+      "features": [
+        "dx",
+        "dy",
+        "dz"
+      ],
+      "seed": 43,
+      "overrides": {},
+      "folds_done": 1,
+      "folds": [
+        "VolleyBallTest4.reslam"
+      ],
+      "prevalence": {
+        "VolleyBallTest4.reslam": 0.19834997828918802
+      },
+      "pr_auc": {
+        "mean": 0.5129660875377331,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.5129660875377331
+        }
+      },
+      "norm_pr_auc": {
+        "mean": 0.3924606757661138,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.3924606757661138
+        }
+      },
+      "roc_auc": {
+        "mean": 0.7094641883806961,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.7094641883806961
+        }
+      },
+      "f1": {
+        "mean": 0.4176100628930817,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.4176100628930817
+        }
+      },
+      "precision": {
+        "mean": 0.7410714285714286,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.7410714285714286
+        }
+      },
+      "recall": {
+        "mean": 0.29071803852889666,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.29071803852889666
+        }
+      }
+    },
+    {
+      "arm": "cls-qz-plain-s44",
+      "label": "Classifier \u00b7 the candidate's height alone (seed 44)",
+      "what": "The 'cls-qz-plain' setting again under seed 44, changing nothing else. Repeats like this are the only scale there is for reading a difference between two settings: on this data two seeds of one setting land as far apart as the effects being compared.",
+      "model": "pointnet_qz",
+      "features": [
+        "dx",
+        "dy",
+        "dz"
+      ],
+      "seed": 44,
+      "overrides": {},
+      "folds_done": 1,
+      "folds": [
+        "VolleyBallTest4.reslam"
+      ],
+      "prevalence": {
+        "VolleyBallTest4.reslam": 0.19834997828918802
+      },
+      "pr_auc": {
+        "mean": 0.5061283024412454,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.5061283024412454
+        }
+      },
+      "norm_pr_auc": {
+        "mean": 0.38393103700692677,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.38393103700692677
+        }
+      },
+      "roc_auc": {
+        "mean": 0.678691532054956,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.678691532054956
+        }
+      },
+      "f1": {
+        "mean": 0.41213258286429016,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.41213258286429016
+        }
+      },
+      "precision": {
+        "mean": 0.7210065645514223,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.7210065645514223
+        }
+      },
+      "recall": {
+        "mean": 0.28852889667250436,
+        "std": null,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.28852889667250436
+        }
+      }
+    }
+  ],
+  "contrasts": [
+    {
+      "baseline": "pp-plain",
+      "variant": "pp-both",
+      "question": "Does the combined clutter recipe still help the hierarchical model?",
+      "n_folds": 0,
+      "folds": [],
+      "pr_auc": null,
+      "norm_pr_auc": null,
+      "roc_auc": null,
+      "f1": null,
+      "precision": null,
+      "recall": null
+    },
+    {
+      "baseline": "cls-both",
+      "variant": "pp-both",
+      "question": "Is PointNet++ worth three times the forward pass once both are trained against clutter?",
+      "n_folds": 0,
+      "folds": [],
+      "pr_auc": null,
+      "norm_pr_auc": null,
+      "roc_auc": null,
+      "f1": null,
+      "precision": null,
+      "recall": null
+    },
+    {
+      "baseline": "cls-both",
+      "variant": "cls-lowstray",
+      "question": "Does halving the stray jitter cost anything on clean data?",
+      "n_folds": 1,
+      "folds": [
+        "VolleyBallTest4.reslam"
+      ],
+      "pr_auc": {
+        "mean_delta": -0.008843104647863753,
+        "std_delta": null,
+        "median_delta": -0.008843104647863753,
+        "wins": 0,
+        "losses": 1,
+        "ties": 0,
+        "statistic": 0.0,
+        "p_value": 1.0,
+        "per_fold": {
+          "VolleyBallTest4.reslam": -0.008843104647863753
+        }
+      },
+      "norm_pr_auc": {
+        "mean_delta": -0.011031128807296176,
+        "std_delta": null,
+        "median_delta": -0.011031128807296176,
+        "wins": 0,
+        "losses": 1,
+        "ties": 0,
+        "statistic": 0.0,
+        "p_value": 1.0,
+        "per_fold": {
+          "VolleyBallTest4.reslam": -0.011031128807296176
+        }
+      },
+      "roc_auc": {
+        "mean_delta": -0.04107931452326652,
+        "std_delta": null,
+        "median_delta": -0.04107931452326652,
+        "wins": 0,
+        "losses": 1,
+        "ties": 0,
+        "statistic": 0.0,
+        "p_value": 1.0,
+        "per_fold": {
+          "VolleyBallTest4.reslam": -0.04107931452326652
+        }
+      },
+      "f1": {
+        "mean_delta": -0.0059212779443618135,
+        "std_delta": null,
+        "median_delta": -0.0059212779443618135,
+        "wins": 0,
+        "losses": 1,
+        "ties": 0,
+        "statistic": 0.0,
+        "p_value": 1.0,
+        "per_fold": {
+          "VolleyBallTest4.reslam": -0.0059212779443618135
+        }
+      },
+      "precision": {
+        "mean_delta": 0.0479997069359368,
+        "std_delta": null,
+        "median_delta": 0.0479997069359368,
+        "wins": 1,
+        "losses": 0,
+        "ties": 0,
+        "statistic": 0.0,
+        "p_value": 1.0,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.0479997069359368
+        }
+      },
+      "recall": {
+        "mean_delta": -0.012697022767075294,
+        "std_delta": null,
+        "median_delta": -0.012697022767075294,
+        "wins": 0,
+        "losses": 1,
+        "ties": 0,
+        "statistic": 0.0,
+        "p_value": 1.0,
+        "per_fold": {
+          "VolleyBallTest4.reslam": -0.012697022767075294
+        }
+      }
+    },
+    {
+      "baseline": "cls-both",
+      "variant": "cls-keeppos",
+      "question": "Does keeping every rock example, at the same phantom dose, change the recipe's score?",
+      "n_folds": 1,
+      "folds": [
+        "VolleyBallTest4.reslam"
+      ],
+      "pr_auc": {
+        "mean_delta": -4.321115664807085e-05,
+        "std_delta": null,
+        "median_delta": -4.321115664807085e-05,
+        "wins": 0,
+        "losses": 1,
+        "ties": 0,
+        "statistic": 0.0,
+        "p_value": 1.0,
+        "per_fold": {
+          "VolleyBallTest4.reslam": -4.321115664807085e-05
+        }
+      },
+      "norm_pr_auc": {
+        "mean_delta": -5.3902769884373036e-05,
+        "std_delta": null,
+        "median_delta": -5.3902769884373036e-05,
+        "wins": 0,
+        "losses": 1,
+        "ties": 0,
+        "statistic": 0.0,
+        "p_value": 1.0,
+        "per_fold": {
+          "VolleyBallTest4.reslam": -5.3902769884373036e-05
+        }
+      },
+      "roc_auc": {
+        "mean_delta": -0.0010282397639417296,
+        "std_delta": null,
+        "median_delta": -0.0010282397639417296,
+        "wins": 0,
+        "losses": 1,
+        "ties": 0,
+        "statistic": 0.0,
+        "p_value": 1.0,
+        "per_fold": {
+          "VolleyBallTest4.reslam": -0.0010282397639417296
+        }
+      },
+      "f1": {
+        "mean_delta": 0.009758557122139688,
+        "std_delta": null,
+        "median_delta": 0.009758557122139688,
+        "wins": 1,
+        "losses": 0,
+        "ties": 0,
+        "statistic": 0.0,
+        "p_value": 1.0,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.009758557122139688
+        }
+      },
+      "precision": {
+        "mean_delta": -0.007053825317792972,
+        "std_delta": null,
+        "median_delta": -0.007053825317792972,
+        "wins": 0,
+        "losses": 1,
+        "ties": 0,
+        "statistic": 0.0,
+        "p_value": 1.0,
+        "per_fold": {
+          "VolleyBallTest4.reslam": -0.007053825317792972
+        }
+      },
+      "recall": {
+        "mean_delta": 0.01094570928196148,
+        "std_delta": null,
+        "median_delta": 0.01094570928196148,
+        "wins": 1,
+        "losses": 0,
+        "ties": 0,
+        "statistic": 0.0,
+        "p_value": 1.0,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.01094570928196148
+        }
+      }
+    },
+    {
+      "baseline": "cls-both",
+      "variant": "cls-qz",
+      "question": "Does telling the classifier how high its candidate sits help?",
+      "n_folds": 1,
+      "folds": [
+        "VolleyBallTest4.reslam"
+      ],
+      "pr_auc": {
+        "mean_delta": -0.025825704413098727,
+        "std_delta": null,
+        "median_delta": -0.025825704413098727,
+        "wins": 0,
+        "losses": 1,
+        "ties": 0,
+        "statistic": 0.0,
+        "p_value": 1.0,
+        "per_fold": {
+          "VolleyBallTest4.reslam": -0.025825704413098727
+        }
+      },
+      "norm_pr_auc": {
+        "mean_delta": -0.03221568479220366,
+        "std_delta": null,
+        "median_delta": -0.03221568479220366,
+        "wins": 0,
+        "losses": 1,
+        "ties": 0,
+        "statistic": 0.0,
+        "p_value": 1.0,
+        "per_fold": {
+          "VolleyBallTest4.reslam": -0.03221568479220366
+        }
+      },
+      "roc_auc": {
+        "mean_delta": -0.056118821051657,
+        "std_delta": null,
+        "median_delta": -0.056118821051657,
+        "wins": 0,
+        "losses": 1,
+        "ties": 0,
+        "statistic": 0.0,
+        "p_value": 1.0,
+        "per_fold": {
+          "VolleyBallTest4.reslam": -0.056118821051657
+        }
+      },
+      "f1": {
+        "mean_delta": 0.0026245250338178816,
+        "std_delta": null,
+        "median_delta": 0.0026245250338178816,
+        "wins": 1,
+        "losses": 0,
+        "ties": 0,
+        "statistic": 0.0,
+        "p_value": 1.0,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.0026245250338178816
+        }
+      },
+      "precision": {
+        "mean_delta": 0.021781851129415886,
+        "std_delta": null,
+        "median_delta": 0.021781851129415886,
+        "wins": 1,
+        "losses": 0,
+        "ties": 0,
+        "statistic": 0.0,
+        "p_value": 1.0,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.021781851129415886
+        }
+      },
+      "recall": {
+        "mean_delta": -0.0008756567425569073,
+        "std_delta": null,
+        "median_delta": -0.0008756567425569073,
+        "wins": 0,
+        "losses": 1,
+        "ties": 0,
+        "statistic": 0.0,
+        "p_value": 1.0,
+        "per_fold": {
+          "VolleyBallTest4.reslam": -0.0008756567425569073
+        }
+      }
+    },
+    {
+      "baseline": "cls-qz-plain",
+      "variant": "cls-qz",
+      "question": "Is the height input worth more once clutter negatives are present?",
+      "n_folds": 1,
+      "folds": [
+        "VolleyBallTest4.reslam"
+      ],
+      "pr_auc": {
+        "mean_delta": 0.013861053912318289,
+        "std_delta": null,
+        "median_delta": 0.013861053912318289,
+        "wins": 1,
+        "losses": 0,
+        "ties": 0,
+        "statistic": 0.0,
+        "p_value": 1.0,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.013861053912318289
+        }
+      },
+      "norm_pr_auc": {
+        "mean_delta": 0.017290654945330386,
+        "std_delta": null,
+        "median_delta": 0.017290654945330386,
+        "wins": 1,
+        "losses": 0,
+        "ties": 0,
+        "statistic": 0.0,
+        "p_value": 1.0,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.017290654945330386
+        }
+      },
+      "roc_auc": {
+        "mean_delta": 0.014931270763764992,
+        "std_delta": null,
+        "median_delta": 0.014931270763764992,
+        "wins": 1,
+        "losses": 0,
+        "ties": 0,
+        "statistic": 0.0,
+        "p_value": 1.0,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.014931270763764992
+        }
+      },
+      "f1": {
+        "mean_delta": 0.01045956500560713,
+        "std_delta": null,
+        "median_delta": 0.01045956500560713,
+        "wins": 1,
+        "losses": 0,
+        "ties": 0,
+        "statistic": 0.0,
+        "p_value": 1.0,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.01045956500560713
+        }
+      },
+      "precision": {
+        "mean_delta": 0.00574421853971252,
+        "std_delta": null,
+        "median_delta": 0.00574421853971252,
+        "wins": 1,
+        "losses": 0,
+        "ties": 0,
+        "statistic": 0.0,
+        "p_value": 1.0,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.00574421853971252
+        }
+      },
+      "recall": {
+        "mean_delta": 0.009194395796847665,
+        "std_delta": null,
+        "median_delta": 0.009194395796847665,
+        "wins": 1,
+        "losses": 0,
+        "ties": 0,
+        "statistic": 0.0,
+        "p_value": 1.0,
+        "per_fold": {
+          "VolleyBallTest4.reslam": 0.009194395796847665
+        }
+      }
+    }
+  ],
+  "noise_floor_pr_auc": null
+}

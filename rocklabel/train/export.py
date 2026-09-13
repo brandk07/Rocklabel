@@ -33,7 +33,8 @@ meta = json.load(open("metadata.json"))
 model = torch.jit.load("model.torchscript.pt").eval()
 
 n, p = 8, meta["input"]["points_per_sample"]
-points = np.random.rand(n, p, 4).astype(np.float32)  # stand-in for real samples
+c = meta["input"]["input_channels"]
+points = np.random.rand(n, p, c).astype(np.float32)  # stand-in for real samples
 counts = np.full(n, p, dtype=np.int64)
 
 with torch.no_grad():
@@ -70,7 +71,8 @@ def export_model(checkpoint_path: str, out_dir: str) -> None:
     os.makedirs(out_dir, exist_ok=True)
     task = model_task(cfg["model"])
     n_pts = int(gcfg["segmentation_points" if task == "segment" else "neighborhood_points"])
-    ex_pts = torch.zeros(2, n_pts, 4)
+    n_ch = int(getattr(model, "input_channels", len(FEATURES)))
+    ex_pts = torch.zeros(2, n_pts, n_ch)
     ex_cnt = torch.full((2,), n_pts, dtype=torch.long)
 
     # Trace rather than script: control flow (FPS loop, T-Net toggles) is
@@ -95,7 +97,9 @@ def export_model(checkpoint_path: str, out_dir: str) -> None:
         "task": "binary rock classification (per neighborhood sample)",
         "input": {
             "points_per_sample": n_pts,
-            "points": f"[batch, {n_pts}, 4] float32, channels [dx, dy, dz, intensity]",
+            "input_channels": n_ch,
+            "points": f"[batch, {n_pts}, {n_ch}] float32, channels "
+                      + str(list(FEATURES) + (["query_height"] if n_ch > len(FEATURES) else [])),
             "counts": "[batch] int64, number of real (non-padded) points; pass "
                       f"{n_pts} if unknown",
             "neighborhood_points": n_pts,
@@ -114,9 +118,14 @@ def export_model(checkpoint_path: str, out_dir: str) -> None:
             "neighborhood_points points: pad by repeating real points AFTER them "
             "(real points come first); if more: random subsample. Inputs are already "
             "canonicalized - do not re-center or re-normalize."
+            + ("" if n_ch <= len(FEATURES) else
+               " Channel 4 (query_height) is the candidate center's own z minus "
+               "that same neighborhood minimum, repeated on every row of the "
+               "sample. Take the minimum over the WHOLE ball, before any "
+               "subsampling, exactly as dz is taken.")
             + ("" if not ignored else
                f" This model was trained on {used} only: the shape stays [B, "
-               f"{n_pts}, 4] but {ignored} is selected out inside the model, so "
+               f"{n_pts}, {n_ch}] but {ignored} is selected out inside the model, so "
                "you may pass anything (zeros included) in those channels.")
         ),
         "output": "rock probability in [0, 1] (sigmoid applied)",
@@ -158,7 +167,7 @@ def export_model(checkpoint_path: str, out_dir: str) -> None:
 
     # Round-trip check: TorchScript must reproduce the eager model.
     with torch.no_grad():
-        pts = torch.randn(3, n_pts, 4)
+        pts = torch.randn(3, n_pts, int(getattr(model, "input_channels", len(FEATURES))))
         cnt = torch.tensor([min(40, n_pts), n_pts, min(100, n_pts)])
         a, b = wrapped(pts, cnt), ts(pts, cnt)
     if not torch.allclose(a, b, atol=1e-5):

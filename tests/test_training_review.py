@@ -200,3 +200,32 @@ def test_segmenter_export_uses_whole_frame_contract(tmp_path, monkeypatch):
     assert "neighborhood_radius_m" not in meta["input"]
     assert "segmentation" in meta["task"]
     assert "robot-base" in meta["preprocessing_contract"]
+
+
+def test_qz_export_declares_the_extra_channel(tmp_path):
+    """A consumer outside this repo has to be told the sample is five wide and
+    what the fifth number means, or it will pass four and get nothing."""
+    import json
+
+    import torch
+
+    from rocklabel.train.export import export_model
+    from rocklabel.train.models import build_model
+
+    model = build_model("pointnet_qz", features=["dx", "dy", "dz"])
+    ck = tmp_path / "best.pt"
+    torch.save({"model": model.state_dict(),
+                "config": {"model": "pointnet_qz", "tnet": False, "dropout": None,
+                           "features": ["dx", "dy", "dz"], "train_runs": ["r1"],
+                           "test_run": "r2", "seed": 42, "augment": True},
+                "config_hash": "deadbeef", "epoch": 0, "threshold": 0.5,
+                "generator": {"neighborhood_points": 64, "neighborhood_radius_m": 0.5,
+                              "centers_voxel_m": 0.05, "min_neighbors": 20,
+                              "segmentation_points": 2048,
+                              "segmentation_min_points": 512}}, ck)
+    out = tmp_path / "exported"
+    export_model(str(ck), str(out))          # raises if the round-trip diverges
+    meta = json.loads((out / "metadata.json").read_text())
+    assert meta["input"]["input_channels"] == 5
+    assert "query_height" in meta["input"]["points"]
+    assert "query_height" in meta["preprocessing_contract"]
