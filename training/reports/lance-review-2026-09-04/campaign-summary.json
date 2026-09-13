@@ -1,0 +1,23 @@
+{
+  "training_complete": 36,
+  "audits_complete": 36,
+  "volleyball_mean_ap": {
+    "pointnet-stray": {
+      "n": 9,
+      "mean": 0.7023333404898404
+    },
+    "pointnet-matched": {
+      "n": 9,
+      "mean": 0.7203582515262188
+    },
+    "stats-stray": {
+      "n": 9,
+      "mean": 0.7188523788825973
+    },
+    "stats-matched": {
+      "n": 9,
+      "mean": 0.7157268146807289
+    }
+  },
+  "scope": "Three volleyball folds and three seeds per arm. Lance audits use independent five-second accumulated maps selected across the recording, with equal physical-rock weight and legacy 3D attribution. Oracle thresholds are fitted on evaluation data. Tables do not certify visual inspection or select a winner."
+}

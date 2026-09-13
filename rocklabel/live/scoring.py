@@ -136,7 +136,7 @@ class LiveScorer:
     ) -> None:
         import torch  # lazy: only --model runs need the training extra
 
-        from rocklabel.train.models import build_model, model_task
+        from rocklabel.train.models import build_model_from_config, model_task
 
         self._torch = torch
         self._engine = engine
@@ -185,22 +185,7 @@ class LiveScorer:
         self._device = torch.device(
             device or ("cuda" if torch.cuda.is_available() else "cpu")
         )
-        self._model = build_model(
-            self._tcfg["model"],
-            tnet=self._tcfg["tnet"],
-            dropout=self._tcfg.get("dropout"),
-            features=self._tcfg.get("features"),
-            seg_npoints=self._tcfg.get("seg_npoints"),
-            seg_radii=self._tcfg.get("seg_radii"),
-            # This is part of the checkpoint's input contract, just like the
-            # feature list and level geometry.  Omitting it silently rebuilt a
-            # floor-referenced segmenter in the legacy base-relative mode: the
-            # weights still loaded because the setting changes no tensor
-            # shapes, but every live prediction was made from the wrong z
-            # values.
-            seg_height_ref=self._tcfg.get("seg_height_ref"),
-            seg_coord_ref=self._tcfg.get("seg_coord_ref"),
-        )
+        self._model = build_model_from_config(self._tcfg)
         self._model.load_state_dict(ck["model"])
         self._model.eval().to(self._device)
 
@@ -426,7 +411,9 @@ class LiveScorer:
         0.07, 0.50 m -> 0.017, and the 0.70 m the floor-band preset lets in ->
         0.015 with six points over threshold in twelve frames. Thinning the cloud
         to the same point count changes nothing, so it is the extra structure and
-        not the sampling. Narrow the z band until this clears.
+        not the sampling. A narrower diagnostic crop can test this shift, but
+        may also remove obstacles; clearing this warning does not validate a
+        deployment band.
         """
         from rocklabel.train.models import frame_height_span
 
@@ -441,7 +428,7 @@ class LiveScorer:
         self.height_warning = (
             f"the z band is letting in {here:.2f} m of vertical structure but "
             f"this model trained on frames holding {lo:.2f}..{hi:.2f} m - "
-            "narrow z min/max towards the floor or it will report no rocks"
+            "predictions may miss rocks; use a model validated for the required floor band"
         )
 
     def _score_once(self) -> None:

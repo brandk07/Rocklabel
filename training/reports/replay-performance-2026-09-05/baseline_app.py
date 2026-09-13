@@ -285,11 +285,6 @@ class VizApp(PivotCamera):
 
         self._tick_stop = threading.Event()
         self._tick_thread: threading.Thread | None = None
-        # Open3D's main-thread queue is unbounded. A growing accumulated cloud
-        # can take longer to recolor/upload than the 50 ms display period;
-        # posting every tick then starves interaction behind obsolete redraws.
-        self._update_pending_lock = threading.Lock()
-        self._update_pending = False
         self._last_console_stat = 0.0
 
         # Materials (created once the Application is initialized).
@@ -1039,29 +1034,7 @@ class VizApp(PivotCamera):
         return True
 
     def _post_update(self) -> None:
-        """Keep at most one queued or executing redraw; it reads fresh state."""
-        with self._update_pending_lock:
-            if self._update_pending or self._tick_stop.is_set():
-                return
-            self._update_pending = True
-
-        def update():
-            try:
-                if not self._tick_stop.is_set():
-                    self._update_scene()
-            finally:
-                with self._update_pending_lock:
-                    self._update_pending = False
-
-        try:
-            posted = self.post(update)
-        except Exception:
-            with self._update_pending_lock:
-                self._update_pending = False
-            raise
-        if not posted:
-            with self._update_pending_lock:
-                self._update_pending = False
+        self.post(self._update_scene)
 
     def _mirror(self, method: str, *args) -> None:
         """Apply the same change to the paired comparison window.
@@ -1432,8 +1405,13 @@ class VizApp(PivotCamera):
     # ------------------------------------------------------------------ #
     def _tick_loop(self) -> None:
         period = 1.0 / self._fps
-        while not self._tick_stop.wait(period):
-            self._post_update()
+        app = gui.Application.instance
+        while not self._tick_stop.is_set():
+            time.sleep(period)
+            if self._tick_stop.is_set():
+                break
+            if self._window is not None:
+                app.post_to_main_thread(self._window, self._update_scene)
 
     # -- coloring ------------------------------------------------------------ #
     def _model_colors(self, pts: np.ndarray) -> np.ndarray:

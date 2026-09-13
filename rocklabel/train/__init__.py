@@ -100,6 +100,9 @@ TRAIN_DEFAULTS: dict = {
     # Vertical extent (m) of a synthetic clump, drawn 0.5-1.5x this. 0.54 m is
     # what a phantom-centred ball measured on the competition arena.
     "aug_phantom_extent": 0.54,
+    # "matched" retains positives and uses each clear sample's count, with
+    # diffuse negatives generated inside the candidate ball. Opt-in research.
+    "aug_phantom_mode": "legacy",
     # BEV CNN only: the grid it rasterizes onto and the size of the network
     # over it. 0.10 m cells match the stored BEV rasters; a 144-cell grid
     # (+/- 7.2 m) holds every cached frame under any heading rotation, which

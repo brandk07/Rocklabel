@@ -78,3 +78,36 @@ CLAUDE.md
 .idea/
 tempCodeRunnerFile.py
 .DS_Store
+
+# ---------------------------------------------------------------------------
+# Re-block scratch inside the folders un-ignored above.
+#
+# Git resolves each path by the LAST rule that matches it, so the
+# "!training/reports/**" line above re-includes everything under that folder —
+# including the __pycache__ folders, *.npz arrays and *.pyc files the general
+# rules near the top of this file were written to catch. That hole is why
+# git status filled up with hundreds of files that were never meant to be
+# offered for commit. These rules sit at the end of the file so they win.
+# ---------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.npy
+*.npz
+
+# Everything a review or ablation run dumps beside its write-up: the per-run
+# numbers, the rendered figures and maps, and the scratch state files it
+# leaves behind. One review folder is ~145 MB across 150-odd files of this,
+# against roughly two dozen in the same folder actually worth reading, and all
+# of it regenerates from the scripts sitting next to it.
+#
+# What survives is what a person reads or runs: the *.md write-ups and the
+# *.py analysis scripts, neither of which is matched here.
+training/reports/**/*.csv
+training/reports/**/*.png
+training/reports/**/*.svg
+training/reports/**/*.json
+
+# ...except the summary file each report writes. It is the machine-readable
+# half of the same conclusion the write-up states in prose, and it is how you
+# know what a sweep concluded without retraining it.
+!training/reports/**/*summary.json

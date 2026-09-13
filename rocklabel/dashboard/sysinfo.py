@@ -68,15 +68,17 @@ def _ping(host: str, timeout_s: float = 1.0) -> dict:
 
 def _listen(port: int, bind: str = "", seconds: float = _LISTEN_SEC) -> dict:
     """Count Compact datagrams on ``port``. Never steals from a live job."""
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock = None
     try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         if hasattr(socket, "SO_REUSEPORT"):
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
         sock.settimeout(0.15)
         sock.bind((bind, port))
     except OSError as e:
-        sock.close()
+        if sock is not None:
+            sock.close()
         return {"streaming": None, "packets": 0, "bytes": 0,
                 "detail": f"cannot bind udp/{port}: {e}"}
 

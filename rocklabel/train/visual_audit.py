@@ -61,6 +61,7 @@ class ModelResult:
     hot_cells: set[tuple[int, int]]
     false_cells: int
     false_components: int
+    boundary_shell_m: float = 0.05
 
 
 def cell_ids(xy: np.ndarray, cell_m: float) -> np.ndarray:
@@ -70,6 +71,25 @@ def cell_ids(xy: np.ndarray, cell_m: float) -> np.ndarray:
 
 def cell_set(xy: np.ndarray, cell_m: float) -> set[tuple[int, int]]:
     return {tuple(v) for v in cell_ids(xy, cell_m)}
+
+
+def projected_rock_labels(positions: np.ndarray, rocks, shell_m: float) -> np.ndarray:
+    """Labels against annotated XY footprints, independent of representative z.
+
+    A max-probability ground-cell representative can switch from a floating
+    point to a lower rock point when a filter removes the former. Its occupied
+    footprint did not improve. Keep this measure separate from 3D attribution.
+    """
+    positions = np.asarray(positions, dtype=float)
+    on = np.zeros(len(positions), dtype=bool)
+    near = on.copy()
+    for rock in rocks:
+        projected = positions.copy()
+        projected[:, 2] = (np.mean(rock.z_range) if rock.shape == "polygon"
+                            else rock.center[2])
+        on |= points_in_rock(projected, rock)
+        near |= points_in_rock(projected, rock, grow_m=shell_m)
+    return np.where(on, 1, np.where(near, -1, LABEL_CLEAR)).astype(np.int8)
 
 
 def connected_components(cells: Iterable[tuple[int, int]]) -> int:
@@ -269,18 +289,11 @@ def collect_intervals(recording: str, labels: LabelSet, labels_path: str, cfg: d
 
 def _load_checkpoint(path: str, device):
     import torch
-    from .models import build_model, model_task
+    from .models import build_model_from_config, model_task
 
     ck = torch.load(path, map_location="cpu", weights_only=False)
     c, g = ck["config"], ck["generator"]
-    model = build_model(
-        c["model"], tnet=c.get("tnet", False), dropout=c.get("dropout"),
-        features=c.get("features"), seg_npoints=c.get("seg_npoints"),
-        seg_radii=c.get("seg_radii"), seg_height_ref=c.get("seg_height_ref"),
-        seg_coord_ref=c.get("seg_coord_ref"), bev_cell=c.get("bev_cell"),
-        bev_grid=c.get("bev_grid"), bev_width=c.get("bev_width"),
-        bev_depth=c.get("bev_depth"), bev_channels=c.get("bev_channels"),
-        bev_density_norm=c.get("bev_density_norm"))
+    model = build_model_from_config(c)
     model.load_state_dict(ck["model"])
     model.eval().to(device)
     return {
@@ -319,7 +332,7 @@ def _score_interval(interval: AuditInterval, loaded: dict, device, batch: int,
         false = set()
     return ModelResult(loaded["path"], loaded["name"], loaded["task"],
                        loaded["threshold"], cells, hot_cells, len(false),
-                       connected_components(false))
+                       connected_components(false), float(g.get("boundary_shell_m", 0.05)))
 
 
 def _rock_outline(ax, rock: Rock, color: str, linewidth: float = 1.5) -> None:
@@ -336,6 +349,54 @@ def _rock_outline(ax, rock: Rock, color: str, linewidth: float = 1.5) -> None:
         patch = Circle(rock.center[:2], rock.radius, fill=False,
                        edgecolor=color, linewidth=linewidth)
     ax.add_patch(patch)
+
+
+def operating_point_rows(intervals, scored, labels, cell_m, min_coverage,
+                         min_visible_points, thresholds=None):
+    """Diagnostic threshold sweep, giving each physical rock equal weight.
+
+    Thresholds use these audit data, so equal-FP choices are oracle diagnostics,
+    not deployable calibrated thresholds. Reuse inference; never resample points.
+    """
+    if thresholds is None:
+        tail = np.logspace(-6, -2, 9)
+        own = [r.threshold for results in scored.values() for r in results]
+        thresholds = np.unique(np.r_[tail, np.linspace(.01, .99, 99), 1-tail, 1., own])
+    thresholds = np.asarray(thresholds)
+    rows = []
+    for model_index, model_key in enumerate(("model_a", "model_b")):
+        coverage_by_rock = {}
+        false_by_interval = []
+        for interval in intervals:
+            result = scored[interval.sequence][model_index]
+            cells = result.cells
+            pred_labels = label_rocks(cells.positions, labels.rocks, result.boundary_shell_m)
+            hot = cells.probabilities[:, None] >= thresholds[None, :]
+            false_by_interval.append(hot[pred_labels == LABEL_CLEAR].sum(axis=0))
+            raw = np.concatenate([f.xyz for f in interval.frames])
+            for rock in labels.rocks:
+                if interval.visible_points.get(rock.id, 0) < min_visible_points:
+                    continue
+                visible = cell_set(raw[points_in_rock(raw, rock), :2], cell_m)
+                on = points_in_rock(cells.positions, rock)
+                supported = on & np.array([tuple(k) in visible for k in cells.cell_ids], dtype=bool)
+                coverage = hot[supported].sum(axis=0) / max(len(visible), 1)
+                coverage_by_rock.setdefault(rock.id, []).append(coverage)
+        medians = np.stack([np.median(v, axis=0) for v in coverage_by_rock.values()])
+        best = np.stack([np.max(v, axis=0) for v in coverage_by_rock.values()])
+        worst = np.stack([np.min(v, axis=0) for v in coverage_by_rock.values()])
+        false = np.stack(false_by_interval)
+        for i, threshold in enumerate(thresholds):
+            rows.append({"model": model_key, "threshold": float(threshold),
+                         "audited_rocks": len(medians),
+                         "macro_median_coverage": float(medians[:, i].mean()),
+                         "worst_rock_median_coverage": float(medians[:, i].min()),
+                         "persistent_misses": int((best[:, i] < min_coverage).sum()),
+                         "rocks_detected_every_interval": int((worst[:, i] >= min_coverage).sum()),
+                         "mean_false_cells": float(false[:, i].mean()),
+                         "max_false_cells": int(false[:, i].max()),
+                         "mean_false_area_m2": float(false[:, i].mean() * cell_m ** 2)})
+    return rows
 
 
 def _draw_panel(ax, raw: np.ndarray, labels: LabelSet, target: Rock,
@@ -552,7 +613,8 @@ def _write_reports(out_dir: str, settings: dict, checkpoints: list[dict],
              f"Floor band: `{settings['floor_band'][0]:+.2f}…"
              f"{settings['floor_band'][1]:+.2f} m`  \n",
              f"Accumulation: `{settings['accum_seconds']:.1f} s`  \n",
-             f"Complete detection threshold: `{settings['min_coverage']:.0%}` coverage\n\n",
+             f"Detection flag threshold: `{settings['min_coverage']:.0%}` coverage "
+             "(not a map-completeness or collision-avoidance criterion)\n\n",
              "| model | task | stored threshold | checkpoint |\n",
              "|---|---|---:|---|\n"]
     for i, ck in enumerate(checkpoints):
@@ -720,11 +782,29 @@ def run_visual_audit(recording: str, labels_path: str, model_a: str, model_b: st
         "material_gap": material_gap, "cell_m": cell_m,
         "start_s": start_s, "end_s": end_s,
         "device": str(dev),
+        "filtering": "none: live floating/outlier filters are not applied",
+        "unaudited_rock_ids": sorted({r.id for r in labels.rocks} - {r["rock_id"] for r in per_rock}),
     }
     checkpoints = [{k: m[k] for k in ("path", "name", "task", "threshold")}
                    for m in loaded]
     _write_reports(out_dir, settings, checkpoints, observations, per_rock, cases,
                    comparison, model_keys)
+    rows = operating_point_rows(intervals, scored, labels, cell_m, min_coverage,
+                                min_visible_points)
+    with open(os.path.join(out_dir, "operating-points.csv"), "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+    with open(os.path.join(out_dir, "summary.md"), "a") as f:
+        f.write("\n## Evaluation scope and threshold diagnostics\n\n"
+                "This is an unfiltered model-input audit. Live floating-point rejection "
+                "and heightmap outlier rejection are not applied. The sampled, independent "
+                "5-second maps do not measure full-run stale detections or stopping latency.\n\n"
+                f"Labelled rocks without auditable intervals: {settings['unaudited_rock_ids']}.\n\n"
+                "[Operating-point sweep](operating-points.csv) holds inference fixed and "
+                "reports coverage and false area separately from stored-threshold results. "
+                "Equal-false-positive thresholds chosen from this table are diagnostics "
+                "fitted on the evaluation recording, not validated deployment thresholds.\n")
     print(f"wrote visual audit to {out_dir}")
     return {"settings": settings, "checkpoints": checkpoints,
             "observations": observations, "per_rock": per_rock,

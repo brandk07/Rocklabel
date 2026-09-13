@@ -47,7 +47,7 @@ ABLATE_PASSTHROUGH = ("epochs", "batch", "lr", "weight_decay", "patience",
                       "val_frac", "gap_frames", "gap_seconds", "augment",
                       "aug_intensity_gain", "aug_intensity_shift", "aug_thin_min",
                       "aug_ground_tilt", "aug_stray_frac", "aug_stray_reach",
-                      "aug_phantom_frac", "aug_phantom_extent",
+                      "aug_phantom_frac", "aug_phantom_extent", "aug_phantom_mode",
                       "bev_cell", "bev_grid", "bev_width", "bev_depth",
                       "bev_channels", "pos_weight_cap",
                       "seg_npoints", "seg_radii", "seg_height_ref",
@@ -88,10 +88,11 @@ def _settings_match(run_dir: str, cfg: dict) -> bool:
     old.setdefault("aug_stray_reach", TRAIN_DEFAULTS["aug_stray_reach"])
     old.setdefault("aug_phantom_frac", TRAIN_DEFAULTS["aug_phantom_frac"])
     old.setdefault("aug_phantom_extent", TRAIN_DEFAULTS["aug_phantom_extent"])
+    old.setdefault("aug_phantom_mode", TRAIN_DEFAULTS["aug_phantom_mode"])
     # Runs predating the BEV CNN carry none of its settings; filling the
     # defaults in keeps them resumable rather than reading as a settings change.
     for key in ("bev_cell", "bev_grid", "bev_width", "bev_depth",
-                "bev_channels", "pos_weight_cap"):
+                "bev_channels", "bev_density_norm", "pos_weight_cap"):
         old.setdefault(key, TRAIN_DEFAULTS[key])
     return old == cfg
 
@@ -262,6 +263,9 @@ def _add_train_args(p: argparse.ArgumentParser) -> None:
              "own lowest point the median training ball spans under 0.12 m "
              "vertically. Reach for it when a model fires on mid-air clutter. "
              "0 = off")
+    opt("--aug-phantom-mode", choices=("legacy", "matched"),
+        help="phantom generation: legacy sparse replacements, or matched-count "
+             "diffuse negatives that preserve every positive")
     opt("--aug-phantom-extent", type=float, metavar="M",
         help="vertical extent (m) of a synthetic phantom clump, drawn 0.5-1.5x "
              "this. Default 0.54 is what a phantom-centred ball measured on the "
@@ -312,6 +316,7 @@ def _train_cfg(args, model: str, train_runs: list[str], test_run: str) -> dict:
         aug_stray_reach=args.aug_stray_reach,
         aug_phantom_frac=args.aug_phantom_frac,
         aug_phantom_extent=args.aug_phantom_extent,
+        aug_phantom_mode=args.aug_phantom_mode,
         aug_intensity_gain=args.aug_intensity_gain,
         aug_intensity_shift=args.aug_intensity_shift,
         aug_thin_min=args.aug_thin_min,

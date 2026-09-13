@@ -169,6 +169,55 @@ def _ortho_penalty(t: torch.Tensor) -> torch.Tensor:
     return ((torch.bmm(t, t.transpose(1, 2)) - eye) ** 2).sum(dim=(1, 2)).mean()
 
 
+class PointNetStats(nn.Module):
+    """Experimental classifier retaining support beyond feature maxima.
+
+    Pool max, mean and spread in the whole ball and its central 15 cm disk.
+    Fractions describe relative spatial support, never raw sensor density.
+    Per-point LayerNorm keeps duplicate padding out of training statistics.
+    The input and height reference match existing classifier checkpoints.
+    """
+
+    def __init__(self, dropout: float = 0.3, features=None):
+        super().__init__()
+        self.features = resolve_features(features)
+        if self.features[:3] != list(GEOMETRY):
+            raise ValueError("pointnet_stats requires dx, dy, dz geometry")
+        self.register_buffer("feature_idx", _feature_buffer(self.features), persistent=False)
+        layers = []
+        for a, b in zip([len(self.features), 64, 128], [64, 128, 256]):
+            layers += [nn.Linear(a, b), nn.LayerNorm(b), nn.ReLU()]
+        self.mlp = nn.Sequential(*layers)
+        self.head = nn.Sequential(
+            nn.Linear(256 * 6 + 1, 256), nn.LayerNorm(256), nn.ReLU(),
+            nn.Dropout(dropout), nn.Linear(256, 128), nn.ReLU(),
+            nn.Dropout(dropout), nn.Linear(128, 1))
+
+    @staticmethod
+    def _pool(x, mask):
+        weight = mask[..., None].to(x.dtype)
+        count = weight.sum(dim=1).clamp_min(1)
+        mean = (x * weight).sum(dim=1) / count
+        var = ((x - mean[:, None]).square() * weight).sum(dim=1) / count
+        maximum = x.masked_fill(~mask[..., None], -torch.inf).amax(dim=1)
+        maximum = torch.where(mask.any(dim=1, keepdim=True), maximum, 0.0)
+        return torch.cat([maximum, mean, (var + 1e-6).sqrt()], dim=1)
+
+    def forward(self, points, counts):
+        mask = valid_mask(counts, points.shape[1])
+        # Sanitize padding before the MLP as well as masking its pooled values.
+        selected = points.index_select(-1, self.feature_idx)
+        selected = selected.masked_fill(~mask[..., None], 0.0)
+        x = self.mlp(selected)
+        center = mask & (points[..., :2].square().sum(dim=-1) <= 0.15 ** 2)
+        fraction = center.sum(dim=1, keepdim=True) / mask.sum(dim=1, keepdim=True).clamp_min(1)
+        pooled = torch.cat([self._pool(x, mask), self._pool(x, center), fraction], dim=1)
+        return self.head(pooled).squeeze(-1)
+
+    def pop_regularizer(self):
+        return next(self.parameters()).new_zeros(())
+
+
 # ===========================================================================
 # PointNet++ (single-scale grouping)
 # ===========================================================================
@@ -311,7 +360,9 @@ def _knn_group(xyz: torch.Tensor, centroids: torch.Tensor, radius: float,
     silently changing those results.
     """
     d = torch.cdist(centroids, xyz)                       # [B, S, N]
-    val, idx = torch.topk(d, nsample, dim=-1, largest=False)
+    # Configurable small abstraction levels may contain fewer than nsample
+    # centroids. Pool the available neighbors instead of failing in topk.
+    val, idx = torch.topk(d, min(nsample, xyz.shape[1]), dim=-1, largest=False)
     return torch.where(val > radius, idx[..., :1], idx)
 
 
@@ -727,6 +778,19 @@ class BEVCNN(nn.Module):
         return torch.zeros((), device=next(self.parameters()).device)
 
 
+def build_model_from_config(config: dict) -> nn.Module:
+    """Rebuild the complete input contract, including settings without weights.
+
+    Keep every checkpoint consumer on this path: density normalization and
+    coordinate references can change predictions without changing weight shapes.
+    Missing keys retain build_model's historical checkpoint defaults.
+    """
+    keys = ("tnet", "dropout", "features", "seg_npoints", "seg_radii",
+            "seg_height_ref", "seg_coord_ref", "bev_cell", "bev_grid",
+            "bev_width", "bev_depth", "bev_channels", "bev_density_norm")
+    return build_model(config["model"], **{k: config[k] for k in keys if k in config})
+
+
 def build_model(name: str, tnet: bool = False, dropout: float | None = None,
                 features: list[str] | None = None,
                 seg_npoints=None, seg_radii=None,
@@ -749,6 +813,10 @@ def build_model(name: str, tnet: bool = False, dropout: float | None = None,
     if name == "pointnet":
         return PointNet(tnet=tnet, dropout=0.3 if dropout is None else dropout,
                         features=features)
+    if name == "pointnet_stats":
+        if tnet:
+            raise ValueError("pointnet_stats does not use T-Nets")
+        return PointNetStats(dropout=0.3 if dropout is None else dropout, features=features)
     if name == "pointnet2":
         return PointNetPP(dropout=0.4 if dropout is None else dropout,
                           features=features)

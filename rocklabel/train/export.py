@@ -15,16 +15,14 @@ from datetime import datetime, timezone
 
 import torch
 
-from .models import FEATURES, build_model
+from .models import FEATURES, build_model_from_config, model_task
 
 EXAMPLE = '''\
 """Standalone scoring example - needs only torch (or onnxruntime), not rocklabel.
 
-Input contract (see metadata.json): raw [N, 256, 4] float32 neighborhoods
-exactly as produced by the rocklabel generator - [dx, dy, dz, intensity] with
-dx/dy relative to the sample center, dz relative to the neighborhood's lowest
-point, already canonicalized (do NOT re-center or re-normalize). counts[i] is
-the number of real (non-padded) points; use 256 if unknown.
+Read preprocessing_contract in metadata.json: classifiers use neighborhoods;
+segmenters use whole frames relative to the robot base. Do not interchange
+these layouts. Valid points must precede padding, and counts must be supplied.
 """
 import json
 
@@ -34,7 +32,7 @@ import torch
 meta = json.load(open("metadata.json"))
 model = torch.jit.load("model.torchscript.pt").eval()
 
-n, p = 8, meta["input"]["neighborhood_points"]
+n, p = 8, meta["input"]["points_per_sample"]
 points = np.random.rand(n, p, 4).astype(np.float32)  # stand-in for real samples
 counts = np.full(n, p, dtype=np.int64)
 
@@ -65,17 +63,13 @@ class InferenceModel(torch.nn.Module):
 def export_model(checkpoint_path: str, out_dir: str) -> None:
     ck = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     cfg, gcfg = ck["config"], ck["generator"]
-    model = build_model(cfg["model"], tnet=cfg["tnet"], dropout=cfg.get("dropout"),
-                        features=cfg.get("features"),
-                        seg_npoints=cfg.get("seg_npoints"),
-                        seg_radii=cfg.get("seg_radii"),
-                        seg_height_ref=cfg.get("seg_height_ref"),
-                        seg_coord_ref=cfg.get("seg_coord_ref"))
+    model = build_model_from_config(cfg)
     model.load_state_dict(ck["model"])
     wrapped = InferenceModel(model).eval()
 
     os.makedirs(out_dir, exist_ok=True)
-    n_pts = int(gcfg["neighborhood_points"])
+    task = model_task(cfg["model"])
+    n_pts = int(gcfg["segmentation_points" if task == "segment" else "neighborhood_points"])
     ex_pts = torch.zeros(2, n_pts, 4)
     ex_cnt = torch.full((2,), n_pts, dtype=torch.long)
 
@@ -100,6 +94,7 @@ def export_model(checkpoint_path: str, out_dir: str) -> None:
         "model": cfg["model"],
         "task": "binary rock classification (per neighborhood sample)",
         "input": {
+            "points_per_sample": n_pts,
             "points": f"[batch, {n_pts}, 4] float32, channels [dx, dy, dz, intensity]",
             "counts": "[batch] int64, number of real (non-padded) points; pass "
                       f"{n_pts} if unknown",
@@ -138,6 +133,24 @@ def export_model(checkpoint_path: str, out_dir: str) -> None:
         },
         "exported": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
+    if task == "segment":
+        meta["task"] = "binary rock segmentation (per point in a whole frame)"
+        for key in ("neighborhood_points", "neighborhood_radius_m", "centers_voxel_m", "min_neighbors"):
+            meta["input"].pop(key)
+        meta["input"]["segmentation_points"] = n_pts
+        meta["input"]["segmentation_min_points"] = gcfg["segmentation_min_points"]
+        meta["input"]["counts"] = "[batch] int64, valid rows before repeat padding; ignore padded outputs"
+        meta["preprocessing_contract"] = (
+            "One whole cropped frame per sample. xyz = world-frame point minus "
+            "robot-base xyz; intensity uses the training stream's [0, 1] scale. "
+            "Subsample without replacement above segmentation_points; otherwise "
+            "append repeat padding after all valid rows. Keep the selected point "
+            "indices to map outputs back to world coordinates. The model applies "
+            "its saved height/coordinate reference internally. Never pass "
+            "classifier neighborhoods or subtract a neighborhood minimum.")
+        meta["output"] = f"[batch, {n_pts}] rock probabilities; only the first counts[i] rows are valid"
+    meta["generator"] = gcfg
+    meta["model_config"] = cfg
     with open(os.path.join(out_dir, "metadata.json"), "w") as f:
         json.dump(meta, f, indent=2)
     with open(os.path.join(out_dir, "infer_example.py"), "w") as f:
@@ -146,7 +159,7 @@ def export_model(checkpoint_path: str, out_dir: str) -> None:
     # Round-trip check: TorchScript must reproduce the eager model.
     with torch.no_grad():
         pts = torch.randn(3, n_pts, 4)
-        cnt = torch.tensor([40, n_pts, 100])
+        cnt = torch.tensor([min(40, n_pts), n_pts, min(100, n_pts)])
         a, b = wrapped(pts, cnt), ts(pts, cnt)
     if not torch.allclose(a, b, atol=1e-5):
         raise SystemExit("TorchScript output diverged from the eager model")

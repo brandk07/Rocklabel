@@ -21,7 +21,7 @@ import torch
 
 from ..dataset.neighborhoods import build_inference_frame, build_inference_samples
 from ..recording.pipeline import ScanStream, WindowedScanStream
-from .models import build_model, model_task
+from .models import build_model_from_config, model_task
 
 MAX_CLOUD_POINTS = 30_000   # per-frame context cloud cap (display only)
 CLOUD_DIM = 0.40            # context cloud brightness relative to height colors
@@ -140,12 +140,7 @@ def run_mcap_replay(mcap_path: str, checkpoint: str, cfg: dict,
     dev = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
     ck = torch.load(checkpoint, map_location="cpu", weights_only=False)
     tcfg, gcfg = ck["config"], ck["generator"]
-    model = build_model(tcfg["model"], tnet=tcfg["tnet"], dropout=tcfg.get("dropout"),
-                        features=tcfg.get("features"),
-                        seg_npoints=tcfg.get("seg_npoints"),
-                        seg_radii=tcfg.get("seg_radii"),
-                        seg_height_ref=tcfg.get("seg_height_ref"),
-                        seg_coord_ref=tcfg.get("seg_coord_ref"))
+    model = build_model_from_config(tcfg)
     model.load_state_dict(ck["model"])
     print(f"model: {tcfg['model']} (trained on {', '.join(tcfg['train_runs'])}; "
           f"held out {tcfg['test_run']}), threshold {ck.get('threshold', 0.5):.2f}")

@@ -13,6 +13,7 @@ from __future__ import annotations
 #: format C whole frames) and how it is scored.
 MODELS: dict[str, tuple[str, str]] = {
     "pointnet":      ("classify", "PointNet (sliding-window classifier)"),
+    "pointnet_stats": ("classify", "PointNet classifier with regional support statistics"),
     "pointnet2":     ("classify", "PointNet++ (sliding-window classifier)"),
     "pointnet2_seg": ("segment",  "PointNet++ (per-point segmentation)"),
     "bev_cnn":       ("segment",  "BEV CNN (rasterized, per-point segmentation)"),

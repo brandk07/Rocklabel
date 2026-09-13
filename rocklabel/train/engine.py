@@ -20,6 +20,7 @@ from __future__ import annotations
 import csv
 import json
 import os
+import tempfile
 
 import numpy as np
 import torch
@@ -28,10 +29,39 @@ from tqdm import tqdm
 from . import TRAIN_DEFAULTS
 from . import data as D
 from . import metrics as M
-from .models import (FEATURES, build_model, frame_floor_offset, frame_height_span,
+from .models import (FEATURES, build_model_from_config, frame_floor_offset, frame_height_span,
                      model_task, resolve_features)
 
 VAL_METRIC = "val_pr_auc"
+
+
+def _save_checkpoint(payload: dict, path: str) -> None:
+    """Publish a complete checkpoint so a concurrent viewer never reads half."""
+    fd, temporary = tempfile.mkstemp(prefix=".checkpoint-", suffix=".pt",
+                                     dir=os.path.dirname(os.path.abspath(path)))
+    os.close(fd)
+    try:
+        torch.save(payload, temporary)
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def _rng_state(gen: torch.Generator, device: torch.device) -> dict:
+    state = {"torch": torch.get_rng_state(), "numpy": np.random.get_state(),
+             "augmentation": gen.get_state()}
+    if device.type == "cuda":
+        state["cuda"] = torch.cuda.get_rng_state(device)
+    return state
+
+
+def _restore_rng_state(state: dict, gen: torch.Generator, device: torch.device) -> None:
+    torch.set_rng_state(state["torch"].cpu())
+    np.random.set_state(state["numpy"])
+    gen.set_state(state["augmentation"].cpu())
+    if device.type == "cuda" and "cuda" in state:
+        torch.cuda.set_rng_state(state["cuda"].cpu(), device)
 
 
 def _seed_all(seed: int) -> None:
@@ -236,6 +266,7 @@ def _phantom_clumps(pts: torch.Tensor, counts: torch.Tensor, y: torch.Tensor,
                     frac: float, gen: torch.Generator,
                     extent: float = 0.54, spread: float = 0.35,
                     min_pts: int = 20, max_pts: int = 60,
+                    mode: str = "legacy", radius: float = 0.5,
                     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Replace a share of classifier samples with synthetic phantom clumps.
 
@@ -262,9 +293,9 @@ def _phantom_clumps(pts: torch.Tensor, counts: torch.Tensor, y: torch.Tensor,
     such a thing is not a rock. This builds that sample directly: points spread
     through a tall box with no flat base, labelled clear.
 
-    Deliberately a *replacement* rather than an addition, so batch size, class
-    balance bookkeeping and the loss weight all stay where the control put
-    them and the arm remains single-variable against it.
+    This historical augmentation replaces both rock and clear samples. Batch
+    size and the configured loss weight stay fixed, but the effective positive
+    prevalence falls by (1 - frac). Account for that when interpreting results.
 
     Args:
         pts: ``(B, N, C)`` samples; channels 0-2 are dx, dy, dz with dz already
@@ -279,9 +310,30 @@ def _phantom_clumps(pts: torch.Tensor, counts: torch.Tensor, y: torch.Tensor,
     """
     b, n, c = pts.shape
     dev = pts.device
+    if mode not in ("legacy", "matched"):
+        raise ValueError(f"unknown phantom mode {mode!r}")
     pick = torch.rand(b, generator=gen, device=dev) < frac
+    if mode == "matched":
+        # An explicit ablation: retain every positive and match the clear
+        # sample's valid count instead of making all phantoms 20..59 points.
+        pick &= y == 0
     if not bool(pick.any()):
         return pts, counts, y
+
+    if mode == "matched":
+        direction = torch.randn(b, n, 3, generator=gen, device=dev)
+        direction = direction / direction.norm(dim=-1, keepdim=True).clamp_min(1e-6)
+        radial = torch.rand(b, n, 1, generator=gen, device=dev).pow(1.0 / 3.0)
+        xyz = direction * radial * radius
+        height = extent * (0.5 + torch.rand(b, 1, generator=gen, device=dev))
+        xyz[..., 2] *= (height / (2 * radius)).clamp(max=1)
+        real = counts.clamp(min=1, max=n)
+        index = torch.arange(n, device=dev)[None, :] % real[:, None]
+        xyz = xyz.gather(1, index[..., None].expand(-1, -1, 3))
+        xyz[..., 2] -= xyz[..., 2].amin(dim=1, keepdim=True)
+        clump = pts.clone()
+        clump[..., :3] = xyz
+        return torch.where(pick[:, None, None], clump, pts), counts, y
 
     # A loose scatter: uniform across the ball horizontally, spread through the
     # full height rather than piled on a floor. No flat base is the whole point.
@@ -289,9 +341,6 @@ def _phantom_clumps(pts: torch.Tensor, counts: torch.Tensor, y: torch.Tensor,
     dy = (torch.rand(b, n, generator=gen, device=dev) * 2 - 1) * spread
     tall = extent * (0.5 + torch.rand(b, 1, generator=gen, device=dev))
     dz = torch.rand(b, n, generator=gen, device=dev) * tall
-    # dz is measured from the ball's lowest point, so re-reference the clump the
-    # same way the generator would have.
-    dz = dz - dz.min(dim=1, keepdim=True).values
 
     clump = pts.clone()
     clump[..., 0], clump[..., 1], clump[..., 2] = dx, dy, dz
@@ -306,6 +355,9 @@ def _phantom_clumps(pts: torch.Tensor, counts: torch.Tensor, y: torch.Tensor,
     ar = torch.arange(n, device=dev)[None, :]
     src = torch.remainder(ar, new_counts[:, None].clamp_min(1))
     clump = torch.gather(clump, 1, src[..., None].expand(-1, -1, c))
+    # Reference only surviving real points. Taking the minimum before the
+    # sparse sample is selected can leave its entire valid cloud above zero.
+    clump[..., 2] -= clump[..., 2].amin(dim=1, keepdim=True)
 
     out = torch.where(pick[:, None, None], clump, pts)
     counts = torch.where(pick, new_counts.to(counts.dtype), counts)
@@ -374,7 +426,8 @@ def train_fold(cfg: dict, run_dir: str, resume: bool = True) -> dict:
         # Same for the BEV settings: folds trained before each of them existed
         # must keep resuming rather than reading as a settings change nobody made.
         for key in ("bev_cell", "bev_grid", "bev_width", "bev_depth",
-                    "bev_channels", "bev_density_norm", "pos_weight_cap"):
+                    "bev_channels", "bev_density_norm", "pos_weight_cap",
+                    "aug_phantom_mode"):
             old.setdefault(key, TRAIN_DEFAULTS[key])
         if old != cfg:
             raise SystemExit(f"{run_dir} was created with different settings; "
@@ -419,18 +472,7 @@ def train_fold(cfg: dict, run_dir: str, resume: bool = True) -> dict:
           f"{('test run ' + cfg['test_run']) if cfg['test_run'] else 'no held-out run'}"
           f", device {device}")
 
-    model = build_model(cfg["model"], tnet=cfg["tnet"], dropout=cfg.get("dropout"),
-                        features=cfg.get("features"),
-                        seg_npoints=cfg.get("seg_npoints"),
-                        seg_radii=cfg.get("seg_radii"),
-                        seg_height_ref=cfg.get("seg_height_ref"),
-                        seg_coord_ref=cfg.get("seg_coord_ref"),
-                        bev_cell=cfg.get("bev_cell"),
-                        bev_grid=cfg.get("bev_grid"),
-                        bev_width=cfg.get("bev_width"),
-                        bev_depth=cfg.get("bev_depth"),
-                        bev_channels=cfg.get("bev_channels"),
-                        bev_density_norm=cfg.get("bev_density_norm")).to(device)
+    model = build_model_from_config(cfg).to(device)
     print(f"  input channels: {', '.join(model.features)}")
     floor_band: tuple[float, float] | None = None
     frame_band: tuple[float, float] | None = None
@@ -481,6 +523,7 @@ def train_fold(cfg: dict, run_dir: str, resume: bool = True) -> dict:
     loss_fn = torch.nn.BCEWithLogitsLoss(pos_weight=torch.tensor(pos_weight, device=device))
 
     start_epoch, best_metric, bad_epochs = 0, -1.0, 0
+    resumed_rng = None
     history: list[dict] = []
     last_path, best_path = os.path.join(run_dir, "last.pt"), os.path.join(run_dir, "best.pt")
     if resume and os.path.exists(last_path):
@@ -490,9 +533,12 @@ def train_fold(cfg: dict, run_dir: str, resume: bool = True) -> dict:
         sched.load_state_dict(ck["scheduler"])
         start_epoch, best_metric, bad_epochs = ck["epoch"] + 1, ck["best_metric"], ck["bad_epochs"]
         history = ck["history"]
+        resumed_rng = ck.get("rng_state")
         print(f"  resumed at epoch {start_epoch}")
 
     gen = torch.Generator(device=device).manual_seed(cfg["seed"])
+    if resumed_rng is not None:
+        _restore_rng_state(resumed_rng, gen, device)
     labels_va = va.labels.numpy()
     counts_va = va.counts.numpy()
     # A segmenter's batch is whole frames (4096 points each), so the classifier's
@@ -526,6 +572,8 @@ def train_fold(cfg: dict, run_dir: str, resume: bool = True) -> dict:
                     pts, cnt, y = _phantom_clumps(
                         pts, cnt, y, ph, gen,
                         extent=float(cfg.get("aug_phantom_extent") or 0.54),
+                        mode=cfg.get("aug_phantom_mode", "legacy"),
+                        radius=float(meta["generator"]["neighborhood_radius_m"]),
                     )
             logits = model(pts, cnt)
             if task == "segment":
@@ -565,15 +613,17 @@ def train_fold(cfg: dict, run_dir: str, resume: bool = True) -> dict:
         improved = row[VAL_METRIC] > best_metric
         if improved:
             best_metric, bad_epochs = row[VAL_METRIC], 0
-            torch.save({"model": model.state_dict(), "config": cfg, "epoch": epoch,
+            _save_checkpoint({"model": model.state_dict(), "config": cfg, "epoch": epoch,
                         "config_hash": meta["config_hash"], "generator": meta["generator"],
-                        "floor_band": floor_band, "frame_band": frame_band},
+                        "floor_band": floor_band, "frame_band": frame_band,
+                        "threshold": M.best_f1_threshold(y_va, p_va)},
                        best_path)
         else:
             bad_epochs += 1
-        torch.save({"model": model.state_dict(), "optimizer": opt.state_dict(),
+        _save_checkpoint({"model": model.state_dict(), "optimizer": opt.state_dict(),
                     "scheduler": sched.state_dict(), "epoch": epoch, "history": history,
-                    "best_metric": best_metric, "bad_epochs": bad_epochs}, last_path)
+                    "best_metric": best_metric, "bad_epochs": bad_epochs,
+                    "rng_state": _rng_state(gen, device)}, last_path)
         _write_history(run_dir, history)
         if bad_epochs >= cfg["patience"]:
             print(f"  early stop: no {VAL_METRIC} gain in {cfg['patience']} epochs")
@@ -589,7 +639,7 @@ def train_fold(cfg: dict, run_dir: str, resume: bool = True) -> dict:
         y_va, p_va = labels_va, probs_va
     threshold = M.best_f1_threshold(y_va, p_va)
     ck["threshold"] = threshold
-    torch.save(ck, best_path)
+    _save_checkpoint(ck, best_path)
     if not cfg["test_run"]:
         # No held-out run: this is a deployment fit over every recording in the
         # cache, so there is nothing honest left to score it on. Write the

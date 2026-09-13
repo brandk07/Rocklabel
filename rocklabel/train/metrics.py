@@ -72,23 +72,24 @@ def threshold_sweep(labels: np.ndarray, probs: np.ndarray,
 
 
 def best_f1_threshold(labels: np.ndarray, probs: np.ndarray) -> float:
-    """Threshold maximizing F1 over the sweep grid.
+    """Maximize validation F1 over all distinct observed probability scores.
 
-    An argmax that lands on either end of the grid means the real optimum is
-    outside it, so the returned number is a grid artifact rather than a choice
-    — worth saying out loud, because it is also a sign the probabilities are
-    badly calibrated. (A PointNet++ fold once selected the old grid's 0.02
-    floor exactly, and nothing said so.)
+    A fixed .01..99 grid cannot resolve confident models or scores clustered
+    near zero. Keep tied scores together; prefer higher recall on an F1 tie.
+    This chooses an operating point, not a probability calibration.
     """
-    sweep = threshold_sweep(labels, probs)
-    i = int(np.argmax(sweep["f1"]))
-    if i in (0, len(sweep["f1"]) - 1):
-        import warnings
-        warnings.warn(
-            f"best-F1 threshold pinned to the sweep endpoint {sweep['threshold'][i]:.2f}; "
-            "the true optimum lies outside the grid and this model is likely miscalibrated",
-            RuntimeWarning, stacklevel=2)
-    return float(sweep["threshold"][i])
+    labels, probs = np.asarray(labels), np.asarray(probs)
+    if labels.ndim != 1 or probs.shape != labels.shape or not len(labels):
+        raise ValueError("threshold selection needs aligned, nonempty 1D arrays")
+    if not np.isfinite(probs).all() or np.any((probs < 0) | (probs > 1)):
+        raise ValueError("threshold selection needs finite probabilities in [0, 1]")
+    if not np.isin(labels, [0, 1]).all() or not np.any(labels == 1):
+        raise ValueError("threshold selection needs binary labels and at least one rock")
+    precision, recall, thresholds = pr_curve(labels, probs)
+    f1 = 2 * precision[1:] * recall[1:] / np.maximum(precision[1:] + recall[1:], 1e-12)
+    # Thresholds descend; the last maximizing point has the highest recall.
+    i = np.flatnonzero(f1 == f1.max())[-1]
+    return float(thresholds[1:][i])
 
 
 def summarize(labels: np.ndarray, probs: np.ndarray, threshold: float = 0.5) -> dict:

@@ -1,0 +1,92 @@
+{
+  "status": "complete",
+  "aggregate": {
+    "time_s": 2131.4057199954987,
+    "processed_frames": 2599,
+    "native_voxels": 79708,
+    "ground_cells": 3533,
+    "false_cells": 2162,
+    "false_cells_older_10s": 2094,
+    "false_cells_older_60s": 2077,
+    "mean_false_age_s": 908.1277977176335,
+    "audited_rocks": 12,
+    "macro_coverage": 0.6594063435324756,
+    "worst_rock_coverage": 0.35294117647058826
+  },
+  "per_rock": [
+    {
+      "rock_id": 1,
+      "visible_cells": 26,
+      "covered_cells": 20,
+      "coverage": 0.7692307692307693
+    },
+    {
+      "rock_id": 3,
+      "visible_cells": 49,
+      "covered_cells": 40,
+      "coverage": 0.8163265306122449
+    },
+    {
+      "rock_id": 4,
+      "visible_cells": 44,
+      "covered_cells": 32,
+      "coverage": 0.7272727272727273
+    },
+    {
+      "rock_id": 5,
+      "visible_cells": 29,
+      "covered_cells": 18,
+      "coverage": 0.6206896551724138
+    },
+    {
+      "rock_id": 6,
+      "visible_cells": 47,
+      "covered_cells": 37,
+      "coverage": 0.7872340425531915
+    },
+    {
+      "rock_id": 7,
+      "visible_cells": 22,
+      "covered_cells": 17,
+      "coverage": 0.7727272727272727
+    },
+    {
+      "rock_id": 8,
+      "visible_cells": 40,
+      "covered_cells": 33,
+      "coverage": 0.825
+    },
+    {
+      "rock_id": 9,
+      "visible_cells": 29,
+      "covered_cells": 21,
+      "coverage": 0.7241379310344828
+    },
+    {
+      "rock_id": 10,
+      "visible_cells": 11,
+      "covered_cells": 7,
+      "coverage": 0.6363636363636364
+    },
+    {
+      "rock_id": 11,
+      "visible_cells": 20,
+      "covered_cells": 10,
+      "coverage": 0.5
+    },
+    {
+      "rock_id": 12,
+      "visible_cells": 17,
+      "covered_cells": 6,
+      "coverage": 0.35294117647058826
+    },
+    {
+      "rock_id": 13,
+      "visible_cells": 42,
+      "covered_cells": 16,
+      "coverage": 0.38095238095238093
+    }
+  ],
+  "wall_seconds": 8899.827447521966,
+  "scope": "Sampled full recording, unfiltered inputs, latest per native 3D voxel. False-cell ages are diagnostic; no visibility-aware clearing or traversability claim."
+}
