@@ -2162,3 +2162,9 @@ tbody tr.is-open td { background: var(--raised); }
   background: var(--inset);
   border: 1px solid var(--line);
 }
+/* Lance checkpoint scores use one fixed target recording, split by prediction unit. */
+.lance-score-scroll { overflow-x: auto; }
+.lance-score-table { width: 100%; border-collapse: collapse; margin: 12px 0 28px; font-size: .82rem; }
+.lance-score-table th, .lance-score-table td { padding: 8px 10px; border-bottom: 1px solid var(--line, #333); text-align: right; }
+.lance-score-table th:nth-child(2), .lance-score-table td:nth-child(2) { text-align: left; }
+.lance-score-table .lance-checkpoint { max-width: 32rem; overflow-wrap: anywhere; }

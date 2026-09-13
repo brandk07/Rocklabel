@@ -398,7 +398,7 @@ function renderBoard() {
     c.onclick = () => { S.boardSuite = name; renderBoard(); };
     chips.appendChild(c);
   });
-  $('#boardRefresh').onclick = () => loadBoard();
+  $('#boardRefresh').onclick = async () => { await refreshState(); await loadBoard(); };
 
   const body = $('#boardBody');
   body.innerHTML = '';
@@ -428,6 +428,7 @@ function renderBoard() {
     return;
   }
 
+  if (S.boardSuite === 'all') body.appendChild(lanceLeaderboard());
   body.appendChild(boardLeaderboard(shown));
   shown.forEach((suite) => {
     const rows = S.board.rows.filter((r) => r.suite === suite.name);
@@ -442,6 +443,54 @@ function renderBoard() {
  * ------------------------------------------------------------------------ */
 function boardScore(row) {
   return row.norm_pr_auc != null ? row.norm_pr_auc : row.pr_auc;
+}
+
+function lanceLeaderboard() {
+  const section = h('section', 'card board-suite');
+  const head = h('div', 'card-head');
+  head.appendChild(h('h2', null, 'Lance labelled checkpoint test'));
+  head.appendChild(h('p', 'card-sub', '109 sampled classifier frames and 106 segmenter frames from the competition run. '
+    + 'PR-AUC ranks candidate centers for classifiers and individual points for segmenters; '
+    + 'compare scores only within the same unit. F1, precision, and recall use each '
+    + 'checkpoint’s stored validation threshold (0.5 when absent). This sampled test does not measure '
+    + 'accumulated-map coverage of distinct rocks. The table shows the top 10 per '
+    + 'prediction unit; every tested checkpoint is labelled in the model picker. '
+    + 'Scores with a changed input contract or Lance training overlap are excluded from ranking.'));
+  section.appendChild(head);
+  const eligible = (S.inv?.checkpoints || []).filter((c) =>
+    c.lance_pr_auc != null && !c.lance_training_overlap
+    && !Object.keys(c.lance_input_differences || {}).length);
+  for (const [task, title] of [['classify', 'Classifiers · candidate PR-AUC'],
+                               ['segment', 'Segmenters · point PR-AUC']]) {
+    const rows = eligible.filter((c) => c.lance_task === task)
+      .sort((a, b) => b.lance_pr_auc - a.lance_pr_auc);
+    section.appendChild(h('h3', null, `${title} (${rows.length} tested)`));
+    if (!rows.length) {
+      section.appendChild(h('p', 'muted', 'No completed Lance scores yet.'));
+      continue;
+    }
+    const table = h('table', 'lance-score-table');
+    const thead = h('thead');
+    const headings = h('tr');
+    ['Rank', 'Checkpoint', 'Lance PR-AUC', 'F1', 'Precision', 'Recall', 'Threshold'].forEach((label) =>
+      headings.appendChild(h('th', null, label)));
+    thead.appendChild(headings);
+    table.appendChild(thead);
+    const tbody = h('tbody');
+    rows.slice(0, 10).forEach((row, i) => {
+      const tr = h('tr');
+      const values = [String(i + 1), row.path, fmtScore(row.lance_pr_auc),
+        fmtScore(row.lance_f1), fmtScore(row.lance_precision),
+        fmtScore(row.lance_recall), fmtScore(row.lance_threshold)];
+      values.forEach((value, j) => tr.appendChild(h('td', j === 1 ? 'lance-checkpoint' : null, value)));
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    const scroll = h('div', 'lance-score-scroll');
+    scroll.appendChild(table);
+    section.appendChild(scroll);
+  }
+  return section;
 }
 
 function fmtRunDate(ts) {

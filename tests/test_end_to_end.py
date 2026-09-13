@@ -204,7 +204,7 @@ def test_pipeline_normalizes_raw_counts_in_a_float_intensity_field(tmp_path):
     unscaled, generating from such a bag would write intensity ~40000 while
     every lidarrig recording writes ~0.6, silently poisoning any pooled cache.
     """
-    from tests import make_synthetic_mcap as synth
+    import make_synthetic_mcap as synth
 
     from rocklabel.recording.pipeline import ScanStream
 

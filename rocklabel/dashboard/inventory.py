@@ -676,6 +676,10 @@ def checkpoints(root: str) -> list[dict]:
     out: list[dict] = []
     if not os.path.isdir(base):
         return out
+    lance_report = _read_json(os.path.join(root, "training", "reports",
+                                          "lance-checkpoints", "results.json")) or {}
+    lance_scores = {r["checkpoint"]: r for r in lance_report.get("results", [])
+                    if isinstance(r, dict) and "checkpoint" in r}
 
     for run_dir in _checkpoint_dirs(base):
         parts = os.path.relpath(run_dir, base).split(os.sep)
@@ -719,8 +723,27 @@ def checkpoints(root: str) -> list[dict]:
             if not os.path.exists(full):
                 continue
             st = _stat(full)
-            if pr_auc is not None:
-                score = f" · PR-AUC {pr_auc:.3f}"
+            rel = os.path.relpath(full, root)
+            lance = lance_scores.get(rel) or {}
+            lance_pr_auc = lance.get("pr_auc") if (
+                lance.get("checkpoint_size") == st["size"] and
+                lance.get("checkpoint_mtime_ns") == os.stat(full).st_mtime_ns
+            ) else None
+            lance_overlap = (bool(lance.get("training_uses_lance"))
+                             or bool(lance.get("lance_used_in_selection"))
+                             or "lance-target-negatives-v1/" in rel)
+            input_differences = lance.get("input_differences") or {}
+            if lance_pr_auc is not None:
+                unit = "candidate" if lance.get("task") == "classify" else "point"
+                score = f" · Lance {unit} PR-AUC {lance_pr_auc:.3f}"
+                if pr_auc is not None:
+                    score += f" · volleyball PR-AUC {pr_auc:.3f}"
+                if lance_overlap:
+                    score += " (Lance used for fitting or selection)"
+                if input_differences:
+                    score += " (test input differs from training)"
+            elif pr_auc is not None:
+                score = f" · volleyball PR-AUC {pr_auc:.3f}"
             elif not held_out and val.get("pr_auc") is not None:
                 score = f" · val PR-AUC {val['pr_auc']:.3f} (not held out)"
             else:
@@ -732,7 +755,7 @@ def checkpoints(root: str) -> list[dict]:
                 # What the dropdown shows inside its group: the recording this
                 # model has never seen, and how well it did on it.
                 "name": f"{where}{score}",
-                "path": os.path.relpath(full, root),
+                "path": rel,
                 "group": title + (" · archived" if archived else ""),
                 "title": title,
                 "status": state,
@@ -741,6 +764,17 @@ def checkpoints(root: str) -> list[dict]:
                 "arm": arm,
                 "fold": fold,
                 "pr_auc": pr_auc,
+                "lance_pr_auc": lance_pr_auc,
+                "lance_task": lance.get("task") if lance_pr_auc is not None else None,
+                "lance_training_overlap": lance_overlap,
+                "lance_input_differences": input_differences,
+                "lance_f1": lance.get("f1") if lance_pr_auc is not None else None,
+                "lance_precision": lance.get("precision") if lance_pr_auc is not None else None,
+                "lance_recall": lance.get("recall") if lance_pr_auc is not None else None,
+                "lance_threshold": lance.get("threshold") if lance_pr_auc is not None else None,
+                "lance_threshold_source": lance.get("threshold_source")
+                                          if lance_pr_auc is not None else None,
+                "lance_n": lance.get("n") if lance_pr_auc is not None else None,
                 # The one flag a consumer needs to avoid mistaking a
                 # deployment fit's validation score for a held-out one.
                 "held_out": held_out,
@@ -758,6 +792,9 @@ def checkpoints(root: str) -> list[dict]:
     # Best-first inside a group; groups in name order, live ones before archives.
     out.sort(key=lambda c: (
         c["archived"], c["group"],
+        -(c["lance_pr_auc"] if c["lance_pr_auc"] is not None
+          and not c["lance_training_overlap"] and not c["lance_input_differences"]
+          else -1.0),
         -(c["pr_auc"] if c["pr_auc"] is not None else -1.0), c["fold"],
     ))
     # The shortcut: for each experiment, the one checkpoint worth offering
@@ -772,6 +809,12 @@ def checkpoints(root: str) -> list[dict]:
         deploys = [c for c in pool if c["status"] == "deploy"]
         if deploys:
             deploys[0]["best_of_experiment"] = True
+            continue
+        scored = [c for c in pool if c["lance_pr_auc"] is not None
+                  and not c["lance_training_overlap"]
+                  and not c["lance_input_differences"]]
+        if scored:
+            max(scored, key=lambda c: c["lance_pr_auc"])["best_of_experiment"] = True
             continue
         scored = [c for c in pool if c["pr_auc"] is not None]
         if scored:

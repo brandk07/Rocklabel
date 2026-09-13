@@ -1193,6 +1193,29 @@ def test_checkpoints_sort_best_first_inside_their_group(project):
     assert arm[0]["best_of_experiment"] is True
 
 
+def test_checkpoint_picker_shows_lance_score_without_replacing_volleyball_score(project):
+    one = _ablate_fold(project, "stray", "cls-base", "run1", 0.90)
+    two = _ablate_fold(project, "stray", "cls-base", "run2", 0.40)
+    results = []
+    for directory, ap in ((one, 0.35), (two, 0.75)):
+        checkpoint = directory / "best.pt"
+        st = checkpoint.stat()
+        results.append({"checkpoint": str(checkpoint.relative_to(project)),
+                        "checkpoint_size": st.st_size,
+                        "checkpoint_mtime_ns": st.st_mtime_ns,
+                        "pr_auc": ap, "task": "classify", "training_uses_lance": False})
+    report = project / "training" / "reports" / "lance-checkpoints" / "results.json"
+    report.parent.mkdir(parents=True)
+    report.write_text(json.dumps({"results": results}))
+
+    arm = [c for c in inventory.checkpoints(str(project)) if c["arm"] == "cls-base"]
+    assert [c["fold"] for c in arm] == ["run2", "run1"]
+    assert arm[0]["lance_pr_auc"] == 0.75
+    assert arm[0]["pr_auc"] == 0.40
+    assert "Lance candidate PR-AUC 0.750" in arm[0]["name"]
+    assert "volleyball PR-AUC 0.400" in arm[0]["name"]
+
+
 def test_a_checkpoint_names_the_recording_it_never_saw(project):
     _ablate_fold(project, "stray", "cls-stray", "run2", 0.77)
     ck = next(c for c in inventory.checkpoints(str(project)) if c["fold"] == "run2")

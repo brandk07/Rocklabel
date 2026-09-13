@@ -111,3 +111,4 @@ training/reports/**/*.json
 # half of the same conclusion the write-up states in prose, and it is how you
 # know what a sweep concluded without retraining it.
 !training/reports/**/*summary.json
+!training/reports/lance-checkpoints/results.json
