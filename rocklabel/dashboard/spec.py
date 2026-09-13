@@ -13,6 +13,7 @@ the validation, and the command preview all update together.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 
 # Both are torch-free by construction (see rocklabel/train/__init__.py), which
@@ -26,6 +27,7 @@ from ..train.ablate import (DEFAULT_REPORT_ROOT as REPORT_ROOT,
 from ..train.cli import DEFAULT_CACHE, DEFAULT_RUNS_ROOT
 from ..train.models_meta import BEV_CHANNELS
 from ..train.models_meta import MODELS as ARCHITECTURES
+from ..train.phantom_modes import PHANTOM_MODES
 
 # Quoted, not copied: the Solve-poses form offers the solver's real defaults, so
 # a knob retuned in rocklabel/slam/config.py moves the form with it. The module
@@ -646,6 +648,40 @@ COMMANDS: list[Command] = [
                   unit="s", min=0.1, max=5.0, step=0.1, advanced=True,
                   help="Seconds between scoring passes. A pass costs 9-20 ms on "
                        "the RTX 2000, so 0.5 leaves the GPU almost idle."),
+            Param("clear_looked_through", "bool",
+                  "Forget predictions the beams go through",
+                  arg="--clear-looked-through",
+                  help="Remembered detections are only ever replaced by scoring "
+                       "that exact spot again, so a false one hanging in mid-air "
+                       "stays on the map for the rest of the run — seeing the "
+                       "floor underneath it later does not touch it. With this "
+                       "on, a remembered detection is taken back once later "
+                       "beams have passed straight through where it sits and "
+                       "come back from further away. It never changes what the "
+                       "model says this pass, and it leaves alone anything "
+                       "nothing has looked through. Measured on the competition "
+                       "recording it is safe but small: a few percent of the "
+                       "wrongly-claimed ground, never the weakest rock, and at "
+                       "most a few percent of one rock's cells, because "
+                       "most of the false detections there sit on the ground "
+                       "rather than above it. Also a tick-box in the viewer and "
+                       "in the browser panel, so you can turn it on mid-run. "
+                       "Map evaluation is the card that measures it."),
+            Param("clear_separation", "float", "Clearing: height above the ground",
+                  arg="--clear-separation", unit="m", min=0.05, max=1.0,
+                  step=0.01, default=0.20, advanced=True,
+                  help="How far above the local ground a detection has to stand "
+                       "before clearing will consider it at all. The rocks "
+                       "measured here are 0.10-0.15 m tall, so below about 0.15 "
+                       "this starts taking the tops off real ones."),
+            Param("clear_free_windows", "float", "Clearing: contradictions needed",
+                  arg="--clear-free-windows", min=1.0, max=10.0, step=1.0,
+                  default=3.0, advanced=True,
+                  help="How many separate sweeps have to send a beam through a "
+                       "spot and get something back from beyond it before the "
+                       "detection there is dropped. A fresh return puts "
+                       "evidence back, so an obstacle coming into view again is "
+                       "restored rather than lost."),
             *_level_params(),
             _device(),
             Param("record", "outpath", "Record from launch", arg="--record", advanced=True,
@@ -1259,6 +1295,17 @@ COMMANDS: list[Command] = [
                        "Keep it long enough for the learning-rate schedule to "
                        "finish annealing, or the fold stops before it ever sees "
                        "its fine-tuning phase."),
+            Param("save_every_epoch", "bool", "Keep every epoch's weights",
+                  arg="--save-every-epoch", default=False, advanced=True,
+                  help="Write an inference-ready checkpoint after every epoch "
+                       "into <run>/epochs/, instead of keeping only the one "
+                       "the validation score picked. Costs a few megabytes an "
+                       "epoch. Turn it on when the question is whether that "
+                       "score picks the right epoch at all - it cannot be "
+                       "asked afterwards, because the others are gone. Score "
+                       "the results with the competition scoreboard's "
+                       "\u2018which checkpoint files\u2019 field set to "
+                       "epochs/epoch-*.pt."),
             Param("weight_decay", "float", "Weight decay", arg="--weight-decay",
                   default=0.0001, advanced=True, step=0.0001),
             Param("val_frac", "float", "Validation fraction", arg="--val-frac",
@@ -1343,6 +1390,24 @@ COMMANDS: list[Command] = [
                        "ever shown the model a tall loose scatter and told it "
                        "that is not a rock. 0.08 is the measured starting "
                        "point; 0 turns it off."),
+            Param("aug_phantom_mode", "enum", "Augment: who phantom clumps replace",
+                  arg="--aug-phantom-mode", advanced=True,
+                  choices=list(PHANTOM_MODES),
+                  default=TRAIN_DEFAULTS["aug_phantom_mode"],
+                  help="Which training samples a fake phantom clump is allowed "
+                       "to take the place of. 'legacy' takes any of them, which "
+                       "means the 8%% above is also 8%% of the rock examples "
+                       "thrown away every batch — nobody chose that, it fell out "
+                       "of how the augmentation was written. 'clear-only' keeps "
+                       "every rock example and raises its own draw rate so the "
+                       "number of phantoms per batch is unchanged; reach for it "
+                       "when you want the clutter negative without paying for it "
+                       "in rock examples. 'matched' is an older research variant "
+                       "that also keeps the positives but changes the clump's "
+                       "shape and point count too, so it answers a different "
+                       "question and is kept for comparing against the runs "
+                       "already on disk. Only does anything when the phantom "
+                       "setting above is above 0."),
             Param("aug_phantom_extent", "float", "Augment: phantom clump height",
                   arg="--aug-phantom-extent", unit="m", advanced=True,
                   step=0.05, default=TRAIN_DEFAULTS["aug_phantom_extent"],
@@ -1511,6 +1576,19 @@ COMMANDS: list[Command] = [
                   help="Run only the named settings instead of the whole set. "
                        "Leave empty for all of them, which is the normal case. "
                        "Useful for finishing a sweep that was stopped partway."),
+            Param("folds", "text", "Only these held-out runs", arg="--folds",
+                  repeat=True, nargs=True, advanced=True,
+                  placeholder="VolleyBallTest4.reslam",
+                  source="cache_runs",
+                  help="Train only the folds that hold these recordings out, "
+                       "instead of every fold in the cache. Leave empty for all "
+                       "of them, which is the normal case. Reach for it when the "
+                       "question repeats one setting under several random seeds: "
+                       "eleven folds times three seeds mostly measures which "
+                       "recording was held out, which is the biggest effect in "
+                       "this data and never the one being asked about. The "
+                       "'clutter' question is built this way and is meant to be "
+                       "run on one fold."),
             Param("report_only", "bool", "Report only (no training)",
                   arg="--report-only",
                   help="Skip straight to the figures and tables, built from the "
@@ -1524,6 +1602,17 @@ COMMANDS: list[Command] = [
                   help="Stop a fold after this many epochs with no validation "
                        "gain. Keep it long enough for the learning-rate schedule "
                        "to finish, or no fold ever sees its fine-tuning phase."),
+            Param("save_every_epoch", "bool", "Keep every epoch's weights",
+                  arg="--save-every-epoch", default=False, advanced=True,
+                  help="Write an inference-ready checkpoint after every epoch "
+                       "into <run>/epochs/, instead of keeping only the one "
+                       "the validation score picked. Costs a few megabytes an "
+                       "epoch. Turn it on when the question is whether that "
+                       "score picks the right epoch at all - it cannot be "
+                       "asked afterwards, because the others are gone. Score "
+                       "the results with the competition scoreboard's "
+                       "\u2018which checkpoint files\u2019 field set to "
+                       "epochs/epoch-*.pt."),
             *_seg_geometry(),
             *_bev_geometry(),
             # The rest of the shared training hyperparameters: every one of
@@ -1675,6 +1764,245 @@ COMMANDS: list[Command] = [
                   placeholder="training/exported/<run name>",
                   help="Leave empty for training/exported/<run name>."),
         ],
+    ),
+    Command(
+        id="train-lancebench", bin="rocklabel-train", sub="lancebench",
+        stage="train", tier="tool",
+        icon="◎",
+        title="Competition scoreboard",
+        tagline="Score every checkpoint on disk against the arena, not another "
+                "volleyball recording.",
+        what="Walks every trained checkpoint under the experiments folder and "
+             "scores it on the labelled competition recording, in each model's "
+             "own units — a candidate ball for a sliding-window classifier, a "
+             "point for a per-point one. Results accumulate in one file, and a "
+             "checkpoint is only rescored when its file changed or when it "
+             "failed last time, so re-running after a sweep costs only the new "
+             "ones.",
+        why="Because the score every sweep reports is a held-out *volleyball* "
+            "recording, and it does not predict the arena. Across fifteen "
+            "checkpoints the two rankings agree at 0.28 out of 1, and the "
+            "checkpoint that did best on the arena was one of the worse ones "
+            "on volleyball. This is the number to pick a model by — bearing in "
+            "mind that the arena recording has now been used for selection "
+            "many times over, so it is development data and a fresh recording "
+            "is what would finally settle anything.",
+        notes=[
+            "It ranks candidates. It says nothing about the map the robot "
+            "actually drives on — Map evaluation is for that, and the two do "
+            "not always agree.",
+            "Its vertical crop is the labeller's, not the operational band, so "
+            "its numbers and Map evaluation's are different contracts and are "
+            "not interchangeable.",
+            "The ablation report reads this file, so running it after a sweep "
+            "puts the arena column beside the volleyball one.",
+        ],
+        params=[
+            Param("experiments", "dir", "Checkpoints folder", arg="--experiments",
+                  default=EXPERIMENTS_ROOT,
+                  help="Searched recursively for best.pt files."),
+            Param("cache", "dir", "Arena cache", arg="--cache", source="caches",
+                  default=os.path.join("training", "caches", "lance-arena"),
+                  help="The labelled competition cache to score against. It "
+                       "must hold exactly one recording."),
+            Param("out", "outpath", "Results file", arg="--out",
+                  default=os.path.join(REPORT_ROOT, "lance-checkpoints",
+                                       "results.json"),
+                  help="Scores accumulate here across runs."),
+            Param("pattern", "text", "Which checkpoint files", arg="--pattern",
+                  default="best.pt", advanced=True,
+                  help="The file name to look for, as a glob. Leave it at "
+                       "best.pt for ordinary runs. Set it to epochs/epoch-*.pt "
+                       "to score every epoch of a run trained with \u2018keep "
+                       "every epoch\u2019s weights\u2019 - and point the "
+                       "results file somewhere of its own, or ninety snapshots "
+                       "of one run will bury the scoreboard."),
+            _device(),
+            Param("limit", "int", "Only the first N", arg="--limit", min=0,
+                  advanced=True,
+                  help="A smoke check, never a result. 0 scores everything."),
+        ],
+        long_running=True,
+    ),
+    Command(
+        id="train-mapeval", bin="rocklabel-train", sub="mapeval", stage="deploy",
+        icon="🗺",
+        title="Map evaluation",
+        tagline="Replay a whole recording and grade the map it builds — and, "
+                "optionally, clear the mid-air leftovers.",
+        what="Plays a labelled recording start to finish through the real live "
+             "pipeline — the operational floor band, 8 m range, the model's own "
+             "input preparation, newest answer per 5 cm cell — and grades the map "
+             "that comes out of it rather than the model's raw score. You get, per "
+             "physical rock, how much of it ended up covered and how long after "
+             "the robot first saw it; and for the arena as a whole, how much "
+             "ground was wrongly claimed and for how many seconds.\n\n"
+             "Tick 'Clear looked-through predictions' and it builds a second map "
+             "beside the first, from the same scores in the same pass, in which a "
+             "detection can be taken back once later beams have gone straight "
+             "through where it sits and come back from further away. Both maps "
+             "appear side by side in the report, sharing every input and every "
+             "denominator.",
+        why="Because the leaderboard score and the thing the robot drives on are "
+            "not the same measurement. Predictions pile up per 5 cm cell and are "
+            "only ever replaced by scoring that exact cell again, so a false "
+            "detection hanging in mid-air stays there for the rest of the run — "
+            "seeing the ground underneath it later does not touch it. On the "
+            "competition recording 2,077 of 2,162 wrongly claimed cells had not "
+            "been refreshed in over a minute. No ranking score can see that, "
+            "because ranking never asks what the map looks like an hour in.",
+        notes=[
+            "The first run on a recording replays and scores it, which takes a "
+            "few minutes; both results are cached, so changing the clearing "
+            "settings afterwards costs seconds and never re-reads the recording "
+            "or re-runs the model. Point a second checkpoint at the same frames "
+            "folder and only its scores are computed.",
+            "Clearing never touches what the model says this pass — it only ever "
+            "removes things from the remembered map, and only where beams have "
+            "actually contradicted them. Space nothing has looked through stays "
+            "put, whatever its age or height.",
+            "Start with the separation at 0.20 m and work down. A rock here is "
+            "0.10-0.15 m tall, so this is the number standing between the "
+            "cleanup and deleting the tops of real rocks — the report's per-rock "
+            "table is where that shows up.",
+        ],
+        params=[
+            Param("checkpoint", "path", "Checkpoint", arg="--checkpoint",
+                  source="checkpoints", required=True,
+                  help="The model whose map is being graded."),
+            Param("recording", "path", "Recording", arg="--recording",
+                  source="recordings", required=True,
+                  help="The .mcap to replay, start to finish. Both formats are "
+                       "auto-detected."),
+            Param("labels", "path", "Labels", arg="--labels", source="labels",
+                  required=True,
+                  help="The rocks in this recording. They are the denominator "
+                       "every coverage number is measured against, so this has "
+                       "to be the label file for this exact recording."),
+            Param("out", "outdir", "Output directory", arg="--out", required=True,
+                  placeholder=f"{REPORT_ROOT}/map-evidence/<name>",
+                  help="Where summary.md, per-rock.csv, timeline.csv and the two "
+                       "accumulated maps land."),
+            Param("clean", "bool", "Clear looked-through predictions",
+                  arg="--clean",
+                  help="Build the cleaned map alongside the untouched one. "
+                       "Without this you get the control alone, which is the "
+                       "honest baseline for what the model does today."),
+            Param("min_separation_m", "float", "Clearing: height above the ground",
+                  arg="--min-separation-m", unit="m", min=0.0, max=1.0, step=0.01,
+                  default=0.20,
+                  help="How far above the fitted local ground a detection has to "
+                       "stand before clearing will even consider it, on top of "
+                       "how rough that ground measured. Being high up is never "
+                       "on its own a reason to delete anything — a rock's top is "
+                       "also above its neighbours — it only makes a detection "
+                       "eligible, and beams still have to contradict it. The "
+                       "rocks here are 0.10-0.15 m tall."),
+            Param("free_windows", "float", "Clearing: contradictions needed",
+                  arg="--free-windows", min=1.0, max=20.0, step=1.0, default=3.0,
+                  help="How many separate sweeps have to send a beam through a "
+                       "spot and get something back from beyond it before the "
+                       "detection there is taken back, counting from no evidence "
+                       "either way. A detection always has returns behind it, so "
+                       "the real cost is this plus whatever those banked — see "
+                       "the two settings below."),
+            Param("hit_windows", "float", "Clearing: what a fresh return buys back",
+                  arg="--hit-windows", min=0.0, max=10.0, step=0.5, default=2.0,
+                  advanced=True,
+                  help="What one sweep that sees something there again banks in "
+                       "its favour. Above 1, appearing is cheaper than "
+                       "disappearing, which is the asymmetry you want: a real "
+                       "obstacle coming back into view is restored immediately, "
+                       "while removing one takes sustained evidence."),
+            Param("max_windows_either_way", "float", "Clearing: evidence ceiling",
+                  arg="--max-windows-either-way", min=1.0, max=20.0, step=1.0,
+                  default=4.0, advanced=True,
+                  help="Cap on how much evidence a spot can bank in either "
+                       "direction, so a long stare can neither make a detection "
+                       "impossible to remove nor an empty spot impossible to "
+                       "fill in again."),
+            Param("no_require_detached", "bool",
+                  "Clearing: drop the above-the-ground restriction",
+                  arg="--no-require-detached", advanced=True,
+                  help="Normally only detections standing clear of an "
+                       "established surface can be cleared at all. Tick this and "
+                       "beam evidence may remove anything on its own, which "
+                       "clears more and is how you find out what the restriction "
+                       "is worth. It is the riskier setting: the restriction is "
+                       "what keeps the tops of real rocks out of reach."),
+            Param("cell_m", "float", "Clearing: ground cell size", arg="--cell-m",
+                  unit="m", min=0.05, max=0.5, step=0.05, default=0.10,
+                  advanced=True,
+                  help="How finely the local ground model is built."),
+            Param("support_windows", "int", "Clearing: sweeps before ground counts",
+                  arg="--support-windows", min=1, max=10, default=2, advanced=True,
+                  help="How many separate sweeps have to see a return before it "
+                       "is allowed to help define where the ground is. This is "
+                       "what stops one bad sweep becoming the floor."),
+            Param("surface_radius_cells", "int", "Clearing: ground fit radius",
+                  arg="--surface-radius-cells", min=1, max=10, default=3,
+                  advanced=True, unit="cells",
+                  help="How wide a patch the ground is fitted over, in cells. 3 "
+                       "is a 70 cm square — wide enough to follow a slope, and "
+                       "wider than any rock, so a rock cannot define the ground "
+                       "it is sitting on."),
+            Param("surface_min_cells", "int", "Clearing: cells the fit needs",
+                  arg="--surface-min-cells", min=1, max=100, default=8,
+                  advanced=True,
+                  help="How many cells must contribute before a fitted ground "
+                       "patch is believed. Below it the ground there stays "
+                       "unknown and nothing above it is ever cleared."),
+            Param("surface_max_residual_m", "float", "Clearing: roughest ground accepted",
+                  arg="--surface-max-residual-m", unit="m", min=0.0, max=0.5,
+                  step=0.01, default=0.08, advanced=True,
+                  help="How far off flat a fitted patch may be and still count "
+                       "as ground. Rougher than this and there is no saying what "
+                       "is detached from what, so nothing there is cleared."),
+            Param("pose_sigma_m", "float", "Clearing: pose slack",
+                  arg="--pose-sigma-m", unit="m", min=0.0, max=0.5, step=0.01,
+                  default=0.03, advanced=True,
+                  help="How much the sensor's own position might be wrong by. "
+                       "It does NOT widen the target - a beam still has to "
+                       "enter the actual cell to count for anything. It sets "
+                       "how much of a window's worth a crossing is worth: a "
+                       "beam that goes straight through counts nearly in full, "
+                       "one that clips an edge counts for very little, and "
+                       "raising this lowers both. So more slack only ever "
+                       "makes clearing slower, never more willing. The "
+                       "sensor's movement inside one sweep is measured on top "
+                       "of this rather than guessed at."),
+            Param("endpoint_margin_m", "float", "Clearing: beam overshoot needed",
+                  arg="--endpoint-margin-m", unit="m", min=0.0, max=1.0,
+                  step=0.01, default=0.12, advanced=True,
+                  help="How much further than the spot a beam has to reach "
+                       "before it counts as having gone through rather than "
+                       "landed on it."),
+            Param("stride", "int", "Score every Nth sweep", arg="--stride",
+                  min=1, max=200, default=10, advanced=True,
+                  help="10 is one scoring pass every half second on this sensor, "
+                       "about what the rig itself manages. Lower it and you get "
+                       "a finer timeline for more replay time."),
+            Param("window_s", "float", "Frame window", arg="--window-s", unit="s",
+                  min=0.0, max=2.0, step=0.05, default=0.05, advanced=True,
+                  help="Seconds of scans merged into one frame before the model "
+                       "sees it. 0.05 is one full rotation of this sensor."),
+            Param("threshold", "float", "Decision threshold", arg="--threshold",
+                  min=0.0, max=1.0, step=0.01, advanced=True,
+                  placeholder="the checkpoint's own",
+                  help="Leave empty for the checkpoint's own tuned threshold. A "
+                       "threshold picked by looking at the map being graded is a "
+                       "diagnostic, not an operating point."),
+            Param("frames_dir", "outdir", "Frames cache", arg="--frames-dir",
+                  default="training/caches/mapeval", advanced=True,
+                  help="Where the replayed geometry and the per-checkpoint "
+                       "scores are kept so later runs skip both."),
+            _device(),
+            Param("rebuild", "bool", "Replay from the recording again",
+                  arg="--rebuild", advanced=True,
+                  help="Ignore the caches and decode and score the recording "
+                       "from scratch."),
+        ],
+        long_running=True,
     ),
     Command(
         id="train-replay", bin="rocklabel-train", sub="replay", stage="deploy",

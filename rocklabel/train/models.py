@@ -39,7 +39,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from ..dataset.neighborhoods import FEATURES, GEOMETRY, resolve_features  # noqa: F401  (re-exported)
+from ..dataset.neighborhoods import (FEATURES, GEOMETRY,  # noqa: F401  (re-exported)
+                                     QUERY_HEIGHT_CHANNEL, SAMPLE_CHANNELS,
+                                     has_query_height, resolve_features)
 from .models_meta import (BEV_CHANNELS, BEV_DENSITY, MODELS,  # noqa: F401  (re-exported)
                           model_task)
 
@@ -123,6 +125,12 @@ class PointNet(nn.Module):
     """Vanilla PointNet classifier; T-Nets optional (the data is already
     canonicalized, so they default off)."""
 
+    #: Channels of the stored sample this model needs handed to it. Not the
+    #: channels it *reads* - that is ``features``, selected inside forward.
+    #: Only the export tracer, which has to build a stand-in tensor without a
+    #: dataset, needs to know the difference.
+    input_channels = len(FEATURES)
+
     def __init__(self, tnet: bool = False, dropout: float = 0.3,
                  features: list[str] | None = None):
         super().__init__()
@@ -162,6 +170,72 @@ class PointNet(nn.Module):
 
     def pop_regularizer(self) -> torch.Tensor:
         return self._reg
+
+
+class PointNetQZ(PointNet):
+    """PointNet, plus one number: how high the candidate sits in its own ball.
+
+    The classifier's input is canonicalized twice over and the two halves use
+    different origins. dx and dy are measured from the candidate center, so the
+    model always knows where the query is horizontally. dz is measured from the
+    lowest point *of the ball*, which is a good height reference for describing
+    a surface but says nothing about the query - the candidate's own z is never
+    written down anywhere in the tensor. Slide a candidate straight up half a
+    metre without moving a single neighbor and the stored sample is byte for
+    byte identical. A rock, and a floating return hanging over that same rock,
+    are exactly that pair.
+
+    So this feeds ``candidate_z - ball_min_z`` (channel
+    :data:`~rocklabel.dataset.neighborhoods.QUERY_HEIGHT_CHANNEL` of the stored
+    sample, constant across its rows) to the classifier head, concatenated to
+    the pooled global feature. Deliberately NOT as a per-point input channel:
+    it is one fact about the query, and pushing a constant through the
+    per-point MLP would let it modulate every point feature instead of just
+    informing the decision.
+
+    Whether the ambiguity it removes accounts for real errors is the open
+    question this model exists to answer - see the ``clutter`` suite's
+    ``cls-qz`` arm.
+    """
+
+    def __init__(self, tnet: bool = False, dropout: float = 0.3,
+                 features: list[str] | None = None):
+        super().__init__(tnet=tnet, dropout=dropout, features=features)
+        self.head = _head(1024 + 1, dropout)
+
+    #: Width of the sample tensor this model needs, for the export tracer.
+    input_channels = SAMPLE_CHANNELS
+
+    def forward(self, points: torch.Tensor, counts: torch.Tensor) -> torch.Tensor:
+        # Skipped while tracing: the export tracer builds a stand-in tensor of
+        # the right width anyway, and reading a shape there bakes it into the
+        # graph as a constant and warns about it.
+        if not torch.jit.is_tracing() and not has_query_height(points):
+            raise ValueError(
+                f"{type(self).__name__} needs the candidate-height channel, but this "
+                f"sample tensor is {points.shape[-1]} wide. It was built by a "
+                "dataset generated before that channel existed - regenerate the "
+                "dataset and rebuild the cache.")
+        mask = valid_mask(counts, points.shape[1])
+        x = points.index_select(-1, self.feature_idx).transpose(1, 2)  # [B, C, N]
+        reg = x.new_zeros(())
+        if self.input_tnet is not None:
+            t = self.input_tnet(x[:, :3], mask)
+            x = torch.cat([torch.bmm(t, x[:, :3]), x[:, 3:]], dim=1)
+            reg = reg + _ortho_penalty(t)
+        x = self.mlp1(x)
+        if self.feature_tnet is not None:
+            t = self.feature_tnet(x, mask)
+            x = torch.bmm(t, x)
+            reg = reg + _ortho_penalty(t)
+        self._reg = reg
+        x = self.mlp2(x)
+        g = x.masked_fill(~mask[:, None, :], -torch.inf).max(dim=2).values
+        # Constant down the sample, so row 0 is the whole of it. Read after
+        # pooling, never before: the point MLP must see exactly what plain
+        # PointNet sees, or the comparison between the two measures two changes.
+        qz = points[:, 0, QUERY_HEIGHT_CHANNEL, None]
+        return self.head(torch.cat([g, qz], dim=1)).squeeze(-1)
 
 
 def _ortho_penalty(t: torch.Tensor) -> torch.Tensor:
@@ -813,6 +887,9 @@ def build_model(name: str, tnet: bool = False, dropout: float | None = None,
     if name == "pointnet":
         return PointNet(tnet=tnet, dropout=0.3 if dropout is None else dropout,
                         features=features)
+    if name == "pointnet_qz":
+        return PointNetQZ(tnet=tnet, dropout=0.3 if dropout is None else dropout,
+                          features=features)
     if name == "pointnet_stats":
         if tnet:
             raise ValueError("pointnet_stats does not use T-Nets")

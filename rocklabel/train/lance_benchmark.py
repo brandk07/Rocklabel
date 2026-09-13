@@ -33,15 +33,45 @@ def input_differences(generator: dict, benchmark: dict, task: str) -> dict:
             for key in keys if generator.get(key) != benchmark.get(key)}
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--experiments", default="training/experiments")
-    parser.add_argument("--cache", default="training/caches/lance-arena")
-    parser.add_argument("--out", default="training/reports/lance-checkpoints/results.json")
-    parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
-    parser.add_argument("--limit", type=int, default=0, help="for a smoke check only")
-    args = parser.parse_args()
+#: Defaults, named here so the CLI layer and the dashboard quote the same ones
+#: rather than two copies that drift.
+DEFAULT_EXPERIMENTS = "training/experiments"
+DEFAULT_CACHE = os.path.join("training", "caches", "lance-arena")
+DEFAULT_OUT = os.path.join("training", "reports", "lance-checkpoints", "results.json")
 
+
+def add_arguments(parser: argparse.ArgumentParser) -> None:
+    """The benchmark's flags, shared by ``rocklabel-train lancebench`` and by
+    running this module directly."""
+    parser.add_argument("--experiments", default=DEFAULT_EXPERIMENTS,
+                        help="folder to search for checkpoints, recursively "
+                             f"(default: {DEFAULT_EXPERIMENTS})")
+    parser.add_argument("--cache", default=DEFAULT_CACHE,
+                        help="the labelled arena cache to score against "
+                             f"(default: {DEFAULT_CACHE}); it must hold exactly "
+                             "one run")
+    parser.add_argument("--out", default=DEFAULT_OUT,
+                        help=f"where the scores are written (default: {DEFAULT_OUT}). "
+                             "Existing entries are kept and only checkpoints "
+                             "that changed, or that failed last time, are rescored")
+    parser.add_argument("--pattern", default="best.pt",
+                        help="which checkpoint files to score, as a glob "
+                             "matched recursively under --experiments "
+                             "(default: best.pt). Use 'epochs/epoch-*.pt' to "
+                             "score every saved epoch of a run trained with "
+                             "--save-every-epoch, which is how the question "
+                             "'did the validation score keep the right epoch' "
+                             "gets answered")
+    parser.add_argument("--device", default=None,
+                        help="cuda / cpu (default: auto)")
+    parser.add_argument("--limit", type=int, default=0,
+                        help="score only the first N checkpoints - a smoke "
+                             "check, never a result")
+
+
+def run(args) -> None:
+    if not getattr(args, "device", None):
+        args.device = "cuda" if torch.cuda.is_available() else "cpu"
     meta = data.load_cache_meta(args.cache)
     if len(meta["runs"]) != 1:
         raise ValueError("Lance benchmark expects exactly one labelled run")
@@ -50,7 +80,7 @@ def main() -> None:
     device = torch.device(args.device)
     torch.set_num_threads(4)
     root = Path(args.experiments)
-    paths = sorted(root.rglob("best.pt"))
+    paths = sorted(root.rglob(getattr(args, "pattern", None) or "best.pt"))
     if args.limit:
         paths = paths[:args.limit]
     splits = {
@@ -86,9 +116,16 @@ def main() -> None:
         key = str(path)
         stat = path.stat()
         old = rows.get(key)
-        if old and old.get("checkpoint_size") == stat.st_size and old.get("checkpoint_mtime_ns") == stat.st_mtime_ns:
-            if "error" not in old and ("input_differences" not in old
-                                       or "lance_used_in_selection" not in old):
+        # An unchanged checkpoint is skipped - unless last time it failed. A
+        # failure is usually about the environment (a cache missing a channel,
+        # a driver, a full disk), not about the checkpoint, so a stored error
+        # must not make a model permanently unscoreable: it is retried, and
+        # succeeds the moment whatever broke has been fixed.
+        unchanged = (old and old.get("checkpoint_size") == stat.st_size
+                     and old.get("checkpoint_mtime_ns") == stat.st_mtime_ns)
+        if unchanged and "error" not in old:
+            if ("input_differences" not in old
+                    or "lance_used_in_selection" not in old):
                 if "input_differences" not in old:
                     ck = torch.load(path, map_location="cpu", weights_only=False)
                     old["input_differences"] = input_differences(
@@ -138,6 +175,12 @@ def main() -> None:
             print(f"  ERROR {rows[key]['error']}", flush=True)
         save()
     print(f"Saved {len(rows)} results to {out}", flush=True)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    add_arguments(parser)
+    run(parser.parse_args())
 
 
 if __name__ == "__main__":

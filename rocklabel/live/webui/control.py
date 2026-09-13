@@ -283,6 +283,10 @@ class LiveController:
             st = s.settings
             v["model.enabled"] = bool(st.enabled)
             v["model.persist"] = bool(st.persist)
+            v["model.clear_looked_through"] = bool(st.clear_looked_through)
+            v["model.clear_separation_m"] = float(st.clear_separation_m)
+            v["model.clear_free_windows"] = float(st.clear_free_windows)
+            v["model.cleared"] = int(s.status_dict().get("cleared", 0))
             v["model.threshold"] = float(s.threshold)
             v["model.interval_sec"] = float(st.interval_sec)
             v["model.window_sec"] = float(st.window_sec or 0.0)
@@ -655,6 +659,9 @@ class LiveController:
             self._scorer.settings.enabled = value
         elif key == "model.persist":
             self._scorer.settings.persist = value
+        elif key in ("model.clear_looked_through", "model.clear_separation_m",
+                     "model.clear_free_windows"):
+            self._scorer_setting(key.split(".", 1)[1], value)
         elif key in ("model.interval_sec", "model.window_sec"):
             self._scorer_setting(key.split(".", 1)[1], value)
         elif key == "replay.position":

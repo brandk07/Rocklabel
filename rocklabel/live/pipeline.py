@@ -261,7 +261,14 @@ class IngestEngine:
         #: Rolling window of recent world-frame batches at FULL resolution,
         #: for live model scoring: the model trains on single-scan clouds, so
         #: the scorer needs fresh raw scans, not the fused/accumulated map.
-        self._recent: deque[tuple[float, np.ndarray, np.ndarray | None]] = deque()
+        #: (timestamp, points, intensity, sensor origin) per raw batch. The
+        #: origin is kept because a free-space test has to trace each beam from
+        #: where it was actually measured: the sensor covers several centimetres
+        #: during one scoring window, which is more than the 5 cm voxel being
+        #: judged, so one pose for the window is not good enough to delete
+        #: anything on (see rocklabel/live/evidence.py).
+        self._recent: deque[tuple[float, np.ndarray, np.ndarray | None,
+                                  np.ndarray]] = deque()
         self._recent_lock = threading.Lock()
         self._recent_max_sec = 5.0
         self._recent_max_batches = 512
@@ -436,17 +443,33 @@ class IngestEngine:
         """Raise/lower that ceiling (UI thread)."""
         self.accum.set_max_points(value)
 
-    def recent_snapshot(self, window_s: float = 0.0) -> tuple[np.ndarray, np.ndarray]:
+    def recent_snapshot(self, window_s: float = 0.0, with_origins: bool = False,
+                        with_stamps: bool = False):
         """World-frame points + intensity of the freshest scans, full resolution.
 
         ``window_s <= 0`` returns only the single latest batch — the same
         per-scan cloud the training datasets were generated from. Larger
         windows concatenate every batch within that many seconds of the
         newest one. Intensity is NaN where the source provided none.
+
+        ``with_origins`` adds a third array: the sensor position each point was
+        measured from, one row per point. Only the free-space layer needs it,
+        and it needs it per batch rather than per window — over 0.05 s the
+        sensor moves further than the voxel a beam is being asked about.
+
+        ``with_stamps`` adds the acquisition time of each point's batch, also
+        one row per point. The same layer needs that too, for the opposite
+        reason: consecutive windows overlap, a paused or stalled source
+        re-delivers the identical batch, and without a time on each return
+        there is nothing to tell a second look at the arena from a second copy
+        of the first one.
         """
         with self._recent_lock:
             if not self._recent:
-                return np.empty((0, 3)), np.empty(0, np.float32)
+                empty = (np.empty((0, 3)), np.empty(0, np.float32))
+                extra = ((np.empty((0, 3)),) if with_origins else ()) + (
+                    (np.empty(0),) if with_stamps else ())
+                return empty + extra
             newest = self._recent[-1][0]
             if window_s <= 0.0:
                 batches = [self._recent[-1]]
@@ -458,7 +481,15 @@ class IngestEngine:
             else np.full(b[1].shape[0], np.nan, np.float32)
             for b in batches
         ])
-        return pts, inten
+        if not (with_origins or with_stamps):
+            return pts, inten
+        out = (pts, inten)
+        if with_origins:
+            out += (np.concatenate([np.broadcast_to(b[3], b[1].shape)
+                                    for b in batches]),)
+        if with_stamps:
+            out += (np.concatenate([np.full(len(b[1]), b[0]) for b in batches]),)
+        return out
 
     def pose_status(self) -> str:
         """Human-readable pose / IMU state for the stats readout."""
@@ -654,7 +685,8 @@ class IngestEngine:
             )
             # Fresh-scan window for live model scoring (full resolution).
             with self._recent_lock:
-                self._recent.append((batch.timestamp, points, inten))
+                self._recent.append((batch.timestamp, points, inten,
+                                     self.current_pose()[0].astype(np.float64)))
                 while (
                     len(self._recent) > self._recent_max_batches
                     or batch.timestamp - self._recent[0][0] > self._recent_max_sec

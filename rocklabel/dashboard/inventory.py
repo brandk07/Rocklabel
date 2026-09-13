@@ -260,6 +260,11 @@ def _dataset_dirs(base: str) -> list[str]:
     (``datasets/full-sweep/volleyball``), so a listdir of the top level would
     return the profile names and nothing else. A manifest.json is what makes a
     folder a dataset, so that is what this looks for.
+
+    Dot-prefixed folders are skipped. A dataset kept aside while a new one is
+    verified against it is a working copy, not a choice to offer: two entries
+    that differ only in a suffix are exactly the confusion generation profiles
+    exist to prevent.
     """
     out = []
     for dirpath, dirs, names in os.walk(base):
@@ -267,7 +272,8 @@ def _dataset_dirs(base: str) -> list[str]:
             out.append(dirpath)
             dirs[:] = []           # never descend into points/ bev/ seg/
         else:
-            dirs[:] = [d for d in sorted(dirs) if d not in ("points", "bev", "seg")]
+            dirs[:] = [d for d in sorted(dirs)
+                       if d not in ("points", "bev", "seg") and not d.startswith(".")]
     return sorted(out)
 
 
@@ -976,6 +982,11 @@ def caches(root: str) -> list[dict]:
         return []
     out = []
     for name in sorted(os.listdir(base)):
+        # Dot-prefixed: a cache kept aside while its replacement is verified
+        # against it. It is a complete, valid cache, which is exactly why it
+        # must not appear in a picker beside the one that superseded it.
+        if name.startswith("."):
+            continue
         d = os.path.join(base, name)
         meta = _read_json(os.path.join(d, "meta.json"))
         if not meta or "runs" not in meta:
@@ -1021,7 +1032,154 @@ _REPORT_BLURBS = {
     "compare": ("Model comparison", "Written by Compare models / Regenerate report."),
     "reflect": ("Reflectivity check",
                 "Written by Reflectivity check — measured off the cache, no training."),
+    "map-evidence": ("Map evaluation",
+                     "Written by Map evaluation — per-rock coverage and false "
+                     "ground over a whole replayed recording, with and without "
+                     "the looked-through cleanup."),
 }
+
+
+def _under_root(path: str, root: str) -> str:
+    """``path`` relative to the project when it is inside it, else unchanged.
+
+    A summary records absolute paths, and the dashboard's own root is often
+    ``.``; a plain startswith test gets that wrong and shows the reader a home
+    directory where a repo path belongs.
+    """
+    if not path:
+        return ""
+    absolute, base = os.path.abspath(path), os.path.abspath(root)
+    return os.path.relpath(absolute, base) if absolute.startswith(base + os.sep) else path
+
+
+def map_evaluations(root: str) -> list[dict]:
+    """Every finished Map evaluation, control and cleaned side by side.
+
+    A map evaluation is the only thing here graded on what the robot would
+    actually drive on rather than on a ranking score, so it gets its own list
+    instead of being one more folder of figures. One entry per output
+    directory, found by its summary.json rather than by where it was put, so a
+    run written outside the usual reports folder still shows up.
+    """
+    base = os.path.join(root, DIRS["reports"])
+    out: list[dict] = []
+    if not os.path.isdir(base):
+        return out
+    for dirpath, dirs, names in os.walk(base):
+        dirs[:] = sorted(dirs)
+        if "summary.json" not in names:
+            continue
+        summary = _read_json(os.path.join(dirpath, "summary.json")) or {}
+        maps = summary.get("maps")
+        scores = summary.get("scores")
+        if not isinstance(maps, dict) or not isinstance(scores, dict):
+            continue          # some other command's summary.json
+        control = maps.get("control", {})
+        cleaned = maps.get("cleaned")
+        out.append({
+            "name": os.path.relpath(dirpath, base),
+            "path": os.path.relpath(dirpath, root),
+            "checkpoint": _under_root(scores.get("checkpoint", ""), root),
+            "model": scores.get("model", ""),
+            "recording": os.path.basename(
+                (summary.get("geometry") or {}).get("recording", "")),
+            "threshold": summary.get("threshold"),
+            "frames": (summary.get("geometry") or {}).get("frames", 0),
+            "macro_coverage": control.get("macro_coverage"),
+            "worst_rock_coverage": control.get("worst_rock_coverage"),
+            "false_cells": control.get("false_cells_3d"),
+            # None when the run had no cleanup arm, which is what says "this is
+            # a plain measurement of what the model does today".
+            "cleaned_false_cells": None if cleaned is None else cleaned.get("false_cells_3d"),
+            "cleaned_macro_coverage": None if cleaned is None else cleaned.get("macro_coverage"),
+            "cleaned_worst_rock_coverage": (
+                None if cleaned is None else cleaned.get("worst_rock_coverage")),
+            "retracted": None if cleaned is None else cleaned.get("retracted_voxels"),
+            **_stat(os.path.join(dirpath, "summary.json")),
+        })
+    return out
+
+
+def epoch_snapshots(root: str) -> list[dict]:
+    """Runs that kept every epoch's weights, and how each epoch scored.
+
+    One entry per *run*, carrying its epochs inside it, rather than ninety
+    entries in the model picker. The picker's job is to offer models worth
+    running; these are a measurement of one run, and they belong grouped under
+    the run that made them.
+
+    Two scores per epoch where both exist: the volleyball validation PR-AUC
+    that picked ``best.pt``, read from the run's own history, and the arena
+    PR-AUC from any epoch scoreboard on disk. The pair is the whole point -
+    ``volleyball_selected`` marks the epoch the current process keeps, and
+    ``arena_best`` the epoch that actually scored best on the competition
+    recording. When those are different epochs, that is the finding.
+    """
+    base = os.path.join(root, DIRS["experiments"])
+    out: list[dict] = []
+    if not os.path.isdir(base):
+        return out
+    # Any epoch scoreboard, wherever it was written. Keyed by checkpoint path.
+    arena: dict[str, float] = {}
+    reports = os.path.join(root, DIRS["reports"])
+    for dirpath, _dirs, names in os.walk(reports) if os.path.isdir(reports) else ():
+        for name in names:
+            if not name.endswith("epoch-scores.json"):
+                continue
+            data = _read_json(os.path.join(dirpath, name)) or {}
+            for row in data.get("results", []):
+                if isinstance(row, dict) and "pr_auc" in row:
+                    arena[row.get("checkpoint", "")] = row["pr_auc"]
+
+    for dirpath, dirs, _names in os.walk(base):
+        if os.path.basename(dirpath) != "epochs":
+            continue
+        dirs[:] = []
+        run_dir = os.path.dirname(dirpath)
+        history = _read_history(os.path.join(run_dir, "history.csv"))
+        epochs = []
+        for name in sorted(f for f in os.listdir(dirpath) if f.endswith(".pt")):
+            rel = os.path.relpath(os.path.join(dirpath, name), root)
+            try:
+                number = int(name.split("-")[-1].split(".")[0])
+            except ValueError:
+                continue
+            epochs.append({"epoch": number, "path": rel,
+                           "val_pr_auc": history.get(number),
+                           "lance_pr_auc": arena.get(rel)})
+        if not epochs:
+            continue
+        picked = max((e for e in epochs if e["val_pr_auc"] is not None),
+                     key=lambda e: e["val_pr_auc"], default=None)
+        scored = [e for e in epochs if e["lance_pr_auc"] is not None]
+        best = max(scored, key=lambda e: e["lance_pr_auc"], default=None)
+        for e in epochs:
+            e["volleyball_selected"] = picked is not None and e is picked
+            e["arena_best"] = best is not None and e is best
+        out.append({
+            "name": os.path.relpath(run_dir, base),
+            "path": os.path.relpath(run_dir, root),
+            "epochs": epochs,
+            "scored": len(scored),
+            "volleyball_selected_epoch": None if picked is None else picked["epoch"],
+            "arena_best_epoch": None if best is None else best["epoch"],
+            "volleyball_selected_lance": None if picked is None else picked["lance_pr_auc"],
+            "arena_best_lance": None if best is None else best["lance_pr_auc"],
+            **_stat(dirpath),
+        })
+    out.sort(key=lambda r: r["name"])
+    return out
+
+
+def _read_history(path: str) -> dict[int, float]:
+    """``epoch -> val PR-AUC`` from a run's history.csv, empty if unreadable."""
+    import csv
+    try:
+        with open(path) as f:
+            return {int(float(r["epoch"])): float(r["val_pr_auc"])
+                    for r in csv.DictReader(f) if r.get("val_pr_auc")}
+    except (OSError, ValueError, KeyError):
+        return {}
 
 
 def result_figures(root: str) -> list[dict]:
@@ -1327,6 +1485,8 @@ def snapshot(root: str) -> dict:
         "caches": caches(root),
         "training_now": training_activity(root),
         "figures": result_figures(root),
+        "map_evaluations": map_evaluations(root),
+        "epoch_snapshots": epoch_snapshots(root),
         "summary": results_summary(root),
         "ablations": abl,
         "totals": {

@@ -545,6 +545,161 @@ BEV_FOLDS = ["VolleyBallTest2.reslam", "VolleyBallTest6.reslam",
              "VolleyBallTest9.reslam", "VolleyBallTest10.reslam",
              "VolleyBallTest11.reslam", "VolleyBallTest12.reslam"]
 
+#: The combined-clutter recipe, repeated and taken apart.
+#:
+#: The rescoring on the labelled competition cache put `stray/cls-both` held out
+#: on VolleyBallTest4 at 0.7112 average precision, the best classifier anywhere
+#: in this project — while its own held-out volleyball score was 0.5237, which
+#: is why picking by the volleyball number never found it. Adding the phantom
+#: negative on top of stray jitter improved the competition score on 11 folds
+#: out of 11 (mean +0.102), so the combination is the part with evidence behind
+#: it; one checkpoint at 0.7112 is not.
+#:
+#: So this suite does not sweep. It repeats one recipe under three seeds and
+#: changes exactly one thing per arm, on the one fold the winner was trained on.
+_A = {"aug_stray_frac": 0.05, "aug_stray_reach": 1.0, "aug_phantom_frac": 0.08}
+#: Arm B: half the jitter. Stray alone LOST to plain PointNet on 11 folds of 11
+#: (mean -0.078) and is known to trade precision for recall, so 5% may be more
+#: corruption than the recipe needs once a rejection signal is also present.
+_B = dict(_A, aug_stray_frac=0.025)
+#: Arm C: the same clutter, without spending positives on it.
+_C = dict(_A, aug_phantom_mode="clear-only")
+
+_CLUTTER_SETTINGS = [
+    ("cls-both", "pointnet", _A, "Classifier \u00b7 combined reference",
+     "The winning recipe, retrained on today's code: 5% of each ball's points "
+     "slid along their line of sight, and 8% of samples replaced outright by a "
+     "synthetic phantom clump labelled clear. The reference every other arm "
+     "here is a single change away from. It is also the replication: the "
+     "checkpoint being reproduced was trained before a height-referencing fix "
+     "in the phantom generator, and carries no source hash, so nothing on disk "
+     "can certify what executable produced it. Treat these three fits as the "
+     "measurement and the old checkpoint as history."),
+    ("cls-lowstray", "pointnet", _B, "Classifier \u00b7 half the stray jitter",
+     "The reference with the stray fraction halved, 5% to 2.5%. Stray jitter on "
+     "its own is the one clutter setting measured to HURT on the competition "
+     "cache - it loses on every fold - and it works by teaching tolerance to "
+     "corrupted returns, which is also how a model learns to call clutter a "
+     "rock. The phantom clump supplies the opposing signal. This asks whether "
+     "the recipe still needs a full dose of the half that costs precision."),
+    ("cls-keeppos", "pointnet", _C, "Classifier \u00b7 phantoms that spare the rocks",
+     "The reference with one accounting change: a phantom clump may only "
+     "replace a clear sample, and its draw probability is raised so the number "
+     "of phantoms per batch is unchanged. As written, the augmentation replaces "
+     "any sample, so 8% of the rock examples in every batch are thrown away and "
+     "the loss weight is not adjusted for it. Nobody chose that; it fell out of "
+     "how the augmentation was written. This is what the recipe scores when it "
+     "is not also a 8% cut to the positives."),
+    ("cls-qz", "pointnet_qz", _A, "Classifier \u00b7 clutter, plus the candidate's height",
+     "The reference with one extra input: how high the candidate center sits "
+     "above the lowest point of its own ball. The classifier is asked to label "
+     "a point, and its tensor measures dx and dy from that point but dz from "
+     "the ball's floor - so the query's own height is the one coordinate never "
+     "written down. Lift a candidate half a metre without moving a neighbour "
+     "and the stored sample does not change. A rock and a return floating over "
+     "that rock are exactly that pair, and floating returns are the competition "
+     "arena's failure mode. Measured on the training cache the channel alone "
+     "separates rock from clear at ROC-AUC 0.80, so it is not a null input - "
+     "but on this flat court 'high' means 'on a rock', and in the arena it has "
+     "to mean 'suspect'. Which way it generalizes is the question."),
+    ("pp-plain", "pointnet2", {}, "PointNet++ \u00b7 no clutter training",
+     "PointNet++ with no clutter augmentation at all - the control for the pair "
+     "below. It is back in this project on the strength of the competition "
+     "rescoring rather than on anything measured at the volleyball court: its "
+     "geometry-only checkpoints average 0.6418 there against plain PointNet's "
+     "0.6169, which is the opposite of the ordering the volleyball folds gave, "
+     "and is why the older dismissal of the architecture does not stand. The "
+     "other half of that dismissal was its cost, and that does not stand "
+     "either: measured on this card, a thousand candidate balls take 39 ms "
+     "through PointNet++ and 40 ms through PointNet. Whatever it is three "
+     "times as much of, it is not scoring latency here."),
+    ("pp-both", "pointnet2", _A, "PointNet++ \u00b7 combined clutter training",
+     "PointNet++ with the reference recipe's stray jitter and phantom clumps. "
+     "The two directions that have shown anything on the competition arena are "
+     "a better architecture and better clutter negatives, and neither has been "
+     "tried with the other. This is whether they add up or overlap."),
+    ("cls-qz-plain", "pointnet_qz", {}, "Classifier \u00b7 the candidate's height alone",
+     "The height input with no clutter augmentation at all, against plain "
+     "PointNet. The paired arm above adds the channel to a recipe whose "
+     "synthetic phantoms are tall by construction, so a model there could reach "
+     "a good score by reading the new channel as a phantom detector. This arm "
+     "cannot: it never sees a phantom. It is what says whether the coordinate "
+     "is worth anything by itself."),
+]
+
+#: One arm per (setting, seed). A single fit is a random draw, and the effects
+#: being looked for here are smaller than the gap between two seeds of the same
+#: setting has been measured to be, so nothing in this suite is read off one.
+CLUTTER_ARMS = [
+    Arm(name if seed == 42 else f"{name}-s{seed}", model, _GEOM,
+        label if seed == 42 else f"{label} (seed {seed})",
+        what if seed == 42 else
+        (f"The {name!r} setting again under seed {seed}, changing nothing else. "
+         "Repeats like this are the only scale there is for reading a "
+         "difference between two settings: on this data two seeds of one "
+         "setting land as far apart as the effects being compared."),
+        overrides=dict(overrides), seed=seed)
+    for name, model, overrides, label, what in _CLUTTER_SETTINGS
+    for seed in (42, 43, 44)
+]
+
+CLUTTER_CONTRASTS = [
+    ("pp-plain", "pp-both",
+     "Does the combined clutter recipe still help the hierarchical model?"),
+    ("cls-both", "pp-both",
+     "Is PointNet++ worth three times the forward pass once both are trained "
+     "against clutter?"),
+    ("cls-both", "cls-lowstray",
+     "Does halving the stray jitter cost anything on clean data?"),
+    ("cls-both", "cls-keeppos",
+     "Does keeping every rock example, at the same phantom dose, change the "
+     "recipe's score?"),
+    ("cls-both", "cls-qz",
+     "Does telling the classifier how high its candidate sits help?"),
+    ("cls-qz-plain", "cls-qz",
+     "Is the height input worth more once clutter negatives are present?"),
+]
+
+
+# --------------------------------------------------------------------------- #
+#: Which epoch to keep.
+#:
+#: Every run in this project keeps one set of weights - the epoch with the best
+#: volleyball validation PR-AUC - and throws the rest away. Across twenty-one
+#: no-holdout fits that score ranks checkpoints against the competition arena at
+#: Spearman 0.12, which is why the choice is under suspicion. But that number
+#: compares *different* fits, and the question is a within-run one: inside one
+#: run, does the epoch the validation score picks score best on the arena?
+#: Nothing on disk can answer it, because the other epochs were never written.
+#:
+#: So: the reference recipe, three seeds, every epoch kept, and patience raised
+#: past the schedule so the run always reaches epoch 30 rather than stopping the
+#: moment volleyball stops improving - the later epochs are precisely what is
+#: being asked about. Score each epoch on the arena with
+#: ``rocklabel-train lancebench --pattern 'epochs/epoch-*.pt'`` and compare each
+#: seed's best epoch against the one its validation score chose.
+_EPOCHSEL = dict(_A, epochs=30, patience=30, save_every_epoch=True)
+
+EPOCHSEL_ARMS = [
+    Arm(f"cls-both-e{seed}", "pointnet", _GEOM,
+        f"Classifier \u00b7 combined recipe, every epoch kept (seed {seed})",
+        "The combined stray-and-phantom reference recipe, trained on all "
+        "eleven recordings under seed "
+        f"{seed}, with two changes that are about measurement rather than "
+        "about the model: every epoch's weights are kept instead of only the "
+        "one the volleyball validation score picks, and early stopping is "
+        "disabled so the cosine schedule always runs to its end. The epochs "
+        "after the validation score stops improving are the ones the "
+        "experiment is about, and patience is what has been deleting them.",
+        overrides=dict(_EPOCHSEL), seed=seed)
+    for seed in (42, 43, 44)
+]
+
+#: No pairs: the arms differ only by seed, and the comparison this suite exists
+#: for is within a run rather than between arms.
+EPOCHSEL_CONTRASTS: list[tuple[str, str, str]] = []
+
+
 BEV_ARMS = [
     Arm("bev-base", "bev_cnn", _GEOM, "BEV CNN \u00b7 control",
         "The frame rasterized to a 0.10 m grid and read by a small U-shaped "
@@ -678,6 +833,49 @@ SUITES: dict[str, dict] = {
                  "meant to deploy with, so the control is the real deployment "
                  "candidate rather than a historical baseline.",
     },
+    "clutter": {
+        "arms": CLUTTER_ARMS,
+        "contrasts": CLUTTER_CONTRASTS,
+        "cache": "full-sweep",
+        "title": "The combined-clutter recipe, repeated and taken apart",
+        "blurb": "One PointNet checkpoint - the stray-plus-phantom classifier "
+                 "held out on VolleyBallTest4 - scores better on the labelled "
+                 "competition cache than anything else this project has "
+                 "trained, and its own held-out volleyball score is mediocre, "
+                 "so no sweep picked by volleyball would ever have found it. "
+                 "This suite does not chase that number. It repeats the recipe "
+                 "under three seeds to find out whether it repeats at all, and "
+                 "changes one thing at a time around it: half the stray jitter, "
+                 "phantom clumps that stop eating 8% of the rock examples, and "
+                 "an extra input telling the model how high its candidate sits "
+                 "in its own neighborhood - the one coordinate the sample "
+                 "tensor has never carried. It also asks whether PointNet++, "
+                 "dismissed on volleyball scores, is worth another look now "
+                 "that there is an arena to judge on. Run it with --folds all, "
+                 "which fits every recording and leaves the competition cache "
+                 "as the only held-out thing; --folds VolleyBallTest4.reslam "
+                 "reproduces the original winner's exact split, which is the "
+                 "control for whether that checkpoint was luck.",
+    },
+    "epochsel": {
+        "arms": EPOCHSEL_ARMS,
+        "contrasts": EPOCHSEL_CONTRASTS,
+        "cache": "full-sweep",
+        "title": "Does the validation score pick the right epoch?",
+        "blurb": "Every run here keeps one epoch - whichever scored best on its "
+                 "own volleyball validation block - and deletes the rest. That "
+                 "score has never been shown to have anything to do with the "
+                 "competition arena: across twenty-one fits it ranks finished "
+                 "checkpoints against the arena at Spearman 0.12. But ranking "
+                 "different fits is not the question. The question is whether, "
+                 "inside one run, the epoch it picks is the epoch that would "
+                 "have scored best - and no run on disk can answer it, because "
+                 "the other epochs were overwritten. This suite trains the "
+                 "combined-clutter reference under three seeds with every "
+                 "epoch kept and early stopping switched off, so the arena can "
+                 "be asked directly. Run it with --folds all, then score the "
+                 "epochs with lancebench --pattern 'epochs/epoch-*.pt'.",
+    },
     "segdense": {
         "arms": SEGDENSE_ARMS,
         "contrasts": SEGDENSE_CONTRASTS,
@@ -738,21 +936,38 @@ def arms_of(suite: str) -> list[Arm]:
     return SUITES[suite]["arms"]
 
 
+#: ``--folds all``: hold nothing out and fit every recording in the cache.
+#: A cache run can never be called this - run ids are recording stems - so the
+#: sentinel cannot collide with a real fold. Same spelling as
+#: ``rocklabel-train train --test-run all``.
+TRAIN_ALL = "all"
+
+
 def arm_dir(root: str, suite: str, arm: Arm, test_run: str) -> str:
-    return os.path.join(root, suite, arm.name, f"loro_{test_run}")
+    fold = "trainall" if test_run == TRAIN_ALL else f"loro_{test_run}"
+    return os.path.join(root, suite, arm.name, fold)
 
 
 # --------------------------------------------------------------------------- #
 # Running
 # --------------------------------------------------------------------------- #
 def run_suite(suite: str, cache_dir: str, root: str, only_arms: list[str] | None,
-              extra: dict, fresh: bool = False) -> None:
+              extra: dict, fresh: bool = False,
+              only_folds: list[str] | None = None) -> None:
     """Train every arm of ``suite`` on every leave-one-run-out fold.
 
     Folds already carrying a test_metrics.json are skipped, so an interrupted
     sweep resumes where it stopped. ``extra`` are config overrides applied to
     every arm (epochs, device, ...); an arm's own overrides win over them, since
     the arm's overrides are the thing being tested.
+
+    ``only_folds`` narrows the sweep to named held-out runs, or to the single
+    ``TRAIN_ALL`` sentinel, which holds nothing out and fits every recording in
+    the cache. A suite that
+    repeats one recipe under several seeds is already arms x seeds runs wide;
+    multiplying that by eleven folds spends the compute on fold-to-fold spread,
+    which is the largest effect in this data and not the one under test. The
+    paired report still works - it just pairs over fewer folds, and says so.
     """
     from .data import load_cache_meta, loro_folds
     from .engine import default_config, train_fold
@@ -768,6 +983,21 @@ def run_suite(suite: str, cache_dir: str, root: str, only_arms: list[str] | None
 
     runs = sorted(load_cache_meta(cache_dir)["runs"])
     folds = loro_folds(runs)
+    if only_folds and TRAIN_ALL in only_folds:
+        if len(only_folds) > 1:
+            raise SystemExit(f"--folds {TRAIN_ALL!r} holds nothing out, so it "
+                             "cannot be combined with named folds")
+        # A deployment fit, not an experiment: there is no unseen recording left
+        # to score it on, so it writes val_metrics.json and never appears in the
+        # paired leave-one-run-out table. Its held-out score comes from a
+        # different arena entirely (see rocklabel-train lancebench / mapeval).
+        folds = [{"name": "trainall", "test": TRAIN_ALL, "train": runs}]
+    elif only_folds:
+        unknown = [f for f in only_folds if f not in runs]
+        if unknown:
+            raise SystemExit(f"unknown fold(s) {unknown}; the cache {cache_dir!r} "
+                             f"holds {runs} (or {TRAIN_ALL!r} to hold nothing out)")
+        folds = [f for f in folds if f["test"] in only_folds]
     total = len(arms) * len(folds)
     done = 0
     print(f"suite {suite!r}: {len(arms)} arms x {len(folds)} folds = {total} runs")
@@ -777,12 +1007,17 @@ def run_suite(suite: str, cache_dir: str, root: str, only_arms: list[str] | None
             done += 1
             run_dir = arm_dir(root, suite, arm, fold["test"])
             tag = f"[{done}/{total}] {arm.name} / {fold['test']}"
-            if os.path.exists(os.path.join(run_dir, "test_metrics.json")) and not fresh:
+            # A no-holdout fit has nothing honest to score on an unseen
+            # recording, so train_fold writes val_metrics.json instead - which
+            # is the file that says this fold is finished.
+            marker = ("val_metrics.json" if fold["test"] == TRAIN_ALL
+                      else "test_metrics.json")
+            if os.path.exists(os.path.join(run_dir, marker)) and not fresh:
                 print(f"{tag}: already evaluated, skipping")
                 continue
             cfg = arm.config(
                 lambda **kw: default_config(cache_dir=cache_dir, **{**extra, **kw}),
-                fold["train"], fold["test"])
+                fold["train"], "" if fold["test"] == TRAIN_ALL else fold["test"])
             print(f"\n=== {tag} ===")
             os.makedirs(run_dir, exist_ok=True)
             with open(os.path.join(run_dir, "arm.json"), "w") as f:

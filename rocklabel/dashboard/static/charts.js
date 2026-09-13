@@ -272,6 +272,10 @@ function lineChart(o) {
 
   const all = o.series.flatMap((s) => s.values.filter(Number.isFinite));
   const ticks = niceTicks(Math.max(...all, 0) || 1);
+  // Validation metrics and loss share this compact plot. Keep the metric
+  // range visible even when the loss series is the only one with data.
+  const yFloor = o.yMax != null ? o.yMax : (o.metricRange ? 1 : 0);
+  if (yFloor > (ticks[ticks.length - 1] || 1)) ticks.push(yFloor);
   const yMax = ticks[ticks.length - 1] || 1;
   const xMax = Math.max(1, o.x.length - 1);
   const xOf = (i) => M.left + (i / xMax) * plotW;
@@ -349,7 +353,7 @@ function lineChart(o) {
   hit.addEventListener('mouseleave', () => { crosshair.setAttribute('opacity', 0); hideTip(); });
   svg.appendChild(hit);
 
-  const chart = h('div', 'chart');
+  const chart = h('div', 'chart chart-line');
   chart.appendChild(svg);
   fig.appendChild(chart);
   if (o.caption) fig.appendChild(h('figcaption', null, o.caption));

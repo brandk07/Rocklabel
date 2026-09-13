@@ -737,3 +737,190 @@ def test_bev_grid_must_divide_by_its_levels():
 def test_bev_rejects_an_unknown_cell_channel():
     with pytest.raises(ValueError, match="unknown BEV channel"):
         build_model("bev_cnn", bev_channels=["occupied", "elevation"])
+
+
+# -- the candidate's own height ---------------------------------------------
+
+def test_query_height_is_the_candidate_above_its_balls_floor():
+    """The builder must measure it against the same z_min the point heights use,
+    over the whole ball, before any subsampling - or training and live
+    inference silently disagree about what the number means."""
+    pytest.importorskip("scipy")
+    from rocklabel.dataset.neighborhoods import (QUERY_HEIGHT_CHANNEL,
+                                                 build_inference_samples)
+
+    rng = np.random.default_rng(0)
+    # A dish: a floor at z=0 with one column of points rising out of it, so the
+    # candidate voxel on top of the column sits a known height above the min.
+    floor = np.column_stack([rng.uniform(-1, 1, (2000, 2)), np.zeros(2000)])
+    column = np.column_stack([np.full(60, 0.4), np.full(60, 0.4),
+                              np.linspace(0.0, 0.30, 60)])
+    xyz = np.vstack([floor, column]).astype(np.float32)
+    inten = np.full(len(xyz), 0.5, np.float32)
+    gcfg = {"neighborhood_points": 64, "centers_voxel_m": 0.05,
+            "neighborhood_radius_m": 0.5, "min_neighbors": 5}
+    out = build_inference_samples(xyz, inten, gcfg, np.random.default_rng(1))
+    qz = out["neighborhoods"][:, 0, QUERY_HEIGHT_CHANNEL]
+    centers = out["centers_odom"]
+    # Every ball here contains floor, so its minimum is 0 and the channel is
+    # just the candidate's own height.
+    assert qz == pytest.approx(centers[:, 2], abs=1e-4)
+    assert qz.max() > 0.25          # the top of the column was reached
+    assert qz.min() == pytest.approx(0.0, abs=1e-4)
+
+
+def test_query_height_is_constant_down_a_sample():
+    """It describes the query, not the points, so every row carries the same
+    value - which is what lets the model read row 0 and be done."""
+    pytest.importorskip("scipy")
+    from rocklabel.dataset.neighborhoods import (QUERY_HEIGHT_CHANNEL,
+                                                 build_inference_samples)
+
+    rng = np.random.default_rng(2)
+    xyz = rng.uniform(0, 1.5, (3000, 3)).astype(np.float32)
+    out = build_inference_samples(
+        xyz, np.full(3000, 0.5, np.float32),
+        {"neighborhood_points": 48, "centers_voxel_m": 0.1,
+         "neighborhood_radius_m": 0.5, "min_neighbors": 5},
+        np.random.default_rng(3))
+    col = out["neighborhoods"][:, :, QUERY_HEIGHT_CHANNEL]
+    assert np.all(col == col[:, :1])
+
+
+def test_query_height_moves_with_the_query_not_the_scene():
+    """Lifting the candidate has to change it; lifting everything must not."""
+    pytest.importorskip("scipy")
+    from rocklabel.dataset.neighborhoods import (QUERY_HEIGHT_CHANNEL,
+                                                 build_inference_samples)
+
+    rng = np.random.default_rng(4)
+    xyz = np.column_stack([rng.uniform(-1, 1, (3000, 2)),
+                           rng.uniform(0, 0.4, 3000)]).astype(np.float32)
+    gcfg = {"neighborhood_points": 48, "centers_voxel_m": 0.05,
+            "neighborhood_radius_m": 0.5, "min_neighbors": 5}
+    here = build_inference_samples(xyz, np.full(3000, .5, np.float32), gcfg,
+                                   np.random.default_rng(5))
+    lifted = build_inference_samples(xyz + np.float32([0, 0, 7.0]),
+                                     np.full(3000, .5, np.float32), gcfg,
+                                     np.random.default_rng(5))
+    # Translating the whole scene vertically cancels: the ball's own minimum
+    # moves with the candidate.
+    assert (here["neighborhoods"][:, 0, QUERY_HEIGHT_CHANNEL]
+            == pytest.approx(lifted["neighborhoods"][:, 0, QUERY_HEIGHT_CHANNEL],
+                             abs=1e-3))
+    # Two candidates over the same ground at different heights differ.
+    qz = here["neighborhoods"][:, 0, QUERY_HEIGHT_CHANNEL]
+    assert qz.max() - qz.min() > 0.1
+
+
+def test_qz_model_reads_the_height_and_nothing_else_changes():
+    """The channel has to reach the head without disturbing the point MLP, or
+    the comparison against plain PointNet measures two changes at once."""
+    from rocklabel.dataset.neighborhoods import QUERY_HEIGHT_CHANNEL
+
+    torch.manual_seed(0)
+    model = build_model("pointnet_qz", features=["dx", "dy", "dz"]).eval()
+    pts = torch.randn(4, 64, 5)
+    counts = torch.full((4,), 64, dtype=torch.long)
+    base = model(pts, counts)
+    moved = pts.clone()
+    moved[..., QUERY_HEIGHT_CHANNEL] += 0.5
+    assert not torch.allclose(base, model(moved, counts))
+    # ... and the per-point features it pools are exactly plain PointNet's.
+    plain = build_model("pointnet", features=["dx", "dy", "dz"]).eval()
+    plain.mlp1.load_state_dict(model.mlp1.state_dict())
+    plain.mlp2.load_state_dict(model.mlp2.state_dict())
+    with torch.no_grad():
+        x = pts.index_select(-1, model.feature_idx).transpose(1, 2)
+        pooled = plain.mlp2(plain.mlp1(x)).max(dim=2).values
+        y = pts.index_select(-1, plain.feature_idx).transpose(1, 2)
+        assert torch.allclose(pooled, plain.mlp2(plain.mlp1(y)).max(dim=2).values)
+
+
+def test_qz_model_refuses_a_cache_without_the_channel():
+    """Loudly, rather than reading intensity as a height."""
+    model = build_model("pointnet_qz", features=["dx", "dy", "dz"]).eval()
+    with pytest.raises(ValueError, match="candidate-height channel"):
+        model(torch.randn(2, 32, 4), torch.full((2,), 32, dtype=torch.long))
+
+
+# -- phantom clump draw policy ----------------------------------------------
+
+def test_clear_only_phantoms_keep_the_dose_and_every_positive():
+    from rocklabel.train.engine import _phantom_clumps, phantom_frac_for_mode
+
+    gen = torch.Generator().manual_seed(0)
+    n, rock_frac = 20_000, 0.18
+    y = (torch.rand(n, generator=gen) < rock_frac).float()
+    pts = torch.rand(n, 64, 5)
+    counts = torch.full((n,), 64, dtype=torch.long)
+    frac = phantom_frac_for_mode(0.08, "clear-only", float(y.mean()))
+    out, new_counts, new_y = _phantom_clumps(pts, counts, y, frac, gen,
+                                             mode="clear-only")
+    replaced = new_counts != counts
+    # No rock example was spent on a phantom...
+    assert float(y[replaced].sum()) == 0.0
+    assert torch.equal(new_y, y)
+    # ...and the batch still got the 8% dose it was asked for.
+    assert float(replaced.float().mean()) == pytest.approx(0.08, abs=0.006)
+
+
+def test_legacy_phantoms_still_eat_positives():
+    """The historical behaviour, unchanged - the checkpoints on disk were
+    trained with it and 'clear-only' exists to be compared against it."""
+    from rocklabel.train.engine import _phantom_clumps, phantom_frac_for_mode
+
+    gen = torch.Generator().manual_seed(1)
+    n = 20_000
+    y = (torch.rand(n, generator=gen) < 0.18).float()
+    pts = torch.rand(n, 64, 5)
+    counts = torch.full((n,), 64, dtype=torch.long)
+    assert phantom_frac_for_mode(0.08, "legacy", 0.18) == 0.08
+    _, new_counts, new_y = _phantom_clumps(pts, counts, y, 0.08, gen, mode="legacy")
+    replaced = new_counts != counts
+    assert float(y[replaced].sum()) > 0.0
+    assert float(new_y.sum()) < float(y.sum())
+
+
+def test_a_synthetic_clump_gets_its_own_query_height():
+    """Not the one from the real sample it replaced, and not a constant the
+    model could read off as 'this is a fake'."""
+    from rocklabel.dataset.neighborhoods import QUERY_HEIGHT_CHANNEL
+    from rocklabel.train.engine import _phantom_clumps
+
+    gen = torch.Generator().manual_seed(2)
+    n = 4000
+    pts = torch.zeros(n, 64, 5)
+    pts[..., QUERY_HEIGHT_CHANNEL] = 9.0          # an impossible marker value
+    counts = torch.full((n,), 64, dtype=torch.long)
+    y = torch.zeros(n)
+    out, new_counts, _ = _phantom_clumps(pts, counts, y, 1.0, gen, mode="legacy")
+    qz = out[:, 0, QUERY_HEIGHT_CHANNEL]
+    assert float(qz.max()) < 9.0                   # overwritten, not inherited
+    assert float(qz.std()) > 0.05                  # a spread, not a constant
+    # It lies inside the clump it was drawn from.
+    assert float(qz.min()) >= 0.0
+    assert float(qz.max()) <= float(out[..., 2].max()) + 1e-5
+
+
+# -- sweeping without a holdout ---------------------------------------------
+
+def test_folds_all_fits_every_recording():
+    from rocklabel.train.ablate import TRAIN_ALL, arm_dir, arms_of
+
+    arm = arms_of("clutter")[0]
+    assert arm_dir("root", "clutter", arm, TRAIN_ALL).endswith("trainall")
+    assert arm_dir("root", "clutter", arm, "VB4").endswith("loro_VB4")
+
+
+def test_clutter_suite_repeats_every_setting_under_three_seeds():
+    """Its whole point: the gap between two seeds of one setting on this data
+    is larger than any of the effects it is comparing."""
+    from rocklabel.train.ablate import arms_of
+
+    arms = arms_of("clutter")
+    seeds = {}
+    for arm in arms:
+        base = arm.name.replace("-s43", "").replace("-s44", "")
+        seeds.setdefault(base, set()).add(arm.seed or 42)
+    assert seeds and all(s == {42, 43, 44} for s in seeds.values())

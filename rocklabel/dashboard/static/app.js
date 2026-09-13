@@ -1023,7 +1023,151 @@ function renderTraining() {
   // reason from the campaign write-up when there is one.
   idle.forEach((t) => body.appendChild(unfinishedCard(t)));
 
+  body.appendChild(epochSection());
+  body.appendChild(mapEvalSection());
   body.appendChild(historySection());
+}
+
+/* Runs that kept every epoch. Only shown when one exists, because most runs
+ * keep one set of weights and there is nothing to say about them here.
+ *
+ * The thing on display is the disagreement: which epoch the volleyball
+ * validation score kept, which epoch actually scored best on the arena, and how
+ * far apart they are. Any epoch's path can be pasted into Map evaluation or
+ * Export — nothing has to be renamed to best.pt to be used. */
+function epochSection() {
+  const rows = S.inv.epoch_snapshots || [];
+  const wrap = h('div', 'train-history');
+  if (!rows.length) return wrap;
+  wrap.appendChild(sectionHead('Runs that kept every epoch',
+    'The epoch the validation score kept, beside the epoch that scored best on '
+    + 'the competition recording. Paste any epoch\u2019s path into Map evaluation '
+    + 'or Export to use it directly.'));
+  rows.forEach((r) => wrap.appendChild(epochCard(r)));
+  return wrap;
+}
+
+function epochCard(r) {
+  const card = h('section', 'card');
+  card.appendChild(h('h3', 'camp-title', r.name));
+  card.appendChild(h('div', 'train-path', r.path + '/epochs/'));
+  const kept = r.volleyball_selected_epoch;
+  const best = r.arena_best_epoch;
+  if (r.scored) {
+    const gap = (r.arena_best_lance != null && r.volleyball_selected_lance != null)
+      ? r.arena_best_lance - r.volleyball_selected_lance : null;
+    const t = h('table', 'tbl');
+    const head = h('tr');
+    ['', 'epoch', 'arena PR-AUC'].forEach((x) => head.appendChild(h('th', null, x)));
+    t.appendChild(head);
+    const row = (label, epoch, score) => {
+      const tr = h('tr');
+      tr.appendChild(h('td', null, label));
+      tr.appendChild(h('td', null, epoch == null ? '\u2014' : String(epoch)));
+      tr.appendChild(h('td', null, fmt3(score)));
+      t.appendChild(tr);
+    };
+    row('the epoch best.pt holds', kept, r.volleyball_selected_lance);
+    row('the best epoch on the arena', best, r.arena_best_lance);
+    card.appendChild(t);
+    card.appendChild(h('p', 'card-sub',
+      `${r.scored} of ${r.epochs.length} epochs scored. `
+      + (gap == null ? ''
+        : (Math.abs(gap) < 1e-9
+          ? 'The validation score kept the best one.'
+          : `The validation score left ${fmt3(gap)} on the table here \u2014 `
+            + 'but picking the best epoch by the arena is picking on the '
+            + 'development set, which is not a selection rule that can be used '
+            + 'on a recording nobody has scored yet.'))));
+  } else {
+    card.appendChild(h('div', 'muted',
+      'Not scored yet \u2014 run the Competition scoreboard with \u2018which '
+      + 'checkpoint files\u2019 set to epochs/epoch-*.pt and its own results file.'));
+  }
+  const list = h('div', 'epoch-list');
+  r.epochs.forEach((e) => {
+    const tag = h('span', 'epoch-chip'
+      + (e.arena_best ? ' epoch-chip-best' : '')
+      + (e.volleyball_selected ? ' epoch-chip-kept' : ''));
+    tag.textContent = e.epoch + (e.lance_pr_auc == null ? '' : ' \u00b7 ' + fmt3(e.lance_pr_auc));
+    tag.title = e.path
+      + (e.val_pr_auc == null ? '' : '\nvolleyball validation PR-AUC ' + fmt3(e.val_pr_auc))
+      + (e.lance_pr_auc == null ? '' : '\narena PR-AUC ' + fmt3(e.lance_pr_auc))
+      + (e.volleyball_selected ? '\nthe epoch best.pt holds' : '')
+      + (e.arena_best ? '\nbest on the arena' : '');
+    list.appendChild(tag);
+  });
+  card.appendChild(list);
+  return card;
+}
+
+/* Map evaluations. Kept apart from the sweep history on purpose: everything
+ * else on this page is a ranking score, and this is the only measurement of
+ * what the robot would actually drive on — how much of each rock ended up on
+ * the map, and how much ground was claimed that has no rock on it. */
+function mapEvalSection() {
+  const rows = S.inv.map_evaluations || [];
+  const wrap = h('div', 'train-history');
+  wrap.appendChild(sectionHead('Map evaluations',
+    'What the map looks like after a whole recording, rather than how the model '
+    + 'ranks candidates. Per-rock coverage and wrongly-claimed ground, and — where '
+    + 'the run asked for it — the same map with looked-through detections cleared.'));
+  if (!rows.length) {
+    wrap.appendChild(emptyState('No map evaluations yet',
+      'Run Map evaluation on a labelled recording to see how much of each rock '
+      + 'a checkpoint actually covers, and how much ground it claims wrongly.'));
+    const q = h('div', 'quick');
+    q.style.marginTop = '16px';
+    q.appendChild(quickButton('train-mapeval', 'Map evaluation',
+      'Replay a recording and grade the map.'));
+    wrap.appendChild(q);
+    return wrap;
+  }
+  rows.slice().sort((a, b) => (b.mtime || 0) - (a.mtime || 0))
+    .forEach((r) => wrap.appendChild(mapEvalCard(r)));
+  return wrap;
+}
+
+/* Coverage is a fraction and thresholds are two decimals; fmtNum rounds for
+ * counts and would show 0.65 for three different numbers here. */
+const fmt3 = (n) => (n == null ? '—' : Number(n).toFixed(3));
+
+function mapEvalCard(r) {
+  const card = h('section', 'card');
+  card.appendChild(h('h3', 'camp-title', r.name));
+  card.appendChild(h('div', 'train-path',
+    `${r.model} · ${r.checkpoint} · ${r.recording} · ${r.frames} windows `
+    + `· threshold ${(r.threshold == null ? '—' : Number(r.threshold).toFixed(2))}`));
+  const t = h('table', 'tbl');
+  const head = h('tr');
+  ['', 'rock coverage (mean)', 'worst rock', 'ground claimed with no rock on it']
+    .forEach((x) => head.appendChild(h('th', null, x)));
+  t.appendChild(head);
+  const row = (label, cov, worst, falseCells) => {
+    const tr = h('tr');
+    tr.appendChild(h('td', null, label));
+    tr.appendChild(h('td', null, fmt3(cov)));
+    tr.appendChild(h('td', null, fmt3(worst)));
+    tr.appendChild(h('td', null, falseCells == null ? '—' : `${falseCells} cells`));
+    t.appendChild(tr);
+  };
+  row('as the model leaves it', r.macro_coverage, r.worst_rock_coverage, r.false_cells);
+  if (r.cleaned_false_cells != null) {
+    row('after clearing looked-through', r.cleaned_macro_coverage,
+        r.cleaned_worst_rock_coverage, r.cleaned_false_cells);
+    card.appendChild(t);
+    card.appendChild(h('p', 'card-sub',
+      `${r.retracted} remembered detections retracted. Clearing only ever `
+      + 'removes detections later beams went straight through, so coverage can '
+      + 'rise: a false one floating over a rock stops standing in for the real '
+      + 'detection underneath it.'));
+  } else {
+    card.appendChild(t);
+    card.appendChild(h('p', 'card-sub',
+      'No cleanup arm in this run — this is the map exactly as the model leaves it.'));
+  }
+  card.appendChild(h('div', 'train-path', `${r.path}/summary.md`));
+  return card;
 }
 
 /** A titled divider between the two halves of the page. */
@@ -1145,11 +1289,16 @@ function trainCard(t) {
       bar.appendChild(efill);
       box.appendChild(bar);
     }
-    const pts = (f.curve || []).filter((r) => typeof r.val_pr_auc === 'number');
+    const pts = (f.curve || []).map((r) => ({
+      epoch: Number(r.epoch),
+      val_loss: Number(r.val_loss),
+      val_pr_auc: Number(r.val_pr_auc),
+    })).filter((r) => Number.isFinite(r.epoch) && Number.isFinite(r.val_pr_auc));
     if (pts.length > 1) {
       box.appendChild(window.Charts.lineChart({
         x: pts.map((r) => r.epoch),
         xLabel: 'epoch',
+        metricRange: true,
         series: [
           { name: 'val PR-AUC', values: pts.map((r) => r.val_pr_auc) },
           { name: 'val loss', values: pts.map((r) => r.val_loss) },
@@ -2899,6 +3048,8 @@ function invSignature(inv) {
     t.runs, t.runs_complete, t.best_f1,
     inv.recordings.length && inv.recordings[0].mtime,
     inv.figures.length,
+    (inv.map_evaluations || []).length,
+    (inv.epoch_snapshots || []).reduce((n, r) => n + r.scored, 0),
     // A running sweep finishes a fold every few minutes and changes nothing
     // else on the page, so without this the progress line never moves.
     t.ablation_runs_done, t.ablation_runs_total,

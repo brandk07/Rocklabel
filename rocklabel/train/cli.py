@@ -23,6 +23,7 @@ from . import TRAIN_DEFAULTS
 from .ablate import (DEFAULT_REPORT_ROOT as REPORT_ROOT, DEFAULT_ROOT as ABLATE_ROOT,
                      SUITES)
 from .matched import AGGREGATIONS, DEFAULT_RADIUS_M
+from .phantom_modes import PHANTOM_MODES
 from .data import default_datasets, run_dir_name, run_suffix
 
 DEFAULT_ROOT = "training"
@@ -44,6 +45,7 @@ DEFAULT_RUNS_ROOT = os.path.join(ABLATE_ROOT, "compare")
 #: Training settings the ablation sweep passes through to every arm. An arm's
 #: own overrides win over these - the arm's overrides are the thing under test.
 ABLATE_PASSTHROUGH = ("epochs", "batch", "lr", "weight_decay", "patience",
+                      "save_every_epoch",
                       "val_frac", "gap_frames", "gap_seconds", "augment",
                       "aug_intensity_gain", "aug_intensity_shift", "aug_thin_min",
                       "aug_ground_tilt", "aug_stray_frac", "aug_stray_reach",
@@ -193,6 +195,12 @@ def _add_train_args(p: argparse.ArgumentParser) -> None:
     opt("--patience", type=int,
         help="stop after this many epochs with no val PR-AUC gain; keep it "
              "long enough that the cosine LR schedule can finish annealing")
+    p.add_argument("--save-every-epoch", action="store_true", default=None,
+                   help="keep every epoch's weights under <run>/epochs/, not "
+                        "only the one the validation score picked. For asking "
+                        "whether that score picks the right epoch: it cannot "
+                        "be asked afterwards, because the others are gone "
+                        "(default: off)")
     opt("--val-frac", type=float)
     opt("--gap-frames", type=int,
         help="minimum kept frames dropped between the train and val blocks")
@@ -263,9 +271,16 @@ def _add_train_args(p: argparse.ArgumentParser) -> None:
              "own lowest point the median training ball spans under 0.12 m "
              "vertically. Reach for it when a model fires on mid-air clutter. "
              "0 = off")
-    opt("--aug-phantom-mode", choices=("legacy", "matched"),
-        help="phantom generation: legacy sparse replacements, or matched-count "
-             "diffuse negatives that preserve every positive")
+    opt("--aug-phantom-mode", choices=PHANTOM_MODES,
+        help="how the synthetic phantom negatives are drawn. 'legacy' replaces "
+             "any sample, so 8%% of the rock examples are spent on them too. "
+             "'clear-only' keeps the same sparse clump but never replaces a "
+             "rock, and raises its own draw probability so the number of "
+             "phantoms per batch is unchanged - reach for it when you want the "
+             "clutter negative without paying for it in positive exposure. "
+             "'matched' is the older research variant: it also preserves "
+             "positives, but changes the clump's shape and point count and "
+             "under-doses, so it answers a different question")
     opt("--aug-phantom-extent", type=float, metavar="M",
         help="vertical extent (m) of a synthetic phantom clump, drawn 0.5-1.5x "
              "this. Default 0.54 is what a phantom-centred ball measured on the "
@@ -310,6 +325,7 @@ def _train_cfg(args, model: str, train_runs: list[str], test_run: str) -> dict:
         gap_frames=args.gap_frames, gap_seconds=args.gap_seconds,
         epochs=args.epochs, batch=args.batch, lr=args.lr,
         weight_decay=args.weight_decay, patience=args.patience, augment=args.augment,
+        save_every_epoch=args.save_every_epoch,
         seg_height_ref=args.seg_height_ref, seg_coord_ref=args.seg_coord_ref,
         aug_ground_tilt=args.aug_ground_tilt,
         aug_stray_frac=args.aug_stray_frac,
@@ -375,6 +391,18 @@ def build_parser() -> argparse.ArgumentParser:
                         "in the order they are declared - which is priority "
                         "order, so stopping early still leaves the headline "
                         "comparison finished)")
+    p.add_argument("--folds", nargs="+", default=None, metavar="RUN",
+                   help="train only the leave-one-run-out folds that hold these "
+                        "runs out (default: every fold in the cache). Use it "
+                        "when the suite repeats one setting under several seeds: "
+                        "eleven folds x three seeds mostly measures which "
+                        "recording was held out, which is the biggest effect in "
+                        "this data and never the one being tested. The paired "
+                        "report still pairs, over the folds that ran. Pass "
+                        f"{TRAIN_ALL!r} on its own to hold nothing out and fit "
+                        "every recording in the cache - which is what you want "
+                        "when the real held-out test is a different arena, not "
+                        "another recording of this one.")
     p.add_argument("--ablate-root", default=ABLATE_ROOT,
                    help=f"where each arm's runs live (default: {ABLATE_ROOT}). "
                         "One directory per arm, which is what lets two arms "
@@ -412,6 +440,113 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--out", default=os.path.join(REPORT_ROOT, "reflect"),
                    help="directory for the figures and tables "
                         f"(default: {REPORT_ROOT}/reflect)")
+
+    p = sub.add_parser(
+        "lancebench",
+        help="score every checkpoint on disk against the labelled competition "
+             "cache - the arena, not another volleyball recording")
+    # Defined once, in the module that implements it. Two copies of a flag list
+    # is how --patience silently stayed at 6 for a whole sweep.
+    from .lance_benchmark import add_arguments as _lancebench_args
+    _lancebench_args(p)
+
+    p = sub.add_parser(
+        "mapeval",
+        help="replay a whole recording and grade the prediction map it builds "
+             "(per-rock coverage, false ground, acquisition timing), optionally "
+             "with the free-space cleanup layer running alongside as a control")
+    p.add_argument("--checkpoint", required=True, help="path to a best.pt")
+    p.add_argument("--recording", required=True,
+                   help="the .mcap to replay, start to finish")
+    p.add_argument("--labels", required=True,
+                   help="label JSON for that recording - the rocks are the "
+                        "denominator every coverage number is measured against")
+    p.add_argument("--frames-dir", default=os.path.join(DEFAULT_ROOT, "caches",
+                                                        "mapeval"),
+                   help="where the replayed geometry and the per-checkpoint "
+                        "scores are cached (default: "
+                        f"{os.path.join(DEFAULT_ROOT, 'caches', 'mapeval')}). "
+                        "Both stages are skipped when they are already there, "
+                        "so sweeping the cleanup settings costs neither a "
+                        "decode nor a forward pass")
+    p.add_argument("--out", required=True,
+                   help="directory for summary.md, per-rock.csv, timeline.csv "
+                        "and the two accumulated maps")
+    p.add_argument("--stride", type=int, default=10,
+                   help="score every Nth merged window (default: 10, which on "
+                        "this sensor is one pass every half second - about the "
+                        "rig's own scoring interval)")
+    p.add_argument("--window-s", type=float, default=0.05,
+                   help="seconds of scans merged into one frame before "
+                        "inference (default: 0.05, one full sensor rotation)")
+    p.add_argument("--threshold", type=float, default=None,
+                   help="decision threshold (default: the checkpoint's own "
+                        "stored one). A threshold tuned on the map being "
+                        "graded is an oracle diagnostic, not an operating point")
+    p.add_argument("--device", default=None)
+    p.add_argument("--rebuild", action="store_true",
+                   help="ignore the cached geometry and scores and replay from "
+                        "the recording again")
+    g = p.add_argument_group(
+        "free-space cleanup",
+        "An optional second map, accumulated from the identical scores in the "
+        "same pass, in which a persistent positive can be retracted once beams "
+        "have passed through it and returned from beyond. See "
+        "rocklabel/live/evidence.py.")
+    g.add_argument("--clean", action="store_true",
+                   help="build the cleaned map alongside the control")
+    g.add_argument("--free-windows", type=float, default=None, metavar="N",
+                   help="windows of 'a beam went through here and came back "
+                        "from further away' needed to retract, counted from no "
+                        "evidence either way (default: 3). A voxel in the map "
+                        "always has returns in it, so the real cost is this "
+                        "plus what those returns already banked")
+    g.add_argument("--hit-windows", type=float, default=None, metavar="N",
+                   help="what one window that saw a return in the voxel banks "
+                        "in its favour (default: 2). Above 1, a fresh return "
+                        "restores a voxel faster than it was lost")
+    g.add_argument("--max-windows-either-way", type=float, default=None,
+                   metavar="N",
+                   help="ceiling on accumulated evidence in either direction, "
+                        "so a long stare can neither make a voxel "
+                        "unretractable nor an absence unrecoverable (default: 4)")
+    g.add_argument("--min-separation-m", type=float, default=None, metavar="M",
+                   help="how far above the fitted local surface a voxel must "
+                        "stand before it is even a candidate for retraction, on "
+                        "top of that surface's own residual (default: 0.20). A "
+                        "rock here is 0.10-0.15 m tall; clearing rock tops is "
+                        "the failure this guards against, so start high")
+    g.add_argument("--cell-m", type=float, default=None, metavar="M",
+                   help="ground-cell size of the local surface model "
+                        "(default: 0.10)")
+    g.add_argument("--support-windows", type=int, default=None, metavar="N",
+                   help="distinct windows a voxel needs before its returns may "
+                        "define the ground (default: 2) - what stops one bad "
+                        "sweep becoming the floor")
+    g.add_argument("--surface-radius-cells", type=int, default=None, metavar="N",
+                   help="half-width in cells of the neighbourhood the ground "
+                        "plane is fitted over (default: 3, a 70 cm square)")
+    g.add_argument("--surface-min-cells", type=int, default=None, metavar="N",
+                   help="cells that must contribute before a fitted plane is "
+                        "trusted (default: 8); below it the ground there stays "
+                        "unknown and nothing above it is ever called detached")
+    g.add_argument("--surface-max-residual-m", type=float, default=None, metavar="M",
+                   help="largest RMS residual a fitted plane may have and still "
+                        "count as a surface (default: 0.08)")
+    g.add_argument("--pose-sigma-m", type=float, default=None, metavar="M",
+                   help="slack added to a voxel's angular footprint for SLAM "
+                        "pose error (default: 0.03). The sensor's own movement "
+                        "within a window is measured and added on top")
+    g.add_argument("--endpoint-margin-m", type=float, default=None, metavar="M",
+                   help="how much further than the voxel a beam must reach "
+                        "before it counts as having passed through rather than "
+                        "landed on it (default: 0.12)")
+    g.add_argument("--no-require-detached", dest="require_detached",
+                   action="store_false", default=None,
+                   help="let free-space evidence retract a voxel on its own, "
+                        "without it also having to stand clear of a surface. "
+                        "Clears more; this is the arm that says what the "
+                        "detachment gate is worth")
 
     p = sub.add_parser("report", help="regenerate figures/tables from existing runs")
     p.add_argument("--models", nargs="+", default=["pointnet", "pointnet2"],
@@ -568,9 +703,55 @@ def main(argv: list[str] | None = None) -> int:
         if not args.report_only:
             extra = {k: getattr(args, k) for k in ABLATE_PASSTHROUGH}
             run_suite(args.suite, _suite_cache(args), args.ablate_root, args.arms,
-                      extra, fresh=args.fresh)
+                      extra, fresh=args.fresh, only_folds=args.folds)
         out = args.results_dir or os.path.join(REPORT_ROOT, args.suite)
         render_ablation(args.ablate_root, args.suite, out)
+        return 0
+
+    if args.command == "lancebench":
+        from .lance_benchmark import run as run_lancebench
+        run_lancebench(args)
+        return 0
+
+    if args.command == "mapeval":
+        from .map_eval import (build_geometry, build_scores, check_geometry_cache,
+                               check_scores_cache, evaluate,
+                               evidence_settings_from_args)
+        geo_dir = os.path.join(args.frames_dir, "geometry")
+        # A cache is reused only when it was built from these sources under
+        # these settings and is complete. "The folder exists" is not that: it
+        # is how a stride change silently graded the wrong frames.
+        ok, why = check_geometry_cache(geo_dir, args.recording, args.labels,
+                                       args.stride, args.window_s)
+        if args.rebuild or not ok:
+            if os.path.exists(geo_dir) and not args.rebuild:
+                print(f"rebuilding geometry: {why}")
+            build_geometry(args.recording, args.labels, geo_dir,
+                           stride=args.stride, window_s=args.window_s)
+        else:
+            print(f"reusing cached geometry in {geo_dir}")
+        # One score cache per checkpoint, named by its own bytes: two
+        # checkpoints with the same file name in different run directories must
+        # never share one.
+        from .map_eval import _sha256
+        tag = _sha256(args.checkpoint)[:12]
+        score_dir = os.path.join(args.frames_dir, "scores", tag)
+        ok, why = check_scores_cache(score_dir, geo_dir, args.checkpoint)
+        if args.rebuild or not ok:
+            if os.path.exists(score_dir) and not args.rebuild:
+                print(f"rescoring: {why}")
+            build_scores(geo_dir, args.checkpoint, score_dir, device=args.device)
+        else:
+            print(f"reusing cached scores in {score_dir}")
+        result = evaluate(geo_dir, score_dir, args.out,
+                          evidence_settings_from_args(args),
+                          threshold=args.threshold)
+        for name, row in result["maps"].items():
+            print(f"{name:8s} false cells (3D) {row['false_cells_3d']:6d}  "
+                  f"macro coverage {row['macro_coverage']:.4f}  "
+                  f"worst rock {row['worst_rock_coverage']:.4f}  "
+                  f"retracted {row['retracted_voxels']}")
+        print(f"wrote {os.path.join(args.out, 'summary.md')}")
         return 0
 
     if args.command == "matched":

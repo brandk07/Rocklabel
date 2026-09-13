@@ -17,6 +17,37 @@ FEATURES = ("dx", "dy", "dz", "intensity")
 #: (PointNet++, the T-Nets, the z-rotation augmentation) needs all of them.
 GEOMETRY = ("dx", "dy", "dz")
 
+#: Index of a trailing channel that is NOT one of FEATURES: how high the
+#: candidate center itself sits above the lowest point of its own ball, in
+#: metres, repeated on every row of the sample.
+#:
+#: It is deliberately outside FEATURES. FEATURES is the menu a model picks its
+#: per-point inputs from, and it also names run directories (see
+#: train/data.run_suffix), so adding a fifth name there would rename every run
+#: on disk and orphan it. This is not a per-point measurement anyway - it is one
+#: number describing the *query*, constant across the ball - so it is carried
+#: alongside the point channels and read positionally by the models that want
+#: it (see train/models.PointNetQZ).
+#:
+#: Why it exists: dx and dy are measured from the candidate, but dz is measured
+#: from the ball's lowest point, so the candidate's own height is the one thing
+#: the model is never told. Two candidates stacked vertically over the same
+#: ground - a rock, and a floating return half a metre above it - can therefore
+#: hand the model the same tensor. This is the missing coordinate.
+QUERY_HEIGHT_CHANNEL = 4
+#: Width of a stored format-A sample row: FEATURES, then QUERY_HEIGHT_CHANNEL.
+SAMPLE_CHANNELS = QUERY_HEIGHT_CHANNEL + 1
+
+
+def has_query_height(points) -> bool:
+    """True when a sample tensor carries the candidate-height channel.
+
+    Caches built before the channel existed are four wide. Every model that
+    reads only FEATURES is unaffected either way - it index-selects channels
+    0..3 and never touches the fifth - so one cache serves both.
+    """
+    return int(points.shape[-1]) > QUERY_HEIGHT_CHANNEL
+
 
 def resolve_features(features: list[str] | tuple[str, ...] | None) -> list[str]:
     """Validate a feature selection and put it back in storage order.
@@ -51,9 +82,10 @@ def build_neighborhood_samples(
 ) -> dict | None:
     """Build format-A samples for one cropped, odom-frame frame cloud.
 
-    Returns dict with neighborhoods [S, P, 4] f32, labels [S] i8,
+    Returns dict with neighborhoods [S, P, 5] f32, labels [S] i8,
     true_counts [S] i16, centers_odom [S, 3] f32 — or None if no sample
-    survives filtering/subsampling.
+    survives filtering/subsampling. The fifth channel is
+    :data:`QUERY_HEIGHT_CHANNEL`; the first four are :data:`FEATURES`.
 
     ``arena`` (odom-frame xy polygon, see labels.LabelSet) restricts which
     *centers* become samples. It deliberately does not restrict which points
@@ -87,11 +119,17 @@ def build_neighborhood_samples(
             continue
         idx = np.asarray(idx, dtype=np.intp)
         pts = xyz[idx]
-        local = np.empty((k, 4), np.float32)
+        z_min = pts[:, 2].min()
+        local = np.empty((k, SAMPLE_CHANNELS), np.float32)
         local[:, 0] = pts[:, 0] - center[0]
         local[:, 1] = pts[:, 1] - center[1]
-        local[:, 2] = pts[:, 2] - pts[:, 2].min()  # local ground sits near z=0
+        local[:, 2] = pts[:, 2] - z_min  # local ground sits near z=0
         local[:, 3] = intensity[idx]
+        # The one thing dx/dy/dz never say: where the candidate itself sits in
+        # the ball it is the center of. Measured against the same z_min the
+        # point heights are, and taken over the whole ball before any
+        # subsampling, so training and live inference agree exactly.
+        local[:, QUERY_HEIGHT_CHANNEL] = center[2] - z_min
         if k > n_points:
             local = local[rng.choice(k, n_points, replace=False)]
         elif k < n_points:
@@ -217,7 +255,8 @@ def build_inference_samples(
     """Label-free variant of :func:`build_neighborhood_samples` for running a
     trained model on unlabeled recordings: every candidate center is kept (no
     rock filter, no negative subsampling), but the canonicalization - dx/dy
-    center-relative, dz min-relative, subsample/pad-by-repeat to
+    center-relative, dz min-relative, the candidate's own height in
+    :data:`QUERY_HEIGHT_CHANNEL`, subsample/pad-by-repeat to
     neighborhood_points with real points first - is byte-for-byte the same
     contract the training data used.
 
@@ -258,11 +297,12 @@ def build_inference_samples(
         elif k < n_points:
             idx = np.concatenate([idx, idx[rng.choice(k, n_points - k, replace=True)]])
         pts = xyz[idx]
-        local = np.empty((n_points, 4), np.float32)
+        local = np.empty((n_points, SAMPLE_CHANNELS), np.float32)
         local[:, 0] = pts[:, 0] - center[0]
         local[:, 1] = pts[:, 1] - center[1]
         local[:, 2] = pts[:, 2] - z_min
         local[:, 3] = intensity[idx]
+        local[:, QUERY_HEIGHT_CHANNEL] = center[2] - z_min
         neighborhoods.append(local)
         true_counts.append(min(k, np.iinfo(np.int16).max))
         centers_out.append(center)

@@ -48,6 +48,61 @@ SCORE_SCALE = (
 #: One entry per folder under training/experiments. Order is not meaningful —
 #: the page sorts by when the campaign last produced a fold.
 CAMPAIGNS = {
+    # ---------------------------------------------------------------- 2026-09
+    "clutter": {
+        "title": "The clutter recipe, repeated and taken apart",
+        "score": 7,
+        "verdict": ("Produced the classifier you should be running, and killed "
+                    "three ideas about how to improve it."),
+        "asked": (
+            "One checkpoint — the stray-plus-phantom classifier — scored far "
+            "better on the labelled competition cache than anything else here, "
+            "while scoring mediocre on its own held-out volleyball recording. "
+            "Does that recipe repeat, or was that checkpoint lucky? And can it "
+            "be improved by halving the stray jitter, by stopping the phantom "
+            "clumps from eating 8% of the rock examples, or by telling the "
+            "model how high its candidate sits in its own neighborhood — the "
+            "one coordinate its input has never carried."),
+        "happened": (
+            "Five settings, three seeds each, twice over: once on the winner's "
+            "own split as a control, and once trained on all eleven volleyball "
+            "recordings, which is what you do when the real test is a different "
+            "arena. Thirty fits. Every single one beat the deployed classifier "
+            "on the competition cache, by 0.05 at worst and 0.09 on average. "
+            "The recipe is real and it should be deployed. Six more fits asked "
+            "whether PointNet++ composes with it. It does not - that "
+            "architecture already reaches the same place on its own, and "
+            "adding the clutter recipe to it changes nothing. It also costs "
+            "nothing extra to run, 39 ms against 40 ms for a thousand "
+            "candidate balls, so the old objection to it was wrong twice."),
+        "failure": (
+            "Nothing improved it. All three variants landed inside the "
+            "seed-to-seed spread, which on the competition cache is 0.014 to "
+            "0.049 average precision — larger than any of the effects being "
+            "tested. The candidate-height input was the most interesting idea "
+            "and the clearest failure: the model does read it, but it learned "
+            "it as a rock cue rather than a clutter cue, because on a flat "
+            "court higher means rock. And the 0.7112 checkpoint did not "
+            "repeat — thirty fits span 0.592 to 0.704 and only one reached it."),
+        "learned": (
+            "Deploy the combined recipe and stop tuning it; the knobs tried "
+            "here are all inside the noise. Stop selecting on held-out "
+            "volleyball recordings — across fifteen checkpoints its ranking "
+            "correlates with the competition arena's at Spearman 0.28, and the "
+            "best checkpoint on the arena was one of the worse ones on "
+            "volleyball. Adding the twelfth recording back to training made no "
+            "measurable difference either way. Graded on the map it builds "
+            "rather than on a ranking, the combined recipe trained on every "
+            "recording beats the deployed checkpoint at every matched "
+            "operating point and takes the weakest rock from 0.29 to 0.36 "
+            "coverage - the number that decides whether the arena is safe "
+            "to drive. And the sharpest finding is one nobody set out to "
+            "look for: the validation score that picks best.pt inside every "
+            "run correlates with the arena at 0.12 out of 1, so the epoch "
+            "being kept is chosen on a signal that does not track the thing "
+            "the robot has to do. Scoring a run's other epochs on the arena "
+            "is probably worth more than any augmentation tried here."),
+    },
     # ---------------------------------------------------------------- 2026-08
     "fullsweep": {
         "title": "Full sweeps and the whole-frame segmenter",
@@ -261,15 +316,23 @@ def _walk_folds(edir: str) -> list[dict]:
     Campaigns are not all shaped the same — the current suites nest
     ``<arm>/<fold>/`` while the two retired ones put ``<arm>_loro_<fold>/``
     flat at the top — so this walks rather than assuming a depth.
+
+    A fit that held nothing out writes ``val_metrics.json`` instead, because
+    there is no unseen recording left to score it on. Those count as finished
+    folds here — they occupied the graphics card exactly as long — but their
+    score is a validation score and is flagged as such, so nothing downstream
+    can average it in with a held-out one.
     """
     out = []
     for dirpath, dirs, names in os.walk(edir):
         if ".superseded-" in dirpath:
             dirs[:] = []
             continue
-        if "test_metrics.json" not in names:
+        held_out = "test_metrics.json" in names
+        if not held_out and "val_metrics.json" not in names:
             continue
-        metrics = _read_json(os.path.join(dirpath, "test_metrics.json")) or {}
+        metrics = _read_json(os.path.join(
+            dirpath, "test_metrics.json" if held_out else "val_metrics.json")) or {}
         cfg_stat = _stat(os.path.join(dirpath, "config.json"))
         hist_stat = _stat(os.path.join(dirpath, "history.csv"))
         # Wall time for the fold: config.json is written the moment it starts,
@@ -279,7 +342,9 @@ def _walk_folds(edir: str) -> list[dict]:
             delta = hist_stat["mtime"] - cfg_stat["mtime"]
             elapsed = delta if delta > 0 else None
         out.append({
-            "pr_auc": metrics.get("pr_auc"),
+            "pr_auc": metrics.get("pr_auc") if held_out else None,
+            "val_pr_auc": None if held_out else metrics.get("pr_auc"),
+            "held_out": held_out,
             "task": metrics.get("task"),
             "model": metrics.get("model"),
             "started": cfg_stat["mtime"] or None,
