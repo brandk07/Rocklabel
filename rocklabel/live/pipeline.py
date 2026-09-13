@@ -255,7 +255,27 @@ class IngestEngine:
         self.raw = RawPointBuffer(d.raw_buffer_size)
         #: Long-lived, subsampled world-frame cloud for visual verification.
         #: Retention is in frames (viewer knob); the point count is only a cap.
-        self.accum = FrameAccumBuffer(d.accum_frames, d.accum_buffer_size)
+        #: With carving on, the frame window is replaced by a map that deletes
+        #: points after repeated free-space evidence (experimental; see
+        #: rocklabel/live/carving.py).
+        self._carving = bool(getattr(d, "carve", False))
+        if self._carving:
+            from .carving import CarvingAccum
+            self.accum = CarvingAccum(d.accum_buffer_size,
+                                      voxel=float(getattr(d, "carve_voxel", 0.05)),
+                                      interval_s=float(getattr(d, "carve_interval", 0.4)),
+                                      evidence_group_s=float(getattr(
+                                          d, "carve_evidence_group", 0.05)),
+                                      assumed_pose_uncertainty_m=getattr(
+                                          d, "carve_assumed_pose_uncertainty", None),
+                                      confirm_observations=int(getattr(
+                                          d, "carve_confirm_observations", 2)),
+                                      tentative_contradictions=int(getattr(
+                                          d, "carve_tentative_contradictions", 2)),
+                                      confirmed_contradictions=int(getattr(
+                                          d, "carve_confirmed_contradictions", 3)))
+        else:
+            self.accum = FrameAccumBuffer(d.accum_frames, d.accum_buffer_size)
         self._accum_stride = max(1, int(d.accum_subsample))
         self.stats = Stats()
         #: Rolling window of recent world-frame batches at FULL resolution,
@@ -290,6 +310,9 @@ class IngestEngine:
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
         self._paused = threading.Event()
+        # Orders the UI pause barrier after any in-flight accumulated-map
+        # submission.  Mapping itself remains asynchronous in CarvingAccum.
+        self._accum_submit_lock = threading.Lock()
 
     # -- lifecycle ----------------------------------------------------------- #
     def start(self) -> None:
@@ -305,9 +328,18 @@ class IngestEngine:
     def stop(self) -> None:
         self._stop.set()
         if self._thread is not None:
-            self._thread.join(timeout=2.0)
+            # A carving fold can legitimately exceed the old two-second
+            # timeout on a filled map. Never discard a live owner thread and
+            # then mutate/close the same source and accumulator concurrently.
+            self._thread.join()
             self._thread = None
         self.source.stop()
+        flush = getattr(self.accum, "flush", None)
+        if callable(flush):
+            flush()
+        close = getattr(self.accum, "close", None)
+        if callable(close):
+            close()
         self.stop_recording()
 
     # -- MCAP recording (controls called from the UI thread) ------------------ #
@@ -375,6 +407,13 @@ class IngestEngine:
     def set_paused(self, value: bool) -> None:
         if value:
             self._paused.set()
+            # A pause is resumable and may split a logical evidence bucket.
+            # Drain queued observations, but leave that bucket open until a
+            # later bucket or a terminal EOF/shutdown flush closes it.
+            with self._accum_submit_lock:
+                sync = getattr(self.accum, "sync", None)
+                if callable(sync):
+                    sync()
         else:
             self._paused.clear()
 
@@ -417,6 +456,14 @@ class IngestEngine:
     def accum_stats(self) -> tuple[int, int, float]:
         """``(frames, points, span_sec)`` held by the accumulated cloud."""
         return self.accum.stats()
+
+    @property
+    def carving(self) -> bool:
+        return self._carving
+
+    def carving_backlog(self) -> tuple[int, int, int, float] | None:
+        stats = getattr(self.accum, "backlog_stats", None)
+        return stats() if callable(stats) else None
 
     @property
     def accum_frames(self) -> int:
@@ -588,10 +635,24 @@ class IngestEngine:
 
     # -- integration loop ---------------------------------------------------- #
     def _loop(self) -> None:
+        replay_completion_flushed = False
         while not self._stop.is_set():
             batch = self.source.read(timeout=0.1)
             if batch is None:
+                finished = bool(getattr(self.source, "finished", False))
+                playing = bool(getattr(self.source, "playing", True))
+                seeking = bool(getattr(self.source, "seeking", False))
+                replay_stopped = self.source.is_replay and (
+                    finished or (not playing and not seeking)
+                )
+                if replay_stopped and not replay_completion_flushed:
+                    operation = "flush" if finished else "sync"
+                    barrier = getattr(self.accum, operation, None)
+                    if callable(barrier):
+                        barrier()
+                    replay_completion_flushed = True
                 continue
+            replay_completion_flushed = False
             if self._paused.is_set():
                 continue
             points = batch.points
@@ -647,11 +708,28 @@ class IngestEngine:
                     continue
             # The accumulated cloud keeps the FULL world-frame view (walls and
             # all) — the map you check while moving the sensor.
-            self.accum.add(
-                points[:: self._accum_stride],
-                inten[:: self._accum_stride] if inten is not None else None,
-                batch.timestamp,
-            )
+            with self._accum_submit_lock:
+                # Pause may have arrived while this batch was transformed.
+                # In that case the UI's sync barrier owns the next submission.
+                if not self._paused.is_set():
+                    if self._carving:
+                        # Every return is evidence. Rendering is reduced by the
+                        # voxel map/cap downstream; display stride must not
+                        # change carving.
+                        self.accum.add(
+                            points,
+                            inten,
+                            batch.timestamp,
+                            origin=pos,
+                            pose_uncertainty_m=batch.pose_uncertainty_m,
+                        )
+                    else:
+                        self.accum.add(
+                            points[:: self._accum_stride],
+                            (inten[:: self._accum_stride]
+                             if inten is not None else None),
+                            batch.timestamp,
+                        )
             # Fresh-scan window for live model scoring (full resolution).
             with self._recent_lock:
                 self._recent.append((batch.timestamp, points, inten))

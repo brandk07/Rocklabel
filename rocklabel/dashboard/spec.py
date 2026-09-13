@@ -633,6 +633,52 @@ COMMANDS: list[Command] = [
                        "the z band whenever the sensor height wanders. Needs "
                        "levelling, which is on by default."),
             *_floating_params(),
+            Param("carve", "bool", "Ray carving (experimental)", arg="--carve",
+                  advanced=True,
+                  help="Changes what the accumulated cloud *is*. Normally it "
+                       "keeps the last N frames and drops the oldest, so a "
+                       "phantom fades out only once it ages off the end. With "
+                       "this on it keeps one map of the whole space. Repeated "
+                       "credible free-space observations can retract a voxel; "
+                       "nearby returns support it. Every observation keeps its "
+                       "source viewpoint even when computation is batched. Keep "
+                       "this opt-in until the labelled Lance per-rock audit "
+                       "passes. The viewer's 'Accum frames' knob has no effect."),
+            Param("carve_voxel", "float", "Carving resolution", arg="--carve-voxel",
+                  unit="m", min=0.01, max=0.5, step=0.01, advanced=True,
+                  help="Map cell size for ray carving. Finer keeps more detail "
+                       "and costs more time on every fold. 0.05 m is the default "
+                       "and what the measurements above used."),
+            Param("carve_interval", "float", "Carving interval", arg="--carve-interval",
+                  unit="s", min=0.05, max=5.0, step=0.05, advanced=True,
+                  help="How often pooled scans are folded into the carved map. "
+                       "The sensor sends about 225 telegrams a second and carving "
+                       "is scheduled in batches. Each telegram retains its own "
+                       "viewpoint and evidence group. Raise it if the display "
+                       "stutters; lower it for a map that reacts faster."),
+            Param("carve_evidence_group", "float", "Carve evidence group",
+                  arg="--carve-evidence-group", unit="s", min=0.01, max=1.0,
+                  step=0.01, advanced=True,
+                  help="Time span counted as one independent evidence vote. "
+                       "Separate from scheduling so fold latency cannot silently "
+                       "change support/removal thresholds."),
+            Param("carve_assumed_pose_uncertainty", "float",
+                  "Assumed pose uncertainty",
+                  arg="--carve-assumed-pose-uncertainty", unit="m", min=0.0,
+                  max=1.0, step=0.005, advanced=True,
+                  help="Fallback only when the source has no measured pose "
+                       "uncertainty. Leave blank to disable destructive carving "
+                       "for unknown-quality poses. Zero treats replay poses as "
+                       "exact and should be an explicit experiment choice."),
+            Param("carve_confirm_observations", "int", "Carve confirmations",
+                  arg="--carve-confirm-observations", min=1, max=20, advanced=True,
+                  help="Independent supporting observations needed to confirm a voxel."),
+            Param("carve_tentative_contradictions", "int", "Tentative contradictions",
+                  arg="--carve-tentative-contradictions", min=1, max=20, advanced=True,
+                  help="Independent free-space observations needed to remove a tentative voxel."),
+            Param("carve_confirmed_contradictions", "int", "Confirmed contradictions",
+                  arg="--carve-confirmed-contradictions", min=1, max=20, advanced=True,
+                  help="Independent free-space observations needed to remove confirmed geometry."),
             Param("color_mode", "enum", "Initial coloring", arg="--color-mode",
                   choices=["", "height", "reflectivity", "reflectivity_stretch",
                            "model"],
@@ -978,6 +1024,23 @@ COMMANDS: list[Command] = [
                        "if small rocks start vanishing. Note this only cleans "
                        "the cloud you label on — Generate still builds training "
                        "frames from every scan."),
+            Param("carve", "bool", "Ray carving (experimental)", arg="--carve",
+                  advanced=True,
+                  help="Builds the cloud with a map that can delete as well as "
+                       "add. A voxel is removed only after repeated later "
+                       "observations put it in visible free space; nearer returns "
+                       "cannot carve occluded geometry and matching endpoints add "
+                       "support. Keep this opt-in until the labelled Lance "
+                       "per-rock visual audit passes. Pair it with 'Dump fused "
+                       "cloud to PLY' for side-by-side inspection."),
+            Param("carve_assumed_pose_uncertainty", "float",
+                  "Assumed pose uncertainty",
+                  arg="--carve-assumed-pose-uncertainty", unit="m", min=0.0,
+                  max=1.0, step=0.005, advanced=True,
+                  help="Recordings do not currently carry measured pose "
+                       "uncertainty. Leave blank to collect support without "
+                       "destructive carving. Zero treats the replay poses as "
+                       "exact and must be an explicit experiment choice."),
             Param("z_min", "float", "Initial z min", arg="--z-min", unit="m", step=0.1,
                   help="Starting lower clip plane in odom meters. The clip is "
                        "also the saved training height band, so this seeds that "

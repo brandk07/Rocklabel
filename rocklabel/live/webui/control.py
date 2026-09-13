@@ -197,8 +197,21 @@ class LiveController:
             title = os.path.basename(getattr(src, "path", "") or "recording")
         else:
             title = f"source · {self._cfg.source.kind}"
-        return spec.to_json(self.capabilities,
-                            {"checkpoints": self.checkpoint_choices()}) | {
+        schema = spec.to_json(self.capabilities,
+                              {"checkpoints": self.checkpoint_choices()})
+        if self._engine.carving:
+            for section in schema["sections"]:
+                section["controls"] = [
+                    control for control in section["controls"]
+                    if control["id"] != "view.accum_frames"
+                ]
+                for control in section["controls"]:
+                    if control["id"] == "status.accum":
+                        control["help"] = (
+                            "Evidence groups, points and source time span in the "
+                            "published carved map, followed by mapper backlog."
+                        )
+        return schema | {
             "mode": "replay" if self._replay else "live",
             "subtitle": title,
             "model": self._scorer.model_name if self._scorer else "",
@@ -325,9 +338,23 @@ class LiveController:
         frames, points, span = e.accum_stats()
         capped = points >= e.accum_max_points
         secs = f"{span:.1f}s" if span < 100 else f"{span:.0f}s"
-        text["status.accum"] = (f"{_compact(frames)} frames · "
-                                f"{_compact(points)} pts · {secs}"
-                                + (" · cap" if capped else ""))
+        if e.carving:
+            backlog = e.carving_backlog()
+            queue_text = ""
+            if backlog is not None:
+                queued, high, waits, work_ms = backlog
+                queue_text = (
+                    f" · queue {queued}/{high} · {work_ms:.0f}ms"
+                    + (f" · waits {waits}" if waits else "")
+                )
+            text["status.accum"] = (
+                f"{_compact(frames)} groups · {_compact(points)} pts · {secs}"
+                + (" · cap" if capped else "") + queue_text
+            )
+        else:
+            text["status.accum"] = (f"{_compact(frames)} frames · "
+                                    f"{_compact(points)} pts · {secs}"
+                                    + (" · cap" if capped else ""))
         flags["accum_capped"] = bool(capped)
         text["status.pose"] = e.pose_status()
 

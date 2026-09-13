@@ -130,6 +130,22 @@ def build_parser() -> argparse.ArgumentParser:
                         "raising this clears scattered mid-air points without "
                         "thinning solid surfaces. Try 3-10 on a long recording; "
                         "lower it if rocks start disappearing")
+    p.add_argument("--carve", action="store_true",
+                   help="EXPERIMENTAL. Build "
+                        "the cloud with ray carving instead of plain accumulation: "
+                        "a point is removed only after repeated later observations "
+                        "put it in visible free space. Rays retain their source "
+                        "viewpoints and supporting returns protect confirmed geometry. "
+                        "Keep it opt-in until the Lance per-rock visual audit passes")
+    p.add_argument(
+        "--carve-assumed-pose-uncertainty",
+        type=float,
+        metavar="M",
+        help="fallback pose uncertainty for ray carving when the recording has "
+             "no measured uncertainty. Omit to allow support but disable "
+             "destructive carving; pass 0 only to explicitly treat replay "
+             "poses as exact",
+    )
     p.add_argument("--z-min", type=float, help="initial lower z clip (meters)")
     p.add_argument("--z-max", type=float, help="initial upper z clip (meters)")
     p.add_argument("--dump-accumulated", metavar="CLOUD.PLY",
@@ -311,7 +327,10 @@ def main(argv: list[str] | None = None) -> int:
             run_label(mcap, cfg, args.labels, args.stride, args.z_min, args.z_max,
                       dump_accumulated=args.dump_accumulated,
                       fallback_viewer=args.fallback_viewer,
-                      min_hits=args.min_hits)
+                      min_hits=args.min_hits, carve=args.carve,
+                      carve_assumed_pose_uncertainty=(
+                          args.carve_assumed_pose_uncertainty
+                      ))
         elif args.command == "driftcheck":
             cfg = _apply_level_args(cfg, args)
             from .gui.driftcheck import run_driftcheck

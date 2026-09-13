@@ -48,7 +48,9 @@ def default_labels_path(mcap_path: str, labels_root: str = "labels",
 
 
 def accumulate_cloud(mcap_path: str, cfg: dict, stride: int,
-                     min_hits: int = 1) -> tuple[np.ndarray, np.ndarray, np.ndarray, "ScanStream"]:
+                     min_hits: int = 1, carve: bool = False,
+                     carve_assumed_pose_uncertainty: float | None = None,
+                     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, "ScanStream"]:
     """Fuse all (strided) scans into one voxel-accumulated odom-frame cloud.
 
     ``min_hits`` throws away every voxel that fewer than that many scans ever
@@ -58,17 +60,56 @@ def accumulate_cloud(mcap_path: str, cfg: dict, stride: int,
     mixed pixel or a grazing-angle return lands somewhere new each scan. That
     asymmetry means a couple of percent of bad returns can be a third of the
     voxels you actually see on screen.
+
+    ``carve`` swaps the add-only accumulator for the ray-carving map in
+    :mod:`~rocklabel.geometry.carve`, which also deletes points a later beam is
+    repeatedly seen to pass through. It remains opt-in until the labelled,
+    per-rock Lance audit validates it.
     """
-    acc = VoxelAccumulator(cfg["labeler"]["accumulator_voxel_m"])
+    voxel = cfg["labeler"]["accumulator_voxel_m"]
     stream = ScanStream(mcap_path, cfg, stride=stride, progress=True, desc="accumulate")
-    for scan in stream:
-        acc.add(scan.xyz_odom, scan.intensity)
-    xyz, inten, counts = acc.result()
+    if carve:
+        from ..geometry.carve import KFCMap, RayBatch
+        pose_uncertainty = (
+            np.nan if carve_assumed_pose_uncertainty is None
+            else float(carve_assumed_pose_uncertainty)
+        )
+        if np.isfinite(pose_uncertainty) and pose_uncertainty < 0.0:
+            raise ValueError("carve_assumed_pose_uncertainty must be non-negative")
+        acc = KFCMap(voxel=voxel)
+        for scan in stream:
+            acc.update_batch(RayBatch.one_group(
+                scan.xyz_odom,
+                scan.T_odom_lidar[:3, 3],
+                intensity=scan.intensity,
+                group=scan.index,
+                timestamp=scan.time_s,
+                pose_uncertainty_m=pose_uncertainty,
+            ))
+        acc.flush()
+        xyz, inten, _raw_counts = acc.result()
+        # --min-hits is documented in source observations, not raw returns.
+        # A dense scan may put several returns in one voxel but still supplies
+        # only one independent support event.
+        counts = acc.observations.copy()
+    else:
+        acc = VoxelAccumulator(voxel)
+        for scan in stream:
+            acc.add(scan.xyz_odom, scan.intensity)
+        xyz, inten, counts = acc.result()
 
     print("\n=== accumulation summary ===")
     for line in stream.counters.summary_lines():
         print("  " + line)
-    print(f"  voxels:                {len(xyz)} @ {acc.voxel_m} m")
+    print(f"  voxels:                {len(xyz)} @ {voxel} m")
+    if carve:
+        print(f"  ray carving:           deleted {acc.n_deleted} map points "
+              f"after repeated free-space evidence")
+        if carve_assumed_pose_uncertainty is None:
+            print("  pose uncertainty:      unknown; destructive votes disabled")
+        else:
+            print("  pose uncertainty:      "
+                  f"assumed {float(carve_assumed_pose_uncertainty):.3f} m")
     if min_hits > 1 and len(xyz):
         keep = counts >= int(min_hits)
         dropped = len(xyz) - int(keep.sum())
@@ -90,7 +131,8 @@ def accumulate_cloud(mcap_path: str, cfg: dict, stride: int,
 def run_label(mcap_path: str, cfg: dict, labels_path: str | None, stride: int | None,
               z_min: float | None, z_max: float | None,
               dump_accumulated: str | None = None, fallback_viewer: bool = False,
-              min_hits: int | None = None) -> None:
+              min_hits: int | None = None, carve: bool = False,
+              carve_assumed_pose_uncertainty: float | None = None) -> None:
     lcfg = cfg["labeler"]
     stride = stride if stride is not None else lcfg["stride"]
     z_min = z_min if z_min is not None else lcfg["z_min"]
@@ -106,7 +148,10 @@ def run_label(mcap_path: str, cfg: dict, labels_path: str | None, stride: int | 
     if resumed is not None and resumed.rocks:
         cfg = pin_level_to_labels(cfg, resumed.level)
 
-    xyz, inten, _counts, stream = accumulate_cloud(mcap_path, cfg, stride, min_hits)
+    xyz, inten, _counts, stream = accumulate_cloud(
+        mcap_path, cfg, stride, min_hits, carve,
+        carve_assumed_pose_uncertainty,
+    )
     if len(xyz) == 0:
         raise SystemExit("No points accumulated - check topic/frame configuration with 'rocklabel inspect'.")
 

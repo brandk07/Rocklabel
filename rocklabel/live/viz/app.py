@@ -733,7 +733,9 @@ class VizApp(PivotCamera):
         frames = self._make_number(gui.NumberEdit.INT, 1, 200_000,
                                    self._engine.accum_frames,
                                    self._on_accum_frames)
-        self._pair(agrid, "Accum frames", frames,
+        frames.enabled = not self._engine.carving
+        self._pair(agrid, ("Accum frames" if not self._engine.carving
+                           else "Accum frames (unused)"), frames,
                    "How many recent frames the accumulated cloud keeps before the "
                    "oldest drop out. Raise it to hold the map on screen longer — "
                    "the Status/Accum readout shows the time span and point count "
@@ -1712,9 +1714,17 @@ class VizApp(PivotCamera):
         frames, pts, span = self._engine.accum_stats()
         capped = pts >= self._engine.accum_max_points
         secs = f"{span:.1f}s" if span < 100 else f"{span:.0f}s"
+        unit = "g" if self._engine.carving else "f"
+        backlog = self._engine.carving_backlog()
+        queue_text = ""
+        if backlog is not None:
+            queued, high, waits, work_ms = backlog
+            queue_text = f" · q{queued}/{high} · {work_ms:.0f}ms"
+            if waits:
+                queue_text += f" · waits {waits}"
         self._put(self._stat_accum,
-                  f"{_compact(frames)}f · {_compact(pts)}p · {secs}"
-                  + (" cap" if capped else ""))
+                  f"{_compact(frames)}{unit} · {_compact(pts)}p · {secs}"
+                  + (" cap" if capped else "") + queue_text)
         self._stat_accum.text_color = _WARN if capped else _SECOND
         self._put(self._stat_pose, self._engine.pose_status())
         self._put(self._stat_state, tail)

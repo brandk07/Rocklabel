@@ -75,6 +75,23 @@ def test_live_command_defaults_to_view_only():
     assert not cfg.record.autostart
 
 
+def test_live_carving_evidence_thresholds_are_configurable():
+    cfg = _build_config(_parse(False, [
+        "--carve",
+        "--carve-evidence-group", "0.08",
+        "--carve-assumed-pose-uncertainty", "0.01",
+        "--carve-confirm-observations", "4",
+        "--carve-tentative-contradictions", "3",
+        "--carve-confirmed-contradictions", "7",
+    ]), record_cmd=False)
+    assert cfg.display.carve
+    assert cfg.display.carve_evidence_group == 0.08
+    assert cfg.display.carve_assumed_pose_uncertainty == 0.01
+    assert cfg.display.carve_confirm_observations == 4
+    assert cfg.display.carve_tentative_contradictions == 3
+    assert cfg.display.carve_confirmed_contradictions == 7
+
+
 def test_play_disables_motion_and_recording(tmp_path):
     # --play must never re-run SLAM/IMU or re-record the replayed stream.
     play = str(tmp_path / "x.mcap")

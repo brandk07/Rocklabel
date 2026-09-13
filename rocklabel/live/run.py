@@ -128,6 +128,40 @@ def add_live_args(p: argparse.ArgumentParser, record_cmd: bool) -> None:
                    help="phantom-point filter: side length (m) of the column used to "
                         "estimate the local ground (default 1.0). Larger sees the ground "
                         "past a wide obstacle; smaller follows steep terrain more closely")
+    p.add_argument("--carve", action="store_true",
+                   help="EXPERIMENTAL. Build the accumulated cloud as a persistent "
+                        "voxel map where repeated credible free-space observations "
+                        "can retract geometry. Each observation keeps its original "
+                        "viewpoint and supporting returns protect occupied voxels. "
+                        "Turns 'Accum frames' into a no-op; keep opt-in until the "
+                        "labelled Lance per-rock audit passes")
+    p.add_argument("--carve-voxel", type=float, metavar="M",
+                   help="map resolution for --carve in metres (default 0.05). "
+                        "Finer keeps more detail and costs more time per fold")
+    p.add_argument("--carve-interval", type=float, metavar="S",
+                   help="how often --carve folds pooled scans into the map "
+                        "(default 0.4 s). The sensor sends ~225 telegrams a "
+                        "second and carving each one would stall the view; raise "
+                        "this if the display stutters, lower it for a map that "
+                        "reacts faster")
+    p.add_argument("--carve-evidence-group", type=float, metavar="S",
+                   help="seconds of source observations counted as one independent "
+                        "support/contradiction group (default 0.05). Separate from "
+                        "--carve-interval so scheduling does not redefine evidence")
+    p.add_argument("--carve-assumed-pose-uncertainty", type=float, metavar="M",
+                   help="explicit positional-uncertainty fallback for carving sources "
+                        "that do not report one. Omit to suppress destructive evidence "
+                        "from unknown-quality poses; use 0 only when treating recorded "
+                        "poses as exact is justified")
+    p.add_argument("--carve-confirm-observations", type=int, metavar="N",
+                   help="independent supporting observations required to confirm "
+                        "a carved-map voxel (default 2)")
+    p.add_argument("--carve-tentative-contradictions", type=int, metavar="N",
+                   help="independent free-space observations required to remove a "
+                        "tentative carved-map voxel (default 2)")
+    p.add_argument("--carve-confirmed-contradictions", type=int, metavar="N",
+                   help="independent free-space observations required to remove a "
+                        "confirmed carved-map voxel (default 3)")
     p.add_argument("--keep-floating", action="store_true",
                    help="turn the phantom-point filter off and keep every return, "
                         "however high above the ground it floats")
@@ -274,6 +308,24 @@ def _build_config(args: argparse.Namespace, record_cmd: bool) -> AppConfig:
         cfg.floating.enabled = True
     if args.keep_floating:
         cfg.floating.enabled = False
+    if args.carve:
+        cfg.display.carve = True
+    if args.carve_voxel is not None:
+        cfg.display.carve_voxel = args.carve_voxel
+    if args.carve_interval is not None:
+        cfg.display.carve_interval = args.carve_interval
+    if args.carve_evidence_group is not None:
+        cfg.display.carve_evidence_group = args.carve_evidence_group
+    if args.carve_assumed_pose_uncertainty is not None:
+        cfg.display.carve_assumed_pose_uncertainty = (
+            args.carve_assumed_pose_uncertainty
+        )
+    if args.carve_confirm_observations is not None:
+        cfg.display.carve_confirm_observations = args.carve_confirm_observations
+    if args.carve_tentative_contradictions is not None:
+        cfg.display.carve_tentative_contradictions = args.carve_tentative_contradictions
+    if args.carve_confirmed_contradictions is not None:
+        cfg.display.carve_confirmed_contradictions = args.carve_confirmed_contradictions
     if args.mount_roll is not None or args.mount_pitch is not None:
         cfg.level.mode = "manual"
         cfg.level.mount_roll_deg = args.mount_roll or 0.0
@@ -437,6 +489,13 @@ def _run_headless(cfg: AppConfig, args: argparse.Namespace, play_path: str | Non
                 # The second model's numbers are the whole comparison when
                 # there is no window to look at.
                 extra += f"\n[rocklabel] compare | {comparison.scorer_b.status()}"
+            if engine.carving:
+                backlog = engine.carving_backlog()
+                if backlog is not None:
+                    queued, high, waits, work_ms = backlog
+                    extra += (f" | carve queue {queued}/{high}"
+                              f" | map {work_ms:.0f} ms"
+                              + (f" | waits {waits}" if waits else ""))
             print(
                 f"[rocklabel] {s.points_per_sec()/1e3:6.1f}k pts/s | "
                 f"cells occupied: {s.cells_occupied:6d} | "

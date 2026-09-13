@@ -32,12 +32,16 @@ class PointBatch:
             ``(w, x, y, z)`` (sensor→world, from the onboard IMU) valid at the
             time these points were captured. ``None`` when the source has no
             pose information (e.g. the simulator, or IMU output disabled).
+        pose_uncertainty_m: optional measured positional uncertainty for this
+            batch. ``None`` means unavailable; it is not equivalent to exact
+            zero uncertainty and therefore cannot authorize destructive carving.
     """
 
     points: np.ndarray
     intensity: np.ndarray | None = None
     timestamp: float = 0.0
     orientation: np.ndarray | None = None
+    pose_uncertainty_m: float | None = None
 
     def __post_init__(self) -> None:
         if self.points.ndim != 2 or self.points.shape[1] != 3:

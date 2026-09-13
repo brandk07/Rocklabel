@@ -595,10 +595,6 @@ class McapReplaySource(PointSource):
         return max(0.0, (self._pos_ns - self._t0_ns) / 1e9)
 
     @property
-    def playing(self) -> bool:
-        return self._playing
-
-    @property
     def speed(self) -> float:
         """Playback rate as a multiple of real time; 0 = unpaced."""
         return self._speed
@@ -617,6 +613,12 @@ class McapReplaySource(PointSource):
     @property
     def finished(self) -> bool:
         return self._finished
+
+    @property
+    def playing(self) -> bool:
+        """Whether replay is actively paced (false at pause and EOF)."""
+        with self._lock:
+            return self._playing
 
     @property
     def seeking(self) -> bool:

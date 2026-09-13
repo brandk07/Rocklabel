@@ -355,6 +355,25 @@ def test_headless_schema_drops_display_only_controls(replay_ctl):
     assert "view.accum_frames" in ids and "view.accum_max_points" in ids
 
 
+def test_carving_schema_reports_groups_and_hides_unused_frame_limit():
+    cfg = AppConfig()
+    cfg.display.carve = True
+    cfg.slam.enabled = False
+    engine = IngestEngine(SimulatedSource(cfg), KalmanHeightmap(cfg), cfg)
+    ctl = LiveController(cfg, engine)
+    try:
+        schema = ctl.schema()
+        ids = {c["id"] for section in schema["sections"]
+               for c in section["controls"]}
+        assert "view.accum_frames" not in ids
+        assert "view.accum_max_points" in ids
+        text, _flags = ctl.status()
+        assert "groups" in text["status.accum"]
+        assert "queue" in text["status.accum"]
+    finally:
+        engine.accum.close()
+
+
 def test_no_model_means_no_model_or_region_sections(replay_ctl):
     sections = {s["id"] for s in replay_ctl.schema()["sections"]}
     assert "model" not in sections and "region" not in sections

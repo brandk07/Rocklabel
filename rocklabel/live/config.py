@@ -341,6 +341,29 @@ class DisplayConfig:
     accum_buffer_size: int = 1_200_000
     #: Keep every Nth point in the accumulated cloud (memory / render cost).
     accum_subsample: int = 4
+    #: Build the accumulated cloud by ray carving instead of a frame window:
+    #: repeated credible free-space observations can retract occupied voxels.
+    #: EXPERIMENTAL — keep opt-in until the labelled Lance audit passes.
+    carve: bool = False
+    #: Map resolution for carving (m). Finer keeps more detail and costs more.
+    carve_voxel: float = 0.05
+    #: How often the pooled telegrams are folded into the carved map (s). The
+    #: source sends ~225 telegrams/s; carving each one would stall ingest.
+    carve_interval: float = 0.4
+    #: Width of one independent temporal evidence group (s). This is separate
+    #: from scheduling so changing fold latency does not silently change votes.
+    carve_evidence_group: float = 0.05
+    #: Optional explicit fallback when the source has no measured positional
+    #: uncertainty. None is conservative: support is accumulated but unknown-
+    #: quality poses cannot delete geometry. Setting 0 opts into exact-pose
+    #: assumptions for controlled replay experiments.
+    carve_assumed_pose_uncertainty: float | None = None
+    #: Independent supporting observations needed to confirm a voxel.
+    carve_confirm_observations: int = 2
+    #: Independent free-space observations needed to remove tentative geometry.
+    carve_tentative_contradictions: int = 2
+    #: Independent free-space observations needed to remove confirmed geometry.
+    carve_confirmed_contradictions: int = 3
     #: Show the accumulated cloud on startup.
     show_accum: bool = True
     #: Matplotlib-style colormap name for height coloring.

@@ -378,6 +378,44 @@ def test_engine_record_then_replay_reconstructs(tmp_path):
     assert np.isfinite(surface._inten[hits_rep > 0]).any()
 
 
+def test_replay_eof_publishes_the_final_open_carving_group(tmp_path):
+    path = str(tmp_path / "carving-tail.mcap")
+    cfg = AppConfig()
+    cfg.slam.enabled = False
+    cfg.motion.use_imu = False
+    cfg.floating.enabled = False
+    cfg.display.carve = True
+    cfg.display.carve_interval = 10.0
+    cfg.display.carve_evidence_group = 0.05
+    rec = McapRecorder(path, config=cfg)
+    rec.write_frame(
+        np.array([[1.0, 0.0, 0.0]]), np.array([2.0]), 0.0, None,
+        np.zeros(3), np.array([1.0, 0.0, 0.0, 0.0]),
+    )
+    rec.write_frame(
+        np.array([[0.0, 1.0, 0.0]]), np.array([4.0]), 0.1, None,
+        np.zeros(3), np.array([1.0, 0.0, 0.0, 0.0]),
+    )
+    rec.close()
+
+    src = McapReplaySource(path, autoplay=False, speed=0.0)
+    engine = IngestEngine(src, KalmanHeightmap(cfg), cfg)
+    engine.start()
+    src.seek(src.duration_sec)
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline:
+        groups, points, _span = engine.accum_stats()
+        if src.finished and groups == 2 and points == 2:
+            break
+        time.sleep(0.01)
+    assert src.finished
+    assert engine.accum_stats()[:2] == (2, 2)
+    xyz, intensity = engine.accum_snapshot()
+    assert len(xyz) == 2
+    assert sorted(intensity.tolist()) == [2.0, 4.0]
+    engine.stop()
+
+
 def test_normalize_recording_path(tmp_path):
     """A typed-in name is a name, not a path: it lands in the recordings dir
     with a .mcap extension, so the dashboard inventory can see it."""
