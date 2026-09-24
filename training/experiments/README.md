@@ -63,6 +63,7 @@ believing anything about it.
 | `compare-fused/` | flat | The same, for the old Comforter recordings. |
 | `stray/` | 26, done | Does training against returns that sit on no surface survive a change of arena? **Yes for the classifier** (+0.093 on the competition recording, ahead on 11 of 11 folds). Also holds `seg-capped`, which asks whether the segmenter's loss weight is what breaks it. |
 | `bev/` | 44, done | A convolutional network reading the frame as a top-down picture instead of a set of points. **Does not beat the deployed classifier** on rocks found (83% against 97%), though it scores higher on the shared grid. Its real result is the loss-weight finding above. |
+| `mapnet-v1/` | 26 map-model runs + 6 per-ball controls, done | A U-Net reading the robot's accumulated height map instead of one sweep. **Yes, with arena labels**: on a cross-validated arena map it covers 0.58 of each rock at 100 wrongly-claimed cells against 0.42 for any earlier model, and claims 42 false cells at its default threshold against about 2,000. Volleyball alone does not transfer. A different layout: `<run>/final.pt` plus one checkpoint per epoch and `log.csv`; the per-ball control is in `ball-control/`. |
 
 ## Two shapes of folder, on purpose
 

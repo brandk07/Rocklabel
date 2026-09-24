@@ -19,7 +19,7 @@ from dataclasses import dataclass
 import numpy as np
 import torch
 
-from ..dataset.neighborhoods import build_inference_frame, build_inference_samples
+from ..dataset.neighborhoods import build_inference_frame
 from ..recording.pipeline import ScanStream, WindowedScanStream
 from .models import build_model_from_config, model_task
 
@@ -39,19 +39,19 @@ class FrameRec:
     probs: np.ndarray      # [S]
 
 
-def _score_balls(xyz, inten, gcfg, model, device, rng, batch):
-    """Classifier: one probability per candidate ball center."""
-    samples = build_inference_samples(xyz, inten, gcfg, rng)
-    if samples is None:
-        return np.empty((0, 3), np.float32), np.empty(0, np.float32)
-    pts = torch.from_numpy(samples["neighborhoods"])
-    cnt = torch.from_numpy(samples["true_counts"].astype(np.int64))
-    out = []
-    with torch.no_grad():
-        for i in range(0, len(pts), batch):
-            logits = model(pts[i:i + batch].to(device), cnt[i:i + batch].to(device))
-            out.append(torch.sigmoid(logits).float().cpu().numpy())
-    return samples["centers_odom"], np.concatenate(out)
+def _score_balls(xyz, inten, gcfg, model, device, index, batch, support=None):
+    """Classifier: one probability per candidate ball center.
+
+    Goes through the shared policy scorer, so a checkpoint is scored under its
+    own neighborhood contract (adaptive radius, older sweeps) rather than the
+    historical fixed ball - which it would otherwise be handed silently, since
+    the shapes fit.
+    """
+    from .policy_scoring import score_classifier
+
+    centers, probs, _ = score_classifier(xyz, inten, gcfg, model, device, index,
+                                         batch=batch, support=support)
+    return centers, probs
 
 
 def _score_frame(xyz, inten, base, gcfg, model, device, rng):
@@ -82,12 +82,26 @@ def _score_recording(mcap_path: str, cfg: dict, gcfg: dict, model, device,
                      batch: int = 512, task: str = "classify") -> list[FrameRec]:
     from ..gui import viewer  # height_colors, without importing open3d at module load
 
+    from ..dataset.history import Sweep, SweepHistory, assemble_support
+    from .policy_scoring import history_policy
+
     eff_stride = stride if stride is not None else gcfg["frame_stride"]
     eff_window = window_s if window_s is not None else (gcfg.get("frame_window_s") or 0.0)
-    if eff_window > 0.0:
-        stream = WindowedScanStream(
-            ScanStream(mcap_path, cfg, stride=1, progress=True, desc="replay"), eff_window)
-        frames = (s for k, s in enumerate(stream) if k % eff_stride == 0)
+    hist = history_policy(gcfg) if task != "segment" else None
+    buffer = SweepHistory(hist.retention_s) if hist is not None else None
+    if eff_window > 0.0 or buffer is not None:
+        stream = ScanStream(mcap_path, cfg, stride=1, progress=True, desc="replay")
+        if eff_window > 0.0:
+            stream = WindowedScanStream(stream, eff_window)
+        # Every sweep enters the history buffer before the stride skips it:
+        # the older slots of a scoring frame are mostly sweeps nobody scores.
+        def _frames():
+            for k, s in enumerate(stream):
+                if buffer is not None:
+                    buffer.push(Sweep.from_scan(s))
+                if k % eff_stride == 0:
+                    yield s
+        frames = _frames()
     else:
         frames = ScanStream(mcap_path, cfg, stride=eff_stride, progress=True, desc="replay")
 
@@ -99,16 +113,21 @@ def _score_recording(mcap_path: str, cfg: dict, gcfg: dict, model, device,
                        base[2] - gcfg["crop_down_m"]], np.float32)
         hi = np.array([base[0] + gcfg["crop_forward_m"], base[1] + gcfg["crop_left_m"],
                        base[2] + gcfg["crop_up_m"]], np.float32)
-        inside = ((scan.xyz_odom >= lo) & (scan.xyz_odom <= hi)).all(axis=1)
-        # Optional user crop on top of the checkpoint box: a z band relative to
-        # the sensor height and a horizontal radius, to skip walls/ceiling.
-        if z_min is not None:
-            inside &= scan.xyz_odom[:, 2] >= base[2] + z_min
-        if z_max is not None:
-            inside &= scan.xyz_odom[:, 2] <= base[2] + z_max
-        if max_range is not None and max_range > 0:
-            dxy = scan.xyz_odom[:, :2] - base[:2]
-            inside &= (dxy * dxy).sum(axis=1) <= max_range * max_range
+
+        def crop(pts, lo=lo, hi=hi, base=base):
+            inside = ((pts >= lo) & (pts <= hi)).all(axis=1)
+            # Optional user crop on top of the checkpoint box: a z band relative
+            # to the sensor height and a horizontal radius, to skip walls/ceiling.
+            if z_min is not None:
+                inside &= pts[:, 2] >= base[2] + z_min
+            if z_max is not None:
+                inside &= pts[:, 2] <= base[2] + z_max
+            if max_range is not None and max_range > 0:
+                dxy = pts[:, :2] - base[:2]
+                inside &= (dxy * dxy).sum(axis=1) <= max_range * max_range
+            return inside
+
+        inside = crop(scan.xyz_odom)
         if not inside.any():
             continue
         xyz, inten = scan.xyz_odom[inside], scan.intensity[inside]
@@ -118,7 +137,10 @@ def _score_recording(mcap_path: str, cfg: dict, gcfg: dict, model, device,
         if task == "segment":
             centers, probs = _score_frame(xyz, inten, base, gcfg, model, device, rng)
         else:
-            centers, probs = _score_balls(xyz, inten, gcfg, model, device, rng, batch)
+            support = (assemble_support(buffer.select(hist), crop)
+                       if buffer is not None else None)
+            centers, probs = _score_balls(xyz, inten, gcfg, model, device, scan.index,
+                                          batch, support=support)
 
         if len(xyz) > MAX_CLOUD_POINTS:
             keep = rng.choice(len(xyz), MAX_CLOUD_POINTS, replace=False)

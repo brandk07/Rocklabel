@@ -38,6 +38,15 @@ QUERY_HEIGHT_CHANNEL = 4
 #: Width of a stored format-A sample row: FEATURES, then QUERY_HEIGHT_CHANNEL.
 SAMPLE_CHANNELS = QUERY_HEIGHT_CHANNEL + 1
 
+#: Index of an optional sixth channel, never stored in the cache's sample
+#: tensor: how many seconds before the current sweep each point was measured.
+#: Only version-2 (history) datasets record it, as the ``point_age`` array
+#: beside the samples, and it is appended at load time for the one model that
+#: reads it (train/models.PointNetAge). Like the query height it stays out of
+#: FEATURES so no run directory is renamed. Unlike the query height it is a
+#: genuine per-point measurement and goes through the per-point MLP.
+AGE_CHANNEL = SAMPLE_CHANNELS
+
 
 def has_query_height(points) -> bool:
     """True when a sample tensor carries the candidate-height channel.

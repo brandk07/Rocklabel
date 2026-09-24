@@ -1188,6 +1188,17 @@ COMMANDS: list[Command] = [
             _labels(),
             *_level_params(),
             _config(advanced=False),
+            Param("sweep_cache", "dir", "Decoded sweeps", arg="--sweep-cache",
+                  advanced=True,
+                  placeholder="training/caches/neighborhood-history-v1/_sweeps/<run>",
+                  help="Read the recording's already-decoded sweeps from this "
+                       "folder instead of decoding it again. Only a config that "
+                       "sets generator.preprocessing_version: 2 (the "
+                       "scan-history / adaptive-radius builder) reads it, and it "
+                       "is refused if the folder was built from a different "
+                       "recording, label file or levelling. The Neighborhood x "
+                       "history campaign writes these; you rarely need to fill "
+                       "this in by hand."),
         ],
         long_running=True,
     ),
@@ -1347,6 +1358,17 @@ COMMANDS: list[Command] = [
                        "no honest score, because there is no unseen recording "
                        "left to score it on, so it reports validation numbers "
                        "off the tail of its own training data instead."),
+            Param("val_runs", "text", "Validation recordings", arg="--val-runs",
+                  repeat=True, nargs=True, advanced=True, source="cache_runs",
+                  placeholder="VolleyBallTest4.reslam, VolleyBallTest6.reslam",
+                  help="Validate on these whole recordings instead of the last "
+                       "15% of every training recording. They are left out of "
+                       "training entirely and choose the epoch that is kept and "
+                       "the stored threshold. Leave empty for the usual "
+                       "tail-block validation. Reach for it when a model reads "
+                       "long scan history: a tail block cannot be kept 30 s "
+                       "away from its own training frames in a 45 s recording. "
+                       "The run folder name gains _val-<recordings>."),
             _features(),
             Param("epochs", "int", "Epochs", arg="--epochs", default=30, min=1, max=500),
             Param("batch", "int", "Batch size", arg="--batch", default=256, min=8, max=4096),
@@ -1888,6 +1910,91 @@ COMMANDS: list[Command] = [
         long_running=True,
     ),
     Command(
+        id="train-nhcampaign", bin="rocklabel-train", sub="nhcampaign", stage="train",
+        icon="◎",
+        title="Neighborhood x history campaign",
+        tagline="Screen 24 ball sizes and scan histories: train on Volleyball, judge on Lance.",
+        what="Runs the neighborhood-history-v1 screen from "
+             "handoff/05-pointnet-neighborhood-history.md. Twenty-four PointNet "
+             "settings: six ways of sizing a candidate's ball (fixed 0.20, 0.30, "
+             "0.50 or 0.75 m, or adaptive between 0.20 m and 0.50/0.75 m aiming "
+             "for 256 real points) crossed with four scan histories (the current "
+             "sweep only, or older sweeps up to 4, 8 or 30 seconds back). Every "
+             "setting trains on nine Volleyball recordings, picks its epoch and "
+             "threshold on VolleyBallTest4 and 6, and is graded on the whole Lance "
+             "recording plus visual audits against the deployed model and against "
+             "the fresh fixed-0.50 m single-sweep fit. Run the steps in order: "
+             "plan, preflight, prepare, smoke, train, evaluate, summarize.",
+        why="To find out whether a smaller or adaptive ball, or points from "
+            "earlier sweeps, helps the classifier on the arena. Each step picks "
+            "up where it left off, so a stopped campaign can simply be started "
+            "again. Lance steers this campaign, so treat its numbers as "
+            "development results, not a final test.",
+        notes=[
+            "Results land in training/reports/neighborhood-history-v1/: "
+            "comparison.csv (one row per setting and seed), per-rock.csv, "
+            "results.md and, for each setting, a map evaluation and audit folders. "
+            "Datasets go to datasets/neighborhood-history-v1/<setting>, caches to "
+            "training/caches/neighborhood-history-v1/<setting>, checkpoints to "
+            "training/experiments/neighborhood-history-v1/<setting>/seed-<seed>.",
+            "A single Volleyball sweep puts a median of 63 points in a 0.5 m ball, "
+            "so the adaptive settings aiming for 256 points often sit at their "
+            "maximum radius: over all eleven recordings, 99% of the time for "
+            "0.20-0.50 m without history (effectively the fixed 0.50 m setting), "
+            "but only 43-89% for 0.20-0.75 m, and less once history adds points.",
+            "Feature follow-ups are named <setting>+qz (the model is also told how "
+            "high its candidate sits) and <setting>+age (it is told how many "
+            "seconds old each point is). They reuse that setting's dataset and "
+            "are graded against it as well as against the baseline. They exist "
+            "for fixed-r075__h5-8s and fixed-r050__h5-30s, the two settings that "
+            "led the three-seed confirmation.",
+            "'status' prints which jobs are done, running or failed, with the log "
+            "file of each failure.",
+            "Training runs one fit at a time on the GPU; about 3-8 minutes each. "
+            "Evaluation decodes the 35-minute Lance recording for every "
+            "history setting and is the slow step.",
+        ],
+        params=[
+            Param("phase", "enum", "Step", arg="--phase", required=True,
+                  choices=["plan", "preflight", "prepare", "smoke", "train",
+                           "evaluate", "alignment", "latency", "summarize", "status"],
+                  default="plan",
+                  help="plan prints every job, config and output path without "
+                       "running anything. preflight checks and hashes every input. "
+                       "prepare decodes each recording once and builds every "
+                       "setting's dataset and cache. smoke runs one recording "
+                       "through all 24 settings, two 2-epoch fits and a short "
+                       "Lance replay. train fits every setting for the chosen "
+                       "seed. evaluate grades the trained ones on Lance. alignment "
+                       "measures whether stacking sweeps thickens or doubles the "
+                       "floor. latency times each shortlisted checkpoint's scoring "
+                       "pass on its own, and refuses to start while anything else "
+                       "is using the GPU. summarize writes the comparison tables."),
+            Param("arms", "text", "Only these settings", arg="--arms", repeat=True,
+                  nargs=True, advanced=True,
+                  placeholder="fixed-r050__h1, fixed-r050__h5-30s",
+                  help="Limit prepare, train or evaluate to the named settings. "
+                       "Leave empty for all 24, which run baseline-first. The "
+                       "feature follow-ups (for example fixed-r075__h5-8s+age) only "
+                       "run when named here."),
+            Param("seed", "int", "Seed", arg="--seed", default=42, min=0, max=100000,
+                  help="Training and evaluation seed. 42 is the screen; 43 and 44 "
+                       "are the confirmation repeats for the baseline and the "
+                       "shortlist."),
+            Param("workers", "int", "Parallel jobs", arg="--workers", default=6,
+                  min=1, max=16, advanced=True,
+                  help="How many prepare or evaluate jobs run at once. Training "
+                       "always runs one fit at a time."),
+            Param("force", "bool", "Redo finished jobs", arg="--force", advanced=True,
+                  help="Rerun jobs whose status already says done."),
+            Param("no_stratify", "bool", "Skip Lance strata", arg="--no-stratify",
+                  advanced=True,
+                  help="Summarize without the per-candidate breakdown by range, "
+                       "support, history stage and robot movement (faster)."),
+        ],
+        long_running=True,
+    ),
+    Command(
         id="train-mapeval", bin="rocklabel-train", sub="mapeval", stage="deploy",
         icon="🗺",
         title="Map evaluation",
@@ -2064,6 +2171,270 @@ COMMANDS: list[Command] = [
                   arg="--rebuild", advanced=True,
                   help="Ignore the caches and decode and score the recording "
                        "from scratch."),
+            Param("frontier_only", "bool", "Only re-read the saved maps at every threshold",
+                  arg="--frontier-only", advanced=True,
+                  help="Rewrite the equal-false-area table (threshold-frontier.csv "
+                       "and the budgets) from the maps already saved in the output "
+                       "folder, in seconds, without replaying or rescoring. Use it "
+                       "on reports written before 21 September 2026: until then "
+                       "that table credited 3D coverage only to rock number 1, so "
+                       "every 'coverage at N false cells' figure was far too low. "
+                       "The stored-threshold numbers were never affected."),
+        ],
+        long_running=True,
+    ),
+    Command(
+        id="train-mapnet-cloud", bin="rocklabel-train", sub="mapnet-cloud", stage="dataset",
+        icon="☁",
+        title="Map model: stack a recording",
+        tagline="Decode a recording once into the stacked point cloud the map model uses.",
+        what="Replays a recording start to finish and keeps every return inside "
+             "the rig's operational band (10 cm below to 60 cm above the measured "
+             "floor, within 8 m of the robot), with the time it was measured. With "
+             "a label file, the levelling is pinned to the one the labels were "
+             "drawn in, exactly as Map evaluation does, and the file remembers "
+             "which labels go with it.",
+        why="The map model trains and grades on the accumulated map rather than "
+            "on one sweep, and decoding a recording is the slow part. Do it once "
+            "per recording; training cuts time prefixes and crops out of the "
+            "result.",
+        notes=[
+            "Write clouds to training/caches/mapnet-v1/clouds/<name>.npz. "
+            "Training refers to them by <name>: the volleyball runs are VB2 to "
+            "VB13 and the competition recording is LANCE.",
+            "About a second per volleyball recording and 45 seconds for the "
+            "35-minute competition recording.",
+        ],
+        params=[
+            Param("recording", "path", "Recording", arg="--recording",
+                  source="recordings", required=True),
+            Param("labels", "path", "Labels", arg="--labels", source="labels",
+                  help="Pins the levelling to the label file's and is stored with "
+                       "the cloud. Leave empty for an unlabelled recording."),
+            Param("out", "outpath", "Output cloud", arg="--out", required=True,
+                  placeholder="training/caches/mapnet-v1/clouds/NAME.npz"),
+            Param("floor_z", "float", "Floor height", arg="--floor-z", unit="m",
+                  advanced=True,
+                  help="Only for a recording levelling cannot measure a floor in. "
+                       "Empty: estimated from the returns near the robot."),
+        ],
+        long_running=True,
+    ),
+    Command(
+        id="train-mapnet-train", bin="rocklabel-train", sub="mapnet-train", stage="train",
+        icon="▦",
+        title="Map model: train",
+        tagline="Train the map model: find rocks on the accumulated map, not on one sweep.",
+        what="Trains a small U-Net that looks at the accumulated map as a picture: "
+             "a 2.5 cm grid holding, per cell, how high its returns sit above a "
+             "local ground estimate, how they are spread with height, how many "
+             "there are, and how bright. Training crops are cut from the map as "
+             "it stood at a random moment of a random recording, then rotated, "
+             "stretched, laid over synthetic mounds and craters, thinned and, "
+             "optionally, given real rocks transplanted from elsewhere. Every "
+             "epoch is graded on the competition map with the same frontier "
+             "Map evaluation uses.",
+        why="Every earlier model classifies a ball cut from the newest sweep, and "
+            "that is where its false ground comes from: the rough, dug-over side "
+            "of the arena, the crater and the wall bases look bumpy in one sweep "
+            "and smooth in the map. Stacked over a run, every labelled rock is a "
+            "crisp 15-30 cm bump.",
+        notes=[
+            "Two ways to use it. Volleyball only (the default) is the fair "
+            "comparison with every earlier model. With 'Arena rock group' it "
+            "also trains on six of the arena's twelve rocks and the ground "
+            "nearest them, and is graded on the other six's ground only - "
+            "that measures what arena labels are worth. Stitch the two groups "
+            "into one arena map with 'Map model: stitch folds'.",
+            "About 25 seconds an epoch on the RTX 3060 Ti; the default 40 epochs "
+            "take about 20 minutes. Crops are built on the graphics card.",
+            "The run folder holds log.csv (every epoch's arena numbers), one "
+            "checkpoint per epoch and final.pt. The saved weights are a slow "
+            "running average of training, which moves far less from epoch to "
+            "epoch than the raw weights do.",
+        ],
+        params=[
+            Param("out", "outdir", "Run folder", arg="--out", required=True,
+                  placeholder="training/experiments/mapnet-v1/NAME"),
+            Param("train", "text", "Training clouds", arg="--train", repeat=True, nargs=True,
+                  placeholder="VB2, VB3, VB5, ...",
+                  help="Cloud names to train on. Empty: every volleyball run except "
+                       "VB4 and VB6, which are graded every epoch instead."),
+            Param("val", "text", "Volleyball clouds to grade", arg="--val", repeat=True,
+                  nargs=True, advanced=True, placeholder="VB4, VB6"),
+            Param("lance_fold", "enum", "Arena rock group", arg="--lance-fold",
+                  choices=["A", "B"],
+                  help="Also train on this group of the arena's rocks (A: 5, 8, 9, "
+                       "10, 11, 12; B: 1, 3, 4, 6, 7, 13) and the ground nearest "
+                       "them. The model is then graded on the other group's ground "
+                       "only. Leave empty for volleyball only."),
+            Param("lance_holdout", "enum", "Four-way: hold out group", arg="--lance-holdout",
+                  choices=["g1", "g2", "g3", "g4"], advanced=True,
+                  help="The four-way split instead: train on every arena rock except "
+                       "this group (g1: 9, 10, 11; g2: 1, 3, 4, 13; g3: 5, 8, 12; "
+                       "g4: 6, 7) and grade on its ground only. Closer to what a model "
+                       "trained on a fully labelled arena would do."),
+            Param("lance_all", "bool", "Deployment fit: train on the whole arena",
+                  arg="--lance-all", advanced=True,
+                  help="Also train on every arena rock. This is the model to deploy; "
+                       "its arena numbers are in-sample and measure nothing."),
+            Param("lance_weight", "float", "Arena share of crops", arg="--lance-weight",
+                  default=0.3, min=0.05, max=0.95, step=0.05, advanced=True),
+            Param("wall_clear_m", "float", "Walls count as clear ground", unit="m",
+                  arg="--wall-clear-m", default=0.0, min=0, max=2, advanced=True,
+                  help="Label this band outside the arena outline as clear, so the "
+                       "arena walls are learned as not-rock. 0 leaves it unlabelled. "
+                       "Measured on the arena hold-outs it made things worse (the "
+                       "rock against the east wall, and tall rocks generally, got "
+                       "harder), so leave it at 0 and mask walls with the arena "
+                       "outline instead."),
+            Param("features", "enum", "Input channels", arg="--features",
+                  choices=["profile", "base"], default="profile",
+                  help="profile adds, per cell, the share of returns in each 2.5 cm "
+                       "slice above the local ground. It was far ahead of base on "
+                       "the arena from the first epochs."),
+            Param("aug", "text", "Augmentation overrides (JSON)", arg="--aug",
+                  advanced=True, placeholder='{"paste_p": 0.5}',
+                  help="Overrides for the augmentation settings. paste_p is the "
+                       "chance a crop gets one to three real rocks transplanted "
+                       "onto it from other recordings."),
+            Param("epochs", "int", "Epochs", arg="--epochs", default=40, min=1, max=400),
+            Param("samples", "int", "Crops per epoch", arg="--samples", default=2000,
+                  min=16, advanced=True),
+            Param("batch", "int", "Batch", arg="--batch", default=16, min=1, advanced=True),
+            Param("arch", "enum", "Network width", arg="--arch",
+                  choices=["unet16", "unet32", "unet48", "unet64"], default="unet32",
+                  advanced=True),
+            Param("size", "int", "Crop side (cells)", arg="--size", default=192, min=64,
+                  max=512, advanced=True, help="In 2.5 cm cells: 192 is 4.8 m."),
+            Param("lr", "float", "Learning rate", arg="--lr", default=2e-3, advanced=True),
+            Param("wd", "float", "Weight decay", arg="--wd", default=1e-2, advanced=True),
+            Param("pos_weight", "float", "Rock weight", arg="--pos-weight", default=3.0,
+                  min=1, advanced=True),
+            Param("dice", "float", "Overlap loss weight", arg="--dice", default=0.5,
+                  min=0, advanced=True),
+            Param("ema", "float", "Weight average decay", arg="--ema", default=0.998,
+                  min=0, max=0.9999, advanced=True,
+                  help="0 saves the raw weights instead of the running average."),
+            Param("seed", "int", "Seed", arg="--seed", default=42, min=0),
+            Param("init", "path", "Start from", arg="--init", source="map_models",
+                  advanced=True),
+            Param("drop_channels", "text", "Zero these channels", arg="--drop-channels",
+                  repeat=True, nargs=True, advanced=True,
+                  help="An ablation: the named input channels are zeroed."),
+            Param("tta", "bool", "Grade with rotations", arg="--tta", advanced=True),
+            Param("no_lance_eval", "bool", "Skip arena grading", arg="--no-lance-eval",
+                  advanced=True),
+            Param("cpu_data", "bool", "Build crops on the CPU", arg="--cpu-data",
+                  advanced=True, help="The slower reference implementation."),
+            Param("workers", "int", "CPU crop workers", arg="--workers", default=10,
+                  min=1, advanced=True),
+        ],
+        long_running=True,
+    ),
+    Command(
+        id="train-mapnet-eval", bin="rocklabel-train", sub="mapnet-eval", stage="deploy",
+        icon="🗺",
+        title="Map model: grade on the arena",
+        tagline="Grade map-model checkpoints on the competition map, beside every earlier model.",
+        what="Builds the whole competition recording's map, runs the checkpoint "
+             "(or several, averaged) over it and grades the result exactly as Map "
+             "evaluation grades the per-ball models: rock coverage at every "
+             "amount of wrongly-claimed ground, per-rock tables and pictures. The "
+             "earlier models' saved maps are re-graded on the same ground in the "
+             "same file, so every comparison shares its rocks and denominators.",
+        why="To read a map-model result on the terms every other result in this "
+            "project is quoted on. A checkpoint trained on one arena rock group "
+            "is graded on the other group's ground automatically.",
+        notes=[
+            "'Grade over time' also runs the model on the map as it stood every "
+            "N seconds, using only returns already measured, which is what the "
+            "robot would have had on screen.",
+            "Results: summary.json, grade.json, threshold-frontier.csv, "
+            "map-*.png and map-control.npz in the output folder.",
+        ],
+        params=[
+            Param("checkpoints", "path", "Checkpoint(s)", source="map_models",
+                  required=True, repeat=True,
+                  help="Several are averaged into one ensemble."),
+            Param("out", "outdir", "Output folder", arg="--out", required=True,
+                  placeholder="training/reports/mapnet-v1/NAME"),
+            Param("tta", "bool", "Average rotations", arg="--tta",
+                  help="Also read the map rotated and mirrored, and average."),
+            Param("timeline", "float", "Grade over time every", arg="--timeline",
+                  unit="s", min=0, advanced=True),
+            Param("threshold", "float", "Threshold", arg="--threshold", default=0.5,
+                  min=0, max=1, advanced=True),
+            Param("fold", "enum", "Treat as trained on group", arg="--fold",
+                  choices=["A", "B"], advanced=True,
+                  help="Grade only the other group's ground. Defaults to the "
+                       "checkpoint's own training setting."),
+        ],
+        long_running=True,
+    ),
+    Command(
+        id="train-mapnet-view", bin="rocklabel-train", sub="mapnet-view", stage="deploy",
+        icon="◉",
+        title="Map model: look at a recording",
+        tagline="Draw where a map model thinks the rocks are, on any stacked recording.",
+        what="Builds the whole map of a stacked recording (from 'Map model: stack a "
+             "recording'), runs the checkpoint over it and draws two panels: the "
+             "height above the local ground, and the same map with every cell the "
+             "model calls rock painted over it, plus the robot's path. Labels are "
+             "optional; with them the rock outlines are drawn too.",
+        why="How a fresh recording - a new arena, a practice run - gets checked "
+            "before anyone has labelled it.",
+        notes=[
+            "The probabilities are written next to the picture as an .npz.",
+            "A recording without brightness (the 12 and 14 May arena runs) works; "
+            "the model was trained with brightness missing some of the time.",
+        ],
+        params=[
+            Param("cloud", "path", "Stacked recording", source="map_clouds", required=True),
+            Param("checkpoint", "path", "Checkpoint(s)", arg="--checkpoint",
+                  source="map_models", required=True, repeat=True, nargs=True),
+            Param("out", "outpath", "Picture", arg="--out", required=True,
+                  placeholder="training/reports/mapnet-v1/view/NAME.png"),
+            Param("threshold", "float", "Threshold", arg="--threshold", default=0.5,
+                  min=0, max=1),
+            Param("labels", "path", "Labels", arg="--labels", source="labels",
+                  advanced=True),
+        ],
+        long_running=True,
+    ),
+    Command(
+        id="train-mapnet-stitch", bin="rocklabel-train", sub="mapnet-stitch", stage="deploy",
+        icon="⧉",
+        title="Map model: stitch folds",
+        tagline="One cross-validated arena map from the two arena-rock-group models.",
+        what="Every cell of the arena takes its probability from the model that "
+             "never saw a label on that ground: group A's ground from the model "
+             "trained on group B, and the reverse. The stitched map is graded on "
+             "all twelve rocks like any other full-arena map.",
+        why="It turns the two half-arena results into one number that sits "
+            "directly beside the full-arena figures of every earlier model.",
+        notes=[
+            "It is still one arena and one session, so it says what arena labels "
+            "are worth on the same arena - not on a new one.",
+        ],
+        params=[
+            Param("a", "path", "Trained on group A", arg="--a", source="map_models",
+                  repeat=True, nargs=True,
+                  help="Two-way split: the model(s) trained on rock group A."),
+            Param("b", "path", "Trained on group B", arg="--b", source="map_models",
+                  repeat=True, nargs=True),
+            *[Param(g, "path", f"Held out {g}", arg=f"--{g}", source="map_models",
+                    repeat=True, nargs=True, advanced=True,
+                    help="Four-way split: give all four instead of A and B.")
+              for g in ("g1", "g2", "g3", "g4")],
+            Param("out", "outdir", "Output folder", arg="--out", required=True,
+                  placeholder="training/reports/mapnet-v1/stitched"),
+            Param("tta", "bool", "Average rotations", arg="--tta"),
+            Param("threshold", "float", "Threshold", arg="--threshold", default=0.5,
+                  min=0, max=1, advanced=True),
+            Param("timeline", "float", "Grade over time every", arg="--timeline",
+                  unit="s", min=0, advanced=True,
+                  help="Also grade the stitched map as it stood every N seconds."),
         ],
         long_running=True,
     ),

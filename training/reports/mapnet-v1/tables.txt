@@ -1,0 +1,70 @@
+== full
+  deployed                       attr 0.57 0.42 0.26 0.20 0.10 | foot 0.83 0.59 0.36 0.26 0.14 | false@0.5 2195
+  incumbent-0.7112               attr 0.64 0.54 0.37 0.27 0.20 | foot 0.87 0.70 0.45 0.31 0.22 | false@0.5 1934
+  cls-both-s44                   attr 0.65 0.55 0.39 0.29 0.21 | foot 0.87 0.71 0.49 0.37 0.24 | false@0.5 2121
+  baseline-r050-h1-s42           attr 0.66 0.53 0.39 0.29 0.21 | foot 0.85 0.66 0.47 0.35 0.26 | false@0.5 2243
+  baseline-r050-h1-s43           attr 0.62 0.50 0.33 0.23 0.16 | foot 0.81 0.61 0.41 0.27 0.19 | false@0.5 2359
+  baseline-r050-h1-s44           attr 0.64 0.50 0.30 0.19 0.08 | foot 0.83 0.63 0.37 0.23 0.11 | false@0.5 2370
+  history-r075-h5-8s-s42         attr 0.69 0.61 0.46 0.38 0.27 | foot 0.91 0.76 0.57 0.46 0.34 | false@0.5 1984
+  history-r075-h5-8s-s43         attr 0.68 0.62 0.46 0.31 0.23 | foot 0.90 0.76 0.56 0.38 0.28 | false@0.5 1823
+  history-r075-h5-8s-s44         attr 0.68 0.61 0.49 0.40 0.32 | foot 0.90 0.79 0.63 0.52 0.39 | false@0.5 1935
+  history-r050-h5-30s-s42        attr 0.69 0.63 0.50 0.42 0.32 | foot 0.91 0.79 0.59 0.47 0.36 | false@0.5 2232
+  history-r050-h5-30s-s43        attr 0.69 0.61 0.46 0.34 0.28 | foot 0.89 0.76 0.53 0.37 0.30 | false@0.5 2339
+  history-r050-h5-30s-s44        attr 0.67 0.58 0.48 0.40 0.32 | foot 0.87 0.72 0.57 0.47 0.37 | false@0.5 2303
+  map model, volleyball only (s42) attr 0.57 0.47 0.30 0.26 0.17 | foot 0.75 0.61 0.38 0.28 0.19 | false@0.5 89
+== stitched
+  map model, two-way (s42)       attr 0.64 0.62 0.60 0.55 0.48 | foot 0.81 0.79 0.75 0.69 0.61 | false@0.5 74
+  map model, two-way (s43)       attr 0.67 0.63 0.58 0.55 0.48 | foot 0.85 0.78 0.71 0.66 0.59 | false@0.5 67
+  map model, two-way (s44)       attr 0.67 0.62 0.60 0.57 0.55 | foot 0.84 0.76 0.71 0.66 0.64 | false@0.5 43
+  map model, two-way, walls clear (s42) attr 0.63 0.59 0.44 0.41 0.29 | foot 0.81 0.76 0.55 0.50 0.33 | false@0.5 132
+  map model, two-way (3 seeds averaged) attr 0.68 0.64 0.60 0.58 0.55 | foot 0.83 0.79 0.73 0.70 0.67 | false@0.5 42
+  map model, two-way (3 seeds averaged) + history-r050-h5-30s-s42, averaged attr 0.76 0.71 0.62 0.58 0.55 | foot 0.95 0.88 0.76 0.70 0.67 | false@0.5 155
+  per-ball baseline + arena labels, two-way (s42) attr 0.64 0.54 0.39 0.30 0.23 | foot 0.84 0.68 0.48 0.34 0.27 | false@0.5 2465
+  per-ball baseline + arena labels, two-way (s43) attr 0.66 0.54 0.37 0.24 0.16 | foot 0.85 0.69 0.45 0.26 0.17 | false@0.5 2442
+  per-ball baseline + arena labels, two-way (s44) attr 0.56 0.43 0.29 0.21 0.15 | foot 0.80 0.62 0.42 0.30 0.19 | false@0.5 2478
+== ground_A
+  deployed                       attr 0.58 0.53 0.38 0.27 0.21 | foot 0.93 0.84 0.57 0.39 0.30 | false@0.5 1396
+  incumbent-0.7112               attr 0.61 0.56 0.46 0.35 0.25 | foot 0.95 0.81 0.63 0.43 0.33 | false@0.5 1203
+  cls-both-s44                   attr 0.60 0.54 0.45 0.36 0.27 | foot 0.95 0.81 0.65 0.50 0.38 | false@0.5 1349
+  baseline-r050-h1-s42           attr 0.62 0.54 0.48 0.39 0.28 | foot 0.93 0.80 0.67 0.52 0.40 | false@0.5 1450
+  baseline-r050-h1-s43           attr 0.63 0.53 0.44 0.36 0.28 | foot 0.92 0.74 0.60 0.50 0.38 | false@0.5 1503
+  baseline-r050-h1-s44           attr 0.58 0.52 0.37 0.28 0.18 | foot 0.90 0.75 0.51 0.41 0.26 | false@0.5 1523
+  history-r075-h5-8s-s42         attr 0.63 0.60 0.51 0.42 0.36 | foot 0.97 0.85 0.69 0.56 0.49 | false@0.5 1233
+  history-r075-h5-8s-s43         attr 0.65 0.61 0.52 0.47 0.37 | foot 0.98 0.87 0.67 0.59 0.46 | false@0.5 1105
+  history-r075-h5-8s-s44         attr 0.63 0.61 0.55 0.44 0.36 | foot 0.96 0.89 0.77 0.66 0.54 | false@0.5 1221
+  history-r050-h5-30s-s42        attr 0.61 0.59 0.51 0.43 0.38 | foot 0.95 0.88 0.71 0.57 0.47 | false@0.5 1411
+  history-r050-h5-30s-s43        attr 0.66 0.63 0.50 0.32 0.26 | foot 0.96 0.87 0.64 0.40 0.29 | false@0.5 1473
+  history-r050-h5-30s-s44        attr 0.63 0.59 0.51 0.47 0.38 | foot 0.94 0.86 0.67 0.61 0.48 | false@0.5 1470
+  map model, two-way (s42)       attr 0.68 0.67 0.65 0.60 0.55 | foot 0.92 0.90 0.87 0.81 0.74 | false@0.5 38
+  map model, two-way (s43)       attr 0.71 0.68 0.60 0.60 0.55 | foot 0.93 0.88 0.78 0.78 0.74 | false@0.5 41
+  map model, two-way (s44)       attr 0.74 0.68 0.64 0.61 0.58 | foot 0.98 0.88 0.80 0.76 0.72 | false@0.5 11
+  map model, two-way, walls clear (s42) attr 0.70 0.65 0.39 0.34 0.29 | foot 0.94 0.88 0.53 0.47 0.35 | false@0.5 105
+  map model, two-way (3 seeds averaged) attr 0.75 0.70 0.65 0.63 0.60 | foot 0.97 0.90 0.83 0.81 0.77 | false@0.5 12
+  map model, two-way (3 seeds averaged) + history-r050-h5-30s-s42, averaged attr 0.76 0.75 0.68 0.63 0.60 | foot 0.99 0.96 0.88 0.81 0.77 | false@0.5 99
+  per-ball baseline + arena labels, two-way (s42) attr 0.61 0.52 0.44 0.31 0.22 | foot 0.92 0.75 0.61 0.45 0.27 | false@0.5 1478
+  per-ball baseline + arena labels, two-way (s43) attr 0.63 0.52 0.41 0.31 0.23 | foot 0.94 0.74 0.58 0.44 0.27 | false@0.5 1588
+  per-ball baseline + arena labels, two-way (s44) attr 0.56 0.54 0.42 0.35 0.25 | foot 0.97 0.88 0.68 0.53 0.34 | false@0.5 1593
+== ground_B
+  deployed                       attr 0.70 0.66 0.41 0.28 0.19 | foot 0.99 0.91 0.54 0.36 0.23 | false@0.5 799
+  incumbent-0.7112               attr 0.79 0.75 0.60 0.42 0.29 | foot 0.99 0.93 0.69 0.47 0.33 | false@0.5 731
+  cls-both-s44                   attr 0.78 0.75 0.62 0.46 0.33 | foot 0.99 0.94 0.72 0.52 0.35 | false@0.5 772
+  baseline-r050-h1-s42           attr 0.82 0.79 0.56 0.40 0.31 | foot 0.99 0.93 0.62 0.42 0.34 | false@0.5 793
+  baseline-r050-h1-s43           attr 0.77 0.74 0.49 0.30 0.19 | foot 0.99 0.91 0.54 0.32 0.19 | false@0.5 856
+  baseline-r050-h1-s44           attr 0.81 0.79 0.57 0.34 0.19 | foot 0.99 0.94 0.65 0.37 0.19 | false@0.5 847
+  history-r075-h5-8s-s42         attr 0.79 0.78 0.67 0.51 0.41 | foot 1.00 0.95 0.75 0.57 0.45 | false@0.5 751
+  history-r075-h5-8s-s43         attr 0.76 0.76 0.66 0.45 0.24 | foot 1.00 0.96 0.76 0.53 0.27 | false@0.5 718
+  history-r075-h5-8s-s44         attr 0.78 0.77 0.63 0.56 0.45 | foot 1.00 0.93 0.73 0.65 0.49 | false@0.5 714
+  history-r050-h5-30s-s42        attr 0.79 0.77 0.69 0.56 0.44 | foot 0.99 0.93 0.78 0.62 0.47 | false@0.5 821
+  history-r050-h5-30s-s43        attr 0.77 0.75 0.64 0.56 0.45 | foot 0.99 0.93 0.75 0.64 0.50 | false@0.5 866
+  history-r050-h5-30s-s44        attr 0.80 0.77 0.63 0.50 0.41 | foot 0.99 0.92 0.72 0.56 0.45 | false@0.5 833
+  map model, two-way (s42)       attr 0.74 0.68 0.61 0.58 0.54 | foot 0.96 0.86 0.73 0.67 0.62 | false@0.5 36
+  map model, two-way (s43)       attr 0.76 0.69 0.62 0.60 0.56 | foot 0.94 0.84 0.75 0.67 0.62 | false@0.5 26
+  map model, two-way (s44)       attr 0.74 0.65 0.62 0.59 0.55 | foot 0.93 0.79 0.72 0.67 0.60 | false@0.5 32
+  map model, two-way, walls clear (s42) attr 0.74 0.61 0.59 0.56 0.54 | foot 0.94 0.75 0.72 0.66 0.63 | false@0.5 27
+  map model, two-way (3 seeds averaged) attr 0.76 0.70 0.63 0.59 0.56 | foot 0.93 0.87 0.73 0.67 0.62 | false@0.5 30
+  map model, two-way (3 seeds averaged) + history-r050-h5-30s-s42, averaged attr 0.79 0.78 0.70 0.66 0.56 | foot 1.00 0.96 0.85 0.78 0.62 | false@0.5 56
+  per-ball baseline + arena labels, two-way (s42) attr 0.80 0.77 0.62 0.49 0.37 | foot 0.99 0.92 0.71 0.53 0.40 | false@0.5 987
+  per-ball baseline + arena labels, two-way (s43) attr 0.79 0.77 0.59 0.43 0.31 | foot 1.00 0.94 0.68 0.46 0.34 | false@0.5 854
+  per-ball baseline + arena labels, two-way (s44) attr 0.79 0.75 0.58 0.43 0.32 | foot 0.99 0.91 0.69 0.48 0.36 | false@0.5 885
+== four_way
+  map model, four-way (s42)      attr 0.72 0.68 0.63 0.56 0.49 | foot 0.92 0.85 0.77 0.69 0.58 | false@0.5 54

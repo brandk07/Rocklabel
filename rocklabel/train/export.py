@@ -158,6 +158,21 @@ def export_model(checkpoint_path: str, out_dir: str) -> None:
             "its saved height/coordinate reference internally. Never pass "
             "classifier neighborhoods or subtract a neighborhood minimum.")
         meta["output"] = f"[batch, {n_pts}] rock probabilities; only the first counts[i] rows are valid"
+    from ..dataset.history import input_contract, is_legacy
+    if task != "segment" and not is_legacy(gcfg):
+        # A version-2 classifier's balls are not the fixed ball described
+        # above: the radius may adapt per candidate and the support may hold
+        # older sweeps. The reference implementation is
+        # rocklabel/dataset/history.py:build_neighborhoods.
+        contract = input_contract(gcfg)
+        meta["input"]["neighborhood_policy"] = contract
+        meta["preprocessing_contract"] += (
+            f" VERSION 2 INPUT: radius {contract['radius']}; support {contract['history']}"
+            " (older sweeps selected causally, each the latest at or before its target"
+            " age within the tolerance, never reused, cropped with the current box)."
+            " Candidates come from the current sweep only. Above neighborhood_points,"
+            " sample uniformly over the whole ball without replacement. Reproduce"
+            " rocklabel/dataset/history.py:build_neighborhoods exactly.")
     meta["generator"] = gcfg
     meta["model_config"] = cfg
     with open(os.path.join(out_dir, "metadata.json"), "w") as f:

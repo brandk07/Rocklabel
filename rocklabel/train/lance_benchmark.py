@@ -25,12 +25,23 @@ def input_differences(generator: dict, benchmark: dict, task: str) -> dict:
     keys = ["frame_window_s", "crop_forward_m", "crop_backward_m", "crop_left_m",
             "crop_right_m", "crop_up_m", "crop_down_m"]
     if task == "classify":
+        # The version-2 contract keys too: a history or adaptive-radius model
+        # scored on this fixed single-sweep cache is being fed inputs it never
+        # trained on, and the row must say so.
         keys += ["centers_voxel_m", "neighborhood_radius_m", "min_neighbors",
-                 "neighborhood_points"]
+                 "neighborhood_points", "preprocessing_version", "neighborhood_mode",
+                 "adaptive_radius_min_m", "adaptive_radius_max_m", "adaptive_k",
+                 "history_ages_s", "history_tolerance_s"]
     else:
         keys += ["segmentation_points", "segmentation_min_points", "bev_cell_m"]
-    return {key: {"checkpoint": generator.get(key), "benchmark": benchmark.get(key)}
-            for key in keys if generator.get(key) != benchmark.get(key)}
+    from ..config import HASH_NEUTRAL
+
+    # A key written before it existed means its legacy default.
+    def get(g, key):
+        return g.get(key, HASH_NEUTRAL["generator"].get(key))
+
+    return {key: {"checkpoint": get(generator, key), "benchmark": get(benchmark, key)}
+            for key in keys if get(generator, key) != get(benchmark, key)}
 
 
 #: Defaults, named here so the CLI layer and the dashboard quote the same ones

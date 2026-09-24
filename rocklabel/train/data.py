@@ -46,6 +46,10 @@ CACHE_ARRAYS = ("points", "labels", "counts", "centers", "frame")
 #: dataset, so one `cache` call serves both training tasks and a fold's
 #: train/test split means the same thing for either.
 SEG_ARRAYS = ("seg_points", "seg_labels", "seg_counts", "seg_frame", "seg_base")
+#: Per-sample diagnostics the version-2 builder writes beside format A (see
+#: dataset/history.py). Cached when present so a run can be stratified by ball
+#: size, support and scan age without regenerating; nothing trains on them.
+EXTRA_ARRAYS = ("radius", "ball_count", "ball_voxels", "ball_sweeps", "point_age")
 
 
 class DataError(SystemExit):
@@ -102,6 +106,19 @@ def build_cache(dataset_dirs: list[str], cache_dir: str) -> dict:
     config_hash = hashes.pop()
     profile = _profile_of(entries[0][3])
     gcfg = entries[0][3]["config"]["generator"]
+    # One cache directory is one population. Writing a different config's
+    # runs over an existing cache would leave the old run folders beside the
+    # new meta.json, and a resumed training run would read them as the same
+    # data. Refuse rather than overwrite.
+    old_meta = os.path.join(cache_dir, "meta.json")
+    if os.path.exists(old_meta):
+        with open(old_meta) as f:
+            previous = json.load(f).get("config_hash")
+        if previous and previous != config_hash:
+            raise DataError(
+                f"{cache_dir!r} already holds a cache built from a different dataset "
+                f"config ({previous[:12]} vs {config_hash[:12]}). Pick another "
+                "--cache-dir, or delete that folder first.")
 
     runs_meta = {}
     for d, run_id, entry, _ in entries:
@@ -110,6 +127,8 @@ def build_cache(dataset_dirs: list[str], cache_dir: str) -> dict:
         src = os.path.join(d, "points", run_id)
         files = sorted(f for f in os.listdir(src) if f.startswith("frame_") and f.endswith(".npz"))
         pts, labels, counts, centers, frame_idx, times = [], [], [], [], [], {}
+        extras: dict[str, list] = {k: [] for k in EXTRA_ARRAYS}
+        history: dict[int, dict] = {}
         for name in files:
             with np.load(os.path.join(src, name)) as z:
                 fi = int(name[6:12])
@@ -119,6 +138,15 @@ def build_cache(dataset_dirs: list[str], cache_dir: str) -> dict:
                 centers.append(z["centers_odom"])
                 frame_idx.append(np.full(len(z["labels"]), fi, np.int32))
                 times[fi] = float(z["frame_time"])
+                for key in EXTRA_ARRAYS:
+                    if key in z.files:
+                        extras[key].append(z[key])
+                # Which sweeps each anchor's balls were cut from, so a split
+                # can be checked for shared source sweeps across its sides.
+                if "history_sweep_ids" in z.files:
+                    history[fi] = {"sweep_ids": z["history_sweep_ids"].tolist(),
+                                   "ages": [None if not np.isfinite(a) else float(a)
+                                            for a in z["history_ages"]]}
         arrays = {
             "points": np.concatenate(pts).astype(np.float32),
             "labels": np.concatenate(labels).astype(np.int8),
@@ -126,6 +154,9 @@ def build_cache(dataset_dirs: list[str], cache_dir: str) -> dict:
             "centers": np.concatenate(centers).astype(np.float32),
             "frame": np.concatenate(frame_idx),
         }
+        for key, parts in extras.items():
+            if parts and len(parts) == len(files):
+                arrays[key] = np.concatenate(parts)
         want = entry["sample_labels"]
         got_rock = int((arrays["labels"] == 1).sum())
         got_clear = int((arrays["labels"] == 0).sum())
@@ -169,16 +200,26 @@ def build_cache(dataset_dirs: list[str], cache_dir: str) -> dict:
             "frames": len(files),
             "frame_times": times,
             "seg_frames": int(len(seg_arrays["seg_counts"])) if seg_arrays else 0,
+            "extra_arrays": sorted(k for k in EXTRA_ARRAYS if k in arrays),
+            "z_band": entry.get("z_band"),
+            "level": entry.get("level"),
+            "source_sweep_cache": entry.get("sweep_cache"),
+            "diagnostics": entry.get("diagnostics"),
         }
+        if history:
+            with open(os.path.join(run_dir, "history.json"), "w") as f:
+                json.dump({str(k): v for k, v in sorted(history.items())}, f)
         print(f"cached {run_id}: {len(arrays['labels'])} samples "
               f"({got_rock} rock / {got_clear} clear) from {len(files)} frames "
               f"- matches manifest")
 
     # The cache says which profile and which datasets it came from, so a run
     # trained off it can be traced back to how its frames were cut.
+    from ..dataset.history import input_contract
     meta = {"config_hash": config_hash, "profile": profile,
             "datasets": [os.path.abspath(d) for d in dataset_dirs],
-            "generator": gcfg, "runs": runs_meta}
+            "generator": gcfg, "input_contract": input_contract(gcfg),
+            "runs": runs_meta}
     with open(os.path.join(cache_dir, "meta.json"), "w") as f:
         json.dump(meta, f, indent=2)
     total = sum(r["n"] for r in runs_meta.values())
@@ -200,6 +241,7 @@ class RunData:
         d = os.path.join(cache_dir, run_id)
         if not os.path.isdir(d):
             raise DataError(f"no cache for run {run_id!r} - run 'rocklabel-train cache' first")
+        self._dir = d
         self.run_id = run_id
         self.task = task
         if task == "segment":
@@ -222,6 +264,70 @@ class RunData:
 
     def __len__(self) -> int:
         return len(self.labels)
+
+    def extra(self, key: str) -> np.ndarray | None:
+        """A per-sample diagnostic array (see EXTRA_ARRAYS), or None if absent."""
+        path = os.path.join(self._dir, f"{key}.npy")
+        return np.load(path) if os.path.exists(path) else None
+
+    def append_point_age(self) -> None:
+        """Append each row's age in seconds as channel AGE_CHANNEL of ``points``.
+
+        For models that read it (``reads_point_age``). Only version-2 datasets
+        record ages, so a cache without them is refused rather than filled with
+        zeros - a model trained on zeros would silently learn nothing from the
+        channel and still claim to be the age model.
+        """
+        from ..dataset.neighborhoods import AGE_CHANNEL
+        age = self.extra("point_age")
+        if age is None:
+            raise DataError(f"run {self.run_id!r} has no point ages - only history "
+                            "(preprocessing version 2) caches record them")
+        if self.points.shape[-1] != AGE_CHANNEL:
+            raise DataError(f"run {self.run_id!r}: expected {AGE_CHANNEL} stored "
+                            f"channels before the age, found {self.points.shape[-1]}")
+        self.points = np.concatenate(
+            [self.points, age.astype(np.float32)[..., None]], axis=-1)
+
+
+def check_split_runs(train_runs: list[str], val_runs: list[str],
+                     test_run: str = "") -> None:
+    """Refuse a whole-recording split whose sides share a recording.
+
+    Whole-recording validation is what makes a 30-second history safe: two
+    recordings share no sweep, so no ball in one side can contain a point the
+    other side was built from. That only holds if the lists are disjoint.
+    """
+    both = sorted(set(train_runs) & set(val_runs))
+    if both:
+        raise DataError(f"split leak: {both} are both training and validation runs")
+    if test_run and test_run in set(train_runs) | set(val_runs):
+        raise DataError(f"split leak: test run {test_run!r} is also trained or validated on")
+    if len(set(val_runs)) != len(val_runs):
+        raise DataError(f"duplicate validation run in {val_runs}")
+
+
+def check_no_shared_sweeps(cache_dir: str, train_runs: list[str],
+                           val_runs: list[str]) -> None:
+    """Assert no (run, source sweep) feeds both sides of a split.
+
+    Trivially true for whole-recording splits; kept as an executable check so
+    a future temporal split with long history cannot quietly share sweeps.
+    """
+    def sweeps_of(runs):
+        out = set()
+        for r in runs:
+            path = os.path.join(cache_dir, r, "history.json")
+            if not os.path.exists(path):
+                continue
+            with open(path) as f:
+                for frame in json.load(f).values():
+                    out.update((r, int(i)) for i in frame["sweep_ids"] if int(i) >= 0)
+        return out
+    shared = sweeps_of(train_runs) & sweeps_of(val_runs)
+    if shared:
+        raise DataError(f"split leak: {len(shared)} source sweeps feed both sides, "
+                        f"e.g. {sorted(shared)[:3]}")
 
 
 def load_cache_meta(cache_dir: str) -> dict:

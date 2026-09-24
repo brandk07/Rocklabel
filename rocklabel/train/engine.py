@@ -78,6 +78,14 @@ def _device(arg: str | None) -> torch.device:
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
+def _load_run(cfg: dict, run_id: str, task: str) -> D.RunData:
+    """One cached run, with the point-age channel appended for models that read it."""
+    run = D.RunData(cfg["cache_dir"], run_id, task=task)
+    if cfg["model"] == "pointnet_age":
+        run.append_point_age()
+    return run
+
+
 class Split:
     """Tensors for one side of a split, kept on CPU; batches move to device."""
 
@@ -495,7 +503,7 @@ def train_fold(cfg: dict, run_dir: str, resume: bool = True) -> dict:
         # must keep resuming rather than reading as a settings change nobody made.
         for key in ("bev_cell", "bev_grid", "bev_width", "bev_depth",
                     "bev_channels", "bev_density_norm", "pos_weight_cap",
-                    "aug_phantom_mode"):
+                    "aug_phantom_mode", "val_runs"):
             old.setdefault(key, TRAIN_DEFAULTS[key])
         if old != cfg:
             raise SystemExit(f"{run_dir} was created with different settings; "
@@ -507,21 +515,45 @@ def train_fold(cfg: dict, run_dir: str, resume: bool = True) -> dict:
     _seed_all(cfg["seed"])
     device = _device(cfg.get("device"))
     meta = D.load_cache_meta(cfg["cache_dir"])
+    # The run directory remembers which cache population it was trained on.
+    # config.json only names the cache *folder*; a folder rebuilt under a
+    # different dataset config would otherwise resume as if nothing changed.
+    cache_id_path = os.path.join(run_dir, "cache.json")
+    cache_id = {"config_hash": meta["config_hash"],
+                "input_contract": meta.get("input_contract")}
+    if os.path.exists(cache_id_path):
+        with open(cache_id_path) as f:
+            if json.load(f).get("config_hash") != cache_id["config_hash"]:
+                raise SystemExit(f"{run_dir} was trained on a different cache "
+                                 "population; pick a new --run-dir or delete it")
+    else:
+        with open(cache_id_path, "w") as f:
+            json.dump(cache_id, f, indent=2)
 
     task = model_task(cfg["model"])
-    train_runs = [D.RunData(cfg["cache_dir"], r, task=task) for r in cfg["train_runs"]]
-    # Early-stopping val: tail frame block of each training run, with a
-    # temporal gap so no neighborhood pair straddles the boundary.
-    tr_masks, va_masks = zip(*(
-        D.block_val_mask(r.frame, cfg["val_frac"], cfg["gap_frames"],
-                         times=meta["runs"][r.run_id].get("frame_times"),
-                         gap_seconds=cfg.get("gap_seconds"))
-        for r in train_runs))
-    D.check_no_frame_overlap(
-        {r.run_id: r.frame[m] for r, m in zip(train_runs, tr_masks)},
-        {r.run_id: r.frame[m] for r, m in zip(train_runs, va_masks)})
-    tr = Split(train_runs, list(tr_masks))
-    va = Split(train_runs, list(va_masks))
+    train_runs = [_load_run(cfg, r, task) for r in cfg["train_runs"]]
+    val_run_ids = list(cfg.get("val_runs") or [])
+    if val_run_ids:
+        # Whole-recording validation: every training run is used whole, and the
+        # validation recordings are never trained on.
+        D.check_split_runs(cfg["train_runs"], val_run_ids, cfg.get("test_run") or "")
+        D.check_no_shared_sweeps(cfg["cache_dir"], cfg["train_runs"], val_run_ids)
+        val_runs = [_load_run(cfg, r, task) for r in val_run_ids]
+        tr = Split(train_runs)
+        va = Split(val_runs)
+    else:
+        # Early-stopping val: tail frame block of each training run, with a
+        # temporal gap so no neighborhood pair straddles the boundary.
+        tr_masks, va_masks = zip(*(
+            D.block_val_mask(r.frame, cfg["val_frac"], cfg["gap_frames"],
+                             times=meta["runs"][r.run_id].get("frame_times"),
+                             gap_seconds=cfg.get("gap_seconds"))
+            for r in train_runs))
+        D.check_no_frame_overlap(
+            {r.run_id: r.frame[m] for r, m in zip(train_runs, tr_masks)},
+            {r.run_id: r.frame[m] for r, m in zip(train_runs, va_masks)})
+        tr = Split(train_runs, list(tr_masks))
+        va = Split(train_runs, list(va_masks))
 
     # Class balance is counted over whatever the loss actually sees: one label
     # per sample for a classifier, one per scorable point for a segmenter
@@ -536,7 +568,9 @@ def train_fold(cfg: dict, run_dir: str, resume: bool = True) -> dict:
     n_neg = n_scored - n_pos
     print(f"[{os.path.basename(run_dir)}] task {task}, train {len(tr)} "
           f"({n_scored:.0f} scored {unit}, {n_pos / max(n_scored, 1):.2%} rock), "
-          f"val {len(va)}, "
+          f"val {len(va)}"
+          + (f" (whole runs {', '.join(val_run_ids)})" if val_run_ids else "")
+          + ", "
           f"{('test run ' + cfg['test_run']) if cfg['test_run'] else 'no held-out run'}"
           f", device {device}")
 
@@ -703,6 +737,7 @@ def train_fold(cfg: dict, run_dir: str, resume: bool = True) -> dict:
         # arena benchmark, the exporter - loads an epoch without special cases.
         weights = {"model": model.state_dict(), "config": cfg, "epoch": epoch,
                    "config_hash": meta["config_hash"], "generator": meta["generator"],
+                   "input_contract": meta.get("input_contract"),
                    "floor_band": floor_band, "frame_band": frame_band,
                    "threshold": M.best_f1_threshold(y_va, p_va)}
         if improved:
@@ -743,7 +778,8 @@ def train_fold(cfg: dict, run_dir: str, resume: bool = True) -> dict:
                         "val_threshold": threshold, "held_out": False})
         with open(os.path.join(run_dir, "val_metrics.json"), "w") as f:
             json.dump(summary, f, indent=2)
-        print(f"  no held-out run (trained on all {len(cfg['train_runs'])} "
+        summary["val_runs"] = val_run_ids
+        print(f"  no held-out run (trained on {len(cfg['train_runs'])} "
               f"recordings); val pr_auc {summary['pr_auc']:.4f} at "
               f"threshold {threshold:.2f}")
         return summary
@@ -753,7 +789,7 @@ def train_fold(cfg: dict, run_dir: str, resume: bool = True) -> dict:
 def evaluate(model: torch.nn.Module, cfg: dict, run_dir: str, threshold: float,
              device: torch.device, batch: int | None = None) -> dict:
     task = model_task(cfg["model"])
-    te = Split([D.RunData(cfg["cache_dir"], cfg["test_run"], task=task)])
+    te = Split([_load_run(cfg, cfg["test_run"], task)])
     probs = predict(model, te, device, batch or cfg["batch"], progress=True)
     labels = te.labels.numpy().astype(np.int8)
     counts = te.counts.numpy()

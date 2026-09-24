@@ -981,6 +981,11 @@ def caches(root: str) -> list[dict]:
     if not os.path.isdir(base):
         return []
     out = []
+    # A campaign keeps one cache per setting one level down
+    # (training/caches/<campaign>/<setting>), so a folder without its own
+    # meta.json is looked inside once. Underscore folders there hold decoded
+    # sweeps and evaluation frames, not training caches.
+    candidates = []
     for name in sorted(os.listdir(base)):
         # Dot-prefixed: a cache kept aside while its replacement is verified
         # against it. It is a complete, valid cache, which is exactly why it
@@ -988,6 +993,12 @@ def caches(root: str) -> list[dict]:
         if name.startswith("."):
             continue
         d = os.path.join(base, name)
+        if os.path.isdir(d) and not os.path.exists(os.path.join(d, "meta.json")):
+            candidates += [os.path.join(d, sub) for sub in sorted(os.listdir(d))
+                           if not sub.startswith((".", "_"))]
+        else:
+            candidates.append(d)
+    for d in candidates:
         meta = _read_json(os.path.join(d, "meta.json"))
         if not meta or "runs" not in meta:
             continue
@@ -1036,6 +1047,10 @@ _REPORT_BLURBS = {
                      "Written by Map evaluation — per-rock coverage and false "
                      "ground over a whole replayed recording, with and without "
                      "the looked-through cleanup."),
+    "mapnet-v1": ("Map model",
+                  "Written by the map-model commands — rocks found on the "
+                  "accumulated map, graded on the arena beside every earlier "
+                  "model. Start with summary.md in this folder."),
 }
 
 
@@ -1097,6 +1112,75 @@ def map_evaluations(root: str) -> list[dict]:
             "retracted": None if cleaned is None else cleaned.get("retracted_voxels"),
             **_stat(os.path.join(dirpath, "summary.json")),
         })
+    return out
+
+
+def map_clouds(root: str) -> list[dict]:
+    """Stacked point clouds the map model trains and grades on.
+
+    Written by ``rocklabel-train mapnet-cloud`` to
+    ``training/caches/mapnet-*/clouds/<name>.npz``; training names them by the
+    file name without its extension (VB2 ... VB13, LANCE).
+    """
+    base = os.path.join(root, DIRS["caches"])
+    out: list[dict] = []
+    if not os.path.isdir(base):
+        return out
+    for group in sorted(d for d in os.listdir(base) if d.startswith("mapnet")):
+        # clouds/ holds the labelled recordings; unlabelled/ the ones nobody has
+        # marked rocks on yet, which Map model: look at a recording can still draw.
+        for sub in ("clouds", "unlabelled"):
+            cdir = os.path.join(base, group, sub)
+            if not os.path.isdir(cdir):
+                continue
+            for name in sorted(os.listdir(cdir)):
+                if not name.endswith(".npz"):
+                    continue
+                full = os.path.join(cdir, name)
+                out.append({"name": name[:-4], "path": os.path.relpath(full, root),
+                            "group": f"{group}/{sub}", **_stat(full)})
+    return out
+
+
+def map_models(root: str) -> list[dict]:
+    """Map-model runs (``rocklabel-train mapnet-train``) and their checkpoints.
+
+    One entry per run folder holding a ``final.pt``, carrying the arena
+    numbers from the last row of its ``log.csv`` so the picker says what each
+    one scored. A run trained on one fold of the arena is graded on the other
+    fold's ground only, and says so.
+    """
+    base = os.path.join(root, DIRS["experiments"])
+    out: list[dict] = []
+    if not os.path.isdir(base):
+        return out
+    for group in sorted(d for d in os.listdir(base) if d.startswith("mapnet")):
+        gdir = os.path.join(base, group)
+        if not os.path.isdir(gdir):
+            continue
+        for run in sorted(os.listdir(gdir)):
+            rdir = os.path.join(gdir, run)
+            final = os.path.join(rdir, "final.pt")
+            if not os.path.isfile(final):
+                continue
+            cfg = _read_json(os.path.join(rdir, "config.json")) or {}
+            last: dict = {}
+            rows: list = []
+            try:
+                with open(os.path.join(rdir, "log.csv")) as f:
+                    rows = list(csv.DictReader(f))
+                last = rows[-1] if rows else {}
+            except OSError:
+                pass
+            fold = cfg.get("lance_fold")
+            cov = last.get("LANCE_cov@200")
+            note = ("" if cov in (None, "") else
+                    f"arena coverage at 200 false cells {float(cov):.2f}"
+                    + (f" (fold {'B' if fold == 'A' else 'A'} ground only)" if fold else ""))
+            out.append({"name": run, "path": os.path.relpath(final, root), "group": group,
+                        "archived": run.startswith("_"), "note": note,
+                        "lance_fold": fold, "epochs": len(rows),
+                        **_stat(final)})
     return out
 
 
@@ -1486,6 +1570,8 @@ def snapshot(root: str) -> dict:
         "training_now": training_activity(root),
         "figures": result_figures(root),
         "map_evaluations": map_evaluations(root),
+        "map_clouds": map_clouds(root),
+        "map_models": map_models(root),
         "epoch_snapshots": epoch_snapshots(root),
         "summary": results_summary(root),
         "ablations": abl,

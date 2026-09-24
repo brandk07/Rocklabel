@@ -1,0 +1,2164 @@
+{
+  "tool_version": "0.2.0",
+  "profile": "full-sweep",
+  "config": {
+    "topics": {
+      "pointcloud_topic": "/multiscan/lidar_scan",
+      "odom_frame": "odom",
+      "base_frame": "base_link",
+      "lidar_frame": "lidar_link",
+      "tf_topic": "/tf",
+      "tf_static_topic": "/tf_static",
+      "pose_tolerance_s": 0.15,
+      "static_lidar_to_base": null,
+      "min_range_m": 0.0
+    },
+    "level": {
+      "mode": "auto",
+      "mount_roll_deg": 0.0,
+      "mount_pitch_deg": 0.0,
+      "fit_scans": 0,
+      "range_min_m": 0.6,
+      "range_max_m": 6.0,
+      "fit_voxel_m": 0.05,
+      "plane_thresh_m": 0.05,
+      "ransac_iters": 512,
+      "max_tilt_deg": 50.0,
+      "min_inlier_frac": 0.15,
+      "ceiling_margin_m": 0.2
+    },
+    "labeler": {
+      "accumulator_voxel_m": 0.03,
+      "default_rock_radius_m": 0.15,
+      "stride": 1,
+      "z_min": null,
+      "z_max": null
+    },
+    "generator": {
+      "frame_stride": 4,
+      "frame_window_s": 0.05,
+      "crop_forward_m": 6.0,
+      "crop_backward_m": 2.0,
+      "crop_left_m": 4.0,
+      "crop_right_m": 4.0,
+      "crop_up_m": 1.5,
+      "crop_down_m": 1.0,
+      "boundary_shell_m": 0.05,
+      "centers_voxel_m": 0.05,
+      "neighborhood_radius_m": 0.5,
+      "min_neighbors": 20,
+      "neighborhood_points": 256,
+      "negative_keep_prob": 0.05,
+      "segmentation_points": 2048,
+      "segmentation_min_points": 512,
+      "bev_cell_m": 0.1,
+      "seed": 42,
+      "preprocessing_version": 2,
+      "neighborhood_mode": "adaptive",
+      "adaptive_radius_min_m": 0.2,
+      "adaptive_radius_max_m": 0.75,
+      "adaptive_k": 256,
+      "history_ages_s": [
+        0.0
+      ],
+      "history_tolerance_s": 0.1,
+      "formats": [
+        "points"
+      ]
+    }
+  },
+  "config_hash": "842e9eba5f154b646a75ec7d38537d95532ecd98ae26c54b7a8ca3509068d412",
+  "runs": {
+    "VolleyBallTest2.reslam": {
+      "run_id": "VolleyBallTest2.reslam",
+      "mcap_path": "/home/brandon/Documents/Rocklabel/rocklabel/recordings/volleyball/reslam/VolleyBallTest2.reslam.mcap",
+      "labels_path": "/home/brandon/Documents/Rocklabel/rocklabel/labels/volleyball/VolleyBallTest2.reslam.labels.json",
+      "rock_count": 5,
+      "arena_vertices": 4,
+      "z_band": [
+        -2.3658,
+        -0.463
+      ],
+      "level": {
+        "mode": "manual",
+        "roll_deg": 0.175,
+        "pitch_deg": 36.7498,
+        "floor_z": -0.7459
+      },
+      "intensity_available": true,
+      "frames_skipped_pose": 0,
+      "stamp_fallbacks": 0,
+      "generated": "2026-09-21T19:49:25Z",
+      "preprocessing_version": 2,
+      "feature_schema": "dx,dy,dz,intensity|query_height",
+      "formats": [
+        "points"
+      ],
+      "sweep_cache": "/home/brandon/Documents/Rocklabel/rocklabel/training/caches/neighborhood-history-v1/_sweeps/VolleyBallTest2.reslam",
+      "frames_kept": 199,
+      "frames_skipped_empty": 0,
+      "point_samples": 9959,
+      "sample_labels": {
+        "rock": 2013,
+        "clear": 7946
+      },
+      "candidates_total": 190906,
+      "candidates_selected": {
+        "rock": 2129,
+        "clear": 9287
+      },
+      "unscorable": {
+        "rock": 116,
+        "clear": 1341
+      },
+      "history_resets": 0,
+      "sweeps_seen": 806,
+      "diagnostics": {
+        "input_contract": {
+          "preprocessing_version": 2,
+          "radius": "adaptive 0.20-0.75 m, target 256 real points",
+          "neighborhood_mode": "adaptive",
+          "radius_m": 0.5,
+          "adaptive_radius_min_m": 0.2,
+          "adaptive_radius_max_m": 0.75,
+          "adaptive_k": 256,
+          "history": "current sweep only",
+          "history_ages_s": [
+            0.0
+          ],
+          "history_tolerance_s": 0.1,
+          "frame_window_s": 0.05,
+          "feature_schema": "dx,dy,dz,intensity|query_height"
+        },
+        "radius_m": {
+          "p0": 0.3461846709251404,
+          "p5": 0.6467954695224762,
+          "p25": 0.75,
+          "p50": 0.75,
+          "p75": 0.75,
+          "p95": 0.75,
+          "p100": 0.75,
+          "mean": 0.7387565499101852,
+          "n": 9959
+        },
+        "radius_at_min_frac": 0.0,
+        "radius_at_max_frac": 0.8955718445627071,
+        "shortfall_below_k_frac": 0.8955718445627071,
+        "below_n_points_frac": 0.8955718445627071,
+        "ball_count": {
+          "p0": 20.0,
+          "p5": 24.0,
+          "p25": 50.0,
+          "p50": 106.0,
+          "p75": 193.0,
+          "p95": 256.0,
+          "p100": 256.0,
+          "mean": 122.5194296616126,
+          "n": 9959
+        },
+        "ball_voxels": {
+          "p0": 18.0,
+          "p5": 24.0,
+          "p25": 50.0,
+          "p50": 106.0,
+          "p75": 191.0,
+          "p95": 250.0,
+          "p100": 256.0,
+          "mean": 120.72416909328246,
+          "n": 9959
+        },
+        "points_per_voxel": {
+          "p0": 1.0,
+          "p5": 1.0,
+          "p25": 1.0,
+          "p50": 1.0,
+          "p75": 1.0049261083743843,
+          "p95": 1.0491803278688525,
+          "p100": 1.3636363636363635,
+          "mean": 1.0088525401761228,
+          "n": 9959
+        },
+        "ball_sweeps": {
+          "p0": 1.0,
+          "p5": 1.0,
+          "p25": 1.0,
+          "p50": 1.0,
+          "p75": 1.0,
+          "p95": 1.0,
+          "p100": 1.0,
+          "mean": 1.0,
+          "n": 9959
+        },
+        "support_points": {
+          "p0": 24.0,
+          "p5": 882.5,
+          "p25": 1166.0,
+          "p50": 1247.5,
+          "p75": 1421.0,
+          "p95": 1655.1999999999998,
+          "p100": 2010.0,
+          "mean": 1270.92,
+          "n": 200
+        },
+        "anchor_span_s": 42.97880744934082,
+        "anchors_before_full_history": 0,
+        "slots": [
+          {
+            "target_age_s": 0.0,
+            "status": {
+              "ok": 200
+            },
+            "fill_rate": 1.0,
+            "actual_age_s": {
+              "p0": 0.0,
+              "p5": 0.0,
+              "p25": 0.0,
+              "p50": 0.0,
+              "p75": 0.0,
+              "p95": 0.0,
+              "p100": 0.0,
+              "mean": 0.0,
+              "n": 200
+            },
+            "origin_shift_m": {
+              "p0": 0.0,
+              "p5": 0.0,
+              "p25": 0.0,
+              "p50": 0.0,
+              "p75": 0.0,
+              "p95": 0.0,
+              "p100": 0.0,
+              "mean": 0.0,
+              "n": 200
+            },
+            "yaw_delta_deg": {
+              "p0": 0.0,
+              "p5": 0.0,
+              "p25": 0.0,
+              "p50": 0.0,
+              "p75": 0.0,
+              "p95": 0.0,
+              "p100": 0.0,
+              "mean": 0.0,
+              "n": 200
+            },
+            "points_in_crop": {
+              "p0": 24.0,
+              "p5": 882.5,
+              "p25": 1166.0,
+              "p50": 1247.5,
+              "p75": 1421.0,
+              "p95": 1655.1999999999998,
+              "p100": 2010.0,
+              "mean": 1270.92,
+              "n": 200
+            }
+          }
+        ]
+      },
+      "bev_frames": 0,
+      "seg_frames": 0
+    },
+    "VolleyBallTest3.reslam": {
+      "run_id": "VolleyBallTest3.reslam",
+      "mcap_path": "/home/brandon/Documents/Rocklabel/rocklabel/recordings/volleyball/reslam/VolleyBallTest3.reslam.mcap",
+      "labels_path": "/home/brandon/Documents/Rocklabel/rocklabel/labels/volleyball/VolleyBallTest3.reslam.labels.json",
+      "rock_count": 4,
+      "arena_vertices": 4,
+      "z_band": [
+        -2.4474,
+        -0.304
+      ],
+      "level": {
+        "mode": "manual",
+        "roll_deg": 0.0236,
+        "pitch_deg": 33.3373,
+        "floor_z": -0.8298
+      },
+      "intensity_available": true,
+      "frames_skipped_pose": 0,
+      "stamp_fallbacks": 0,
+      "generated": "2026-09-21T19:49:30Z",
+      "preprocessing_version": 2,
+      "feature_schema": "dx,dy,dz,intensity|query_height",
+      "formats": [
+        "points"
+      ],
+      "sweep_cache": "/home/brandon/Documents/Rocklabel/rocklabel/training/caches/neighborhood-history-v1/_sweeps/VolleyBallTest3.reslam",
+      "frames_kept": 234,
+      "frames_skipped_empty": 1,
+      "point_samples": 11688,
+      "sample_labels": {
+        "rock": 2514,
+        "clear": 9174
+      },
+      "candidates_total": 223765,
+      "candidates_selected": {
+        "rock": 2637,
+        "clear": 10836
+      },
+      "unscorable": {
+        "rock": 123,
+        "clear": 1662
+      },
+      "history_resets": 0,
+      "sweeps_seen": 942,
+      "diagnostics": {
+        "input_contract": {
+          "preprocessing_version": 2,
+          "radius": "adaptive 0.20-0.75 m, target 256 real points",
+          "neighborhood_mode": "adaptive",
+          "radius_m": 0.5,
+          "adaptive_radius_min_m": 0.2,
+          "adaptive_radius_max_m": 0.75,
+          "adaptive_k": 256,
+          "history": "current sweep only",
+          "history_ages_s": [
+            0.0
+          ],
+          "history_tolerance_s": 0.1,
+          "frame_window_s": 0.05,
+          "feature_schema": "dx,dy,dz,intensity|query_height"
+        },
+        "radius_m": {
+          "p0": 0.4071185886859894,
+          "p5": 0.7075735121965409,
+          "p25": 0.75,
+          "p50": 0.75,
+          "p75": 0.75,
+          "p95": 0.75,
+          "p100": 0.75,
+          "mean": 0.7431337461742451,
+          "n": 11688
+        },
+        "radius_at_min_frac": 0.0,
+        "radius_at_max_frac": 0.9247946611909651,
+        "shortfall_below_k_frac": 0.9247946611909651,
+        "below_n_points_frac": 0.9247946611909651,
+        "ball_count": {
+          "p0": 20.0,
+          "p5": 25.0,
+          "p25": 53.0,
+          "p50": 108.0,
+          "p75": 180.0,
+          "p95": 256.0,
+          "p100": 257.0,
+          "mean": 120.5444045174538,
+          "n": 11688
+        },
+        "ball_voxels": {
+          "p0": 19.0,
+          "p5": 25.0,
+          "p25": 53.0,
+          "p50": 107.0,
+          "p75": 180.0,
+          "p95": 251.0,
+          "p100": 256.0,
+          "mean": 119.56365503080082,
+          "n": 11688
+        },
+        "points_per_voxel": {
+          "p0": 1.0,
+          "p5": 1.0,
+          "p25": 1.0,
+          "p50": 1.0,
+          "p75": 1.0,
+          "p95": 1.0282485875706215,
+          "p100": 1.3488372093023255,
+          "mean": 1.0051852184086296,
+          "n": 11688
+        },
+        "ball_sweeps": {
+          "p0": 1.0,
+          "p5": 1.0,
+          "p25": 1.0,
+          "p50": 1.0,
+          "p75": 1.0,
+          "p95": 1.0,
+          "p100": 1.0,
+          "mean": 1.0,
+          "n": 11688
+        },
+        "support_points": {
+          "p0": 346.0,
+          "p5": 944.2,
+          "p25": 1157.25,
+          "p50": 1249.5,
+          "p75": 1386.5,
+          "p95": 1589.5,
+          "p100": 2101.0,
+          "mean": 1269.4017094017095,
+          "n": 234
+        },
+        "anchor_span_s": 50.05982708930969,
+        "anchors_before_full_history": 0,
+        "slots": [
+          {
+            "target_age_s": 0.0,
+            "status": {
+              "ok": 234
+            },
+            "fill_rate": 1.0,
+            "actual_age_s": {
+              "p0": 0.0,
+              "p5": 0.0,
+              "p25": 0.0,
+              "p50": 0.0,
+              "p75": 0.0,
+              "p95": 0.0,
+              "p100": 0.0,
+              "mean": 0.0,
+              "n": 234
+            },
+            "origin_shift_m": {
+              "p0": 0.0,
+              "p5": 0.0,
+              "p25": 0.0,
+              "p50": 0.0,
+              "p75": 0.0,
+              "p95": 0.0,
+              "p100": 0.0,
+              "mean": 0.0,
+              "n": 234
+            },
+            "yaw_delta_deg": {
+              "p0": 0.0,
+              "p5": 0.0,
+              "p25": 0.0,
+              "p50": 0.0,
+              "p75": 0.0,
+              "p95": 0.0,
+              "p100": 0.0,
+              "mean": 0.0,
+              "n": 234
+            },
+            "points_in_crop": {
+              "p0": 346.0,
+              "p5": 944.2,
+              "p25": 1157.25,
+              "p50": 1249.5,
+              "p75": 1386.5,
+              "p95": 1589.5,
+              "p100": 2101.0,
+              "mean": 1269.4017094017095,
+              "n": 234
+            }
+          }
+        ]
+      },
+      "bev_frames": 0,
+      "seg_frames": 0
+    },
+    "VolleyBallTest4.reslam": {
+      "run_id": "VolleyBallTest4.reslam",
+      "mcap_path": "/home/brandon/Documents/Rocklabel/rocklabel/recordings/volleyball/reslam/VolleyBallTest4.reslam.mcap",
+      "labels_path": "/home/brandon/Documents/Rocklabel/rocklabel/labels/volleyball/VolleyBallTest4.reslam.labels.json",
+      "rock_count": 7,
+      "arena_vertices": 4,
+      "z_band": [
+        -1.0,
+        -0.596
+      ],
+      "level": {
+        "mode": "manual",
+        "roll_deg": -7.3597,
+        "pitch_deg": 31.202,
+        "floor_z": -0.7818
+      },
+      "intensity_available": true,
+      "frames_skipped_pose": 0,
+      "stamp_fallbacks": 0,
+      "generated": "2026-09-21T19:49:36Z",
+      "preprocessing_version": 2,
+      "feature_schema": "dx,dy,dz,intensity|query_height",
+      "formats": [
+        "points"
+      ],
+      "sweep_cache": "/home/brandon/Documents/Rocklabel/rocklabel/training/caches/neighborhood-history-v1/_sweeps/VolleyBallTest4.reslam",
+      "frames_kept": 254,
+      "frames_skipped_empty": 0,
+      "point_samples": 14569,
+      "sample_labels": {
+        "rock": 3221,
+        "clear": 11348
+      },
+      "candidates_total": 251023,
+      "candidates_selected": {
+        "rock": 3318,
+        "clear": 12189
+      },
+      "unscorable": {
+        "rock": 97,
+        "clear": 841
+      },
+      "history_resets": 0,
+      "sweeps_seen": 1014,
+      "diagnostics": {
+        "input_contract": {
+          "preprocessing_version": 2,
+          "radius": "adaptive 0.20-0.75 m, target 256 real points",
+          "neighborhood_mode": "adaptive",
+          "radius_m": 0.5,
+          "adaptive_radius_min_m": 0.2,
+          "adaptive_radius_max_m": 0.75,
+          "adaptive_k": 256,
+          "history": "current sweep only",
+          "history_ages_s": [
+            0.0
+          ],
+          "history_tolerance_s": 0.1,
+          "frame_window_s": 0.05,
+          "feature_schema": "dx,dy,dz,intensity|query_height"
+        },
+        "radius_m": {
+          "p0": 0.3327122628688812,
+          "p5": 0.6077491164207458,
+          "p25": 0.75,
+          "p50": 0.75,
+          "p75": 0.75,
+          "p95": 0.75,
+          "p100": 0.75,
+          "mean": 0.7312862508347207,
+          "n": 14569
+        },
+        "radius_at_min_frac": 0.0,
+        "radius_at_max_frac": 0.8255885784885716,
+        "shortfall_below_k_frac": 0.8255885784885716,
+        "below_n_points_frac": 0.8255885784885716,
+        "ball_count": {
+          "p0": 20.0,
+          "p5": 25.0,
+          "p25": 52.0,
+          "p50": 110.0,
+          "p75": 217.0,
+          "p95": 256.0,
+          "p100": 257.0,
+          "mean": 130.43544512320682,
+          "n": 14569
+        },
+        "ball_voxels": {
+          "p0": 17.0,
+          "p5": 25.0,
+          "p25": 52.0,
+          "p50": 110.0,
+          "p75": 213.0,
+          "p95": 254.0,
+          "p100": 257.0,
+          "mean": 128.54821882078386,
+          "n": 14569
+        },
+        "points_per_voxel": {
+          "p0": 1.0,
+          "p5": 1.0,
+          "p25": 1.0,
+          "p50": 1.0,
+          "p75": 1.0078740157480315,
+          "p95": 1.0482511588706263,
+          "p100": 1.4382022471910112,
+          "mean": 1.0096124060597456,
+          "n": 14569
+        },
+        "ball_sweeps": {
+          "p0": 1.0,
+          "p5": 1.0,
+          "p25": 1.0,
+          "p50": 1.0,
+          "p75": 1.0,
+          "p95": 1.0,
+          "p100": 1.0,
+          "mean": 1.0,
+          "n": 14569
+        },
+        "support_points": {
+          "p0": 374.0,
+          "p5": 943.95,
+          "p25": 1242.5,
+          "p50": 1331.5,
+          "p75": 1460.25,
+          "p95": 1704.2999999999997,
+          "p100": 2359.0,
+          "mean": 1341.4251968503936,
+          "n": 254
+        },
+        "anchor_span_s": 54.02868580818176,
+        "anchors_before_full_history": 0,
+        "slots": [
+          {
+            "target_age_s": 0.0,
+            "status": {
+              "ok": 254
+            },
+            "fill_rate": 1.0,
+            "actual_age_s": {
+              "p0": 0.0,
+              "p5": 0.0,
+              "p25": 0.0,
+              "p50": 0.0,
+              "p75": 0.0,
+              "p95": 0.0,
+              "p100": 0.0,
+              "mean": 0.0,
+              "n": 254
+            },
+            "origin_shift_m": {
+              "p0": 0.0,
+              "p5": 0.0,
+              "p25": 0.0,
+              "p50": 0.0,
+              "p75": 0.0,
+              "p95": 0.0,
+              "p100": 0.0,
+              "mean": 0.0,
+              "n": 254
+            },
+            "yaw_delta_deg": {
+              "p0": 0.0,
+              "p5": 0.0,
+              "p25": 0.0,
+              "p50": 0.0,
+              "p75": 0.0,
+              "p95": 0.0,
+              "p100": 0.0,
+              "mean": 0.0,
+              "n": 254
+            },
+            "points_in_crop": {
+              "p0": 374.0,
+              "p5": 943.95,
+              "p25": 1242.5,
+              "p50": 1331.5,
+              "p75": 1460.25,
+              "p95": 1704.2999999999997,
+              "p100": 2359.0,
+              "mean": 1341.4251968503936,
+              "n": 254
+            }
+          }
+        ]
+      },
+      "bev_frames": 0,
+      "seg_frames": 0
+    },
+    "VolleyBallTest5.reslam": {
+      "run_id": "VolleyBallTest5.reslam",
+      "mcap_path": "/home/brandon/Documents/Rocklabel/rocklabel/recordings/volleyball/reslam/VolleyBallTest5.reslam.mcap",
+      "labels_path": "/home/brandon/Documents/Rocklabel/rocklabel/labels/volleyball/VolleyBallTest5.reslam.labels.json",
+      "rock_count": 5,
+      "arena_vertices": 4,
+      "z_band": [
+        -2.4679,
+        -0.125
+      ],
+      "level": {
+        "mode": "manual",
+        "roll_deg": 5.9817,
+        "pitch_deg": 33.8755,
+        "floor_z": -0.8578
+      },
+      "intensity_available": true,
+      "frames_skipped_pose": 0,
+      "stamp_fallbacks": 0,
+      "generated": "2026-09-21T19:49:40Z",
+      "preprocessing_version": 2,
+      "feature_schema": "dx,dy,dz,intensity|query_height",
+      "formats": [
+        "points"
+      ],
+      "sweep_cache": "/home/brandon/Documents/Rocklabel/rocklabel/training/caches/neighborhood-history-v1/_sweeps/VolleyBallTest5.reslam",
+      "frames_kept": 210,
+      "frames_skipped_empty": 0,
+      "point_samples": 10788,
+      "sample_labels": {
+        "rock": 1496,
+        "clear": 9292
+      },
+      "candidates_total": 219766,
+      "candidates_selected": {
+        "rock": 1641,
+        "clear": 10807
+      },
+      "unscorable": {
+        "rock": 145,
+        "clear": 1515
+      },
+      "history_resets": 0,
+      "sweeps_seen": 847,
+      "diagnostics": {
+        "input_contract": {
+          "preprocessing_version": 2,
+          "radius": "adaptive 0.20-0.75 m, target 256 real points",
+          "neighborhood_mode": "adaptive",
+          "radius_m": 0.5,
+          "adaptive_radius_min_m": 0.2,
+          "adaptive_radius_max_m": 0.75,
+          "adaptive_k": 256,
+          "history": "current sweep only",
+          "history_ages_s": [
+            0.0
+          ],
+          "history_tolerance_s": 0.1,
+          "frame_window_s": 0.05,
+          "feature_schema": "dx,dy,dz,intensity|query_height"
+        },
+        "radius_m": {
+          "p0": 0.3382299542427063,
+          "p5": 0.6296852499246597,
+          "p25": 0.75,
+          "p50": 0.75,
+          "p75": 0.75,
+          "p95": 0.75,
+          "p100": 0.75,
+          "mean": 0.7353870733456342,
+          "n": 10788
+        },
+        "radius_at_min_frac": 0.0,
+        "radius_at_max_frac": 0.8649425287356322,
+        "shortfall_below_k_frac": 0.8649425287356322,
+        "below_n_points_frac": 0.8649425287356322,
+        "ball_count": {
+          "p0": 20.0,
+          "p5": 24.0,
+          "p25": 50.0,
+          "p50": 104.0,
+          "p75": 193.0,
+          "p95": 256.0,
+          "p100": 257.0,
+          "mean": 123.09566184649611,
+          "n": 10788
+        },
+        "ball_voxels": {
+          "p0": 20.0,
+          "p5": 24.0,
+          "p25": 50.0,
+          "p50": 104.0,
+          "p75": 191.0,
+          "p95": 254.0,
+          "p100": 256.0,
+          "mean": 121.33157211716723,
+          "n": 10788
+        },
+        "points_per_voxel": {
+          "p0": 1.0,
+          "p5": 1.0,
+          "p25": 1.0,
+          "p50": 1.0,
+          "p75": 1.0042194092827004,
+          "p95": 1.0514285714285714,
+          "p100": 1.4382022471910112,
+          "mean": 1.009357100616625,
+          "n": 10788
+        },
+        "ball_sweeps": {
+          "p0": 1.0,
+          "p5": 1.0,
+          "p25": 1.0,
+          "p50": 1.0,
+          "p75": 1.0,
+          "p95": 1.0,
+          "p100": 1.0,
+          "mean": 1.0,
+          "n": 10788
+        },
+        "support_points": {
+          "p0": 49.0,
+          "p5": 715.0,
+          "p25": 1184.0,
+          "p50": 1322.0,
+          "p75": 1517.5,
+          "p95": 1946.0,
+          "p100": 2277.0,
+          "mean": 1327.4075829383887,
+          "n": 211
+        },
+        "anchor_span_s": 45.48185443878174,
+        "anchors_before_full_history": 0,
+        "slots": [
+          {
+            "target_age_s": 0.0,
+            "status": {
+              "ok": 211
+            },
+            "fill_rate": 1.0,
+            "actual_age_s": {
+              "p0": 0.0,
+              "p5": 0.0,
+              "p25": 0.0,
+              "p50": 0.0,
+              "p75": 0.0,
+              "p95": 0.0,
+              "p100": 0.0,
+              "mean": 0.0,
+              "n": 211
+            },
+            "origin_shift_m": {
+              "p0": 0.0,
+              "p5": 0.0,
+              "p25": 0.0,
+              "p50": 0.0,
+              "p75": 0.0,
+              "p95": 0.0,
+              "p100": 0.0,
+              "mean": 0.0,
+              "n": 211
+            },
+            "yaw_delta_deg": {
+              "p0": 0.0,
+              "p5": 0.0,
+              "p25": 0.0,
+              "p50": 0.0,
+              "p75": 0.0,
+              "p95": 0.0,
+              "p100": 0.0,
+              "mean": 0.0,
+              "n": 211
+            },
+            "points_in_crop": {
+              "p0": 49.0,
+              "p5": 715.0,
+              "p25": 1184.0,
+              "p50": 1322.0,
+              "p75": 1517.5,
+              "p95": 1946.0,
+              "p100": 2277.0,
+              "mean": 1327.4075829383887,
+              "n": 211
+            }
+          }
+        ]
+      },
+      "bev_frames": 0,
+      "seg_frames": 0
+    },
+    "VolleyBallTest6.reslam": {
+      "run_id": "VolleyBallTest6.reslam",
+      "mcap_path": "/home/brandon/Documents/Rocklabel/rocklabel/recordings/volleyball/reslam/VolleyBallTest6.reslam.mcap",
+      "labels_path": "/home/brandon/Documents/Rocklabel/rocklabel/labels/volleyball/VolleyBallTest6.reslam.labels.json",
+      "rock_count": 7,
+      "arena_vertices": 4,
+      "z_band": [
+        -1.735,
+        -0.572
+      ],
+      "level": {
+        "mode": "manual",
+        "roll_deg": 2.3575,
+        "pitch_deg": 28.2049,
+        "floor_z": -0.8517
+      },
+      "intensity_available": true,
+      "frames_skipped_pose": 0,
+      "stamp_fallbacks": 0,
+      "generated": "2026-09-21T19:49:44Z",
+      "preprocessing_version": 2,
+      "feature_schema": "dx,dy,dz,intensity|query_height",
+      "formats": [
+        "points"
+      ],
+      "sweep_cache": "/home/brandon/Documents/Rocklabel/rocklabel/training/caches/neighborhood-history-v1/_sweeps/VolleyBallTest6.reslam",
+      "frames_kept": 211,
+      "frames_skipped_empty": 0,
+      "point_samples": 9055,
+      "sample_labels": {
+        "rock": 776,
+        "clear": 8279
+      },
+      "candidates_total": 193330,
+      "candidates_selected": {
+        "rock": 1151,
+        "clear": 9733
+      },
+      "unscorable": {
+        "rock": 375,
+        "clear": 1454
+      },
+      "history_resets": 0,
+      "sweeps_seen": 849,
+      "diagnostics": {
+        "input_contract": {
+          "preprocessing_version": 2,
+          "radius": "adaptive 0.20-0.75 m, target 256 real points",
+          "neighborhood_mode": "adaptive",
+          "radius_m": 0.5,
+          "adaptive_radius_min_m": 0.2,
+          "adaptive_radius_max_m": 0.75,
+          "adaptive_k": 256,
+          "history": "current sweep only",
+          "history_ages_s": [
+            0.0
+          ],
+          "history_tolerance_s": 0.1,
+          "frame_window_s": 0.05,
+          "feature_schema": "dx,dy,dz,intensity|query_height"
+        },
+        "radius_m": {
+          "p0": 0.45054078102111816,
+          "p5": 0.7191110014915466,
+          "p25": 0.75,
+          "p50": 0.75,
+          "p75": 0.75,
+          "p95": 0.75,
+          "p100": 0.75,
+          "mean": 0.744842461381809,
+          "n": 9055
+        },
+        "radius_at_min_frac": 0.0,
+        "radius_at_max_frac": 0.9303147432357813,
+        "shortfall_below_k_frac": 0.9303147432357813,
+        "below_n_points_frac": 0.9303147432357813,
+        "ball_count": {
+          "p0": 20.0,
+          "p5": 23.0,
+          "p25": 47.0,
+          "p50": 96.0,
+          "p75": 174.0,
+          "p95": 256.0,
+          "p100": 256.0,
+          "mean": 114.24704583103258,
+          "n": 9055
+        },
+        "ball_voxels": {
+          "p0": 18.0,
+          "p5": 23.0,
+          "p25": 47.0,
+          "p50": 96.0,
+          "p75": 173.0,
+          "p95": 251.0,
+          "p100": 256.0,
+          "mean": 113.17559359469907,
+          "n": 9055
+        },
+        "points_per_voxel": {
+          "p0": 1.0,
+          "p5": 1.0,
+          "p25": 1.0,
+          "p50": 1.0,
+          "p75": 1.0,
+          "p95": 1.026235348195817,
+          "p100": 1.3763440860215055,
+          "mean": 1.006006189242394,
+          "n": 9055
+        },
+        "ball_sweeps": {
+          "p0": 1.0,
+          "p5": 1.0,
+          "p25": 1.0,
+          "p50": 1.0,
+          "p75": 1.0,
+          "p95": 1.0,
+          "p100": 1.0,
+          "mean": 1.0,
+          "n": 9055
+        },
+        "support_points": {
+          "p0": 167.0,
+          "p5": 791.6,
+          "p25": 1119.25,
+          "p50": 1224.0,
+          "p75": 1344.25,
+          "p95": 1560.45,
+          "p100": 1785.0,
+          "mean": 1210.8867924528302,
+          "n": 212
+        },
+        "anchor_span_s": 45.299556016922,
+        "anchors_before_full_history": 0,
+        "slots": [
+          {
+            "target_age_s": 0.0,
+            "status": {
+              "ok": 212
+            },
+            "fill_rate": 1.0,
+            "actual_age_s": {
+              "p0": 0.0,
+              "p5": 0.0,
+              "p25": 0.0,
+              "p50": 0.0,
+              "p75": 0.0,
+              "p95": 0.0,
+              "p100": 0.0,
+              "mean": 0.0,
+              "n": 212
+            },
+            "origin_shift_m": {
+              "p0": 0.0,
+              "p5": 0.0,
+              "p25": 0.0,
+              "p50": 0.0,
+              "p75": 0.0,
+              "p95": 0.0,
+              "p100": 0.0,
+              "mean": 0.0,
+              "n": 212
+            },
+            "yaw_delta_deg": {
+              "p0": 0.0,
+              "p5": 0.0,
+              "p25": 0.0,
+              "p50": 0.0,
+              "p75": 0.0,
+              "p95": 0.0,
+              "p100": 0.0,
+              "mean": 0.0,
+              "n": 212
+            },
+            "points_in_crop": {
+              "p0": 167.0,
+              "p5": 791.6,
+              "p25": 1119.25,
+              "p50": 1224.0,
+              "p75": 1344.25,
+              "p95": 1560.45,
+              "p100": 1785.0,
+              "mean": 1210.8867924528302,
+              "n": 212
+            }
+          }
+        ]
+      },
+      "bev_frames": 0,
+      "seg_frames": 0
+    },
+    "VolleyBallTest7.reslam": {
+      "run_id": "VolleyBallTest7.reslam",
+      "mcap_path": "/home/brandon/Documents/Rocklabel/rocklabel/recordings/volleyball/reslam/VolleyBallTest7.reslam.mcap",
+      "labels_path": "/home/brandon/Documents/Rocklabel/rocklabel/labels/volleyball/VolleyBallTest7.reslam.labels.json",
+      "rock_count": 7,
+      "arena_vertices": 4,
+      "z_band": [
+        -2.5248,
+        -0.539
+      ],
+      "level": {
+        "mode": "manual",
+        "roll_deg": 5.8307,
+        "pitch_deg": 28.3175,
+        "floor_z": -0.8235
+      },
+      "intensity_available": true,
+      "frames_skipped_pose": 0,
+      "stamp_fallbacks": 0,
+      "generated": "2026-09-21T19:49:50Z",
+      "preprocessing_version": 2,
+      "feature_schema": "dx,dy,dz,intensity|query_height",
+      "formats": [
+        "points"
+      ],
+      "sweep_cache": "/home/brandon/Documents/Rocklabel/rocklabel/training/caches/neighborhood-history-v1/_sweeps/VolleyBallTest7.reslam",
+      "frames_kept": 295,
+      "frames_skipped_empty": 0,
+      "point_samples": 13568,
+      "sample_labels": {
+        "rock": 2124,
+        "clear": 11444
+      },
+      "candidates_total": 272612,
+      "candidates_selected": {
+        "rock": 2319,
+        "clear": 13442
+      },
+      "unscorable": {
+        "rock": 195,
+        "clear": 1998
+      },
+      "history_resets": 0,
+      "sweeps_seen": 1190,
+      "diagnostics": {
+        "input_contract": {
+          "preprocessing_version": 2,
+          "radius": "adaptive 0.20-0.75 m, target 256 real points",
+          "neighborhood_mode": "adaptive",
+          "radius_m": 0.5,
+          "adaptive_radius_min_m": 0.2,
+          "adaptive_radius_max_m": 0.75,
+          "adaptive_k": 256,
+          "history": "current sweep only",
+          "history_ages_s": [
+            0.0
+          ],
+          "history_tolerance_s": 0.1,
+          "frame_window_s": 0.05,
+          "feature_schema": "dx,dy,dz,intensity|query_height"
+        },
+        "radius_m": {
+          "p0": 0.3973941206932068,
+          "p5": 0.6902137756347656,
+          "p25": 0.75,
+          "p50": 0.75,
+          "p75": 0.75,
+          "p95": 0.75,
+          "p100": 0.75,
+          "mean": 0.7423518748167586,
+          "n": 13568
+        },
+        "radius_at_min_frac": 0.0,
+        "radius_at_max_frac": 0.9112617924528302,
+        "shortfall_below_k_frac": 0.9112617924528302,
+        "below_n_points_frac": 0.9112617924528302,
+        "ball_count": {
+          "p0": 20.0,
+          "p5": 23.0,
+          "p25": 52.0,
+          "p50": 106.0,
+          "p75": 181.0,
+          "p95": 256.0,
+          "p100": 256.0,
+          "mean": 119.19516509433963,
+          "n": 13568
+        },
+        "ball_voxels": {
+          "p0": 18.0,
+          "p5": 23.0,
+          "p25": 52.0,
+          "p50": 106.0,
+          "p75": 179.0,
+          "p95": 251.0,
+          "p100": 256.0,
+          "mean": 117.95172464622641,
+          "n": 13568
+        },
+        "points_per_voxel": {
+          "p0": 1.0,
+          "p5": 1.0,
+          "p25": 1.0,
+          "p50": 1.0,
+          "p75": 1.0,
+          "p95": 1.0344827586206897,
+          "p100": 1.3617021276595744,
+          "mean": 1.0065607429349865,
+          "n": 13568
+        },
+        "ball_sweeps": {
+          "p0": 1.0,
+          "p5": 1.0,
+          "p25": 1.0,
+          "p50": 1.0,
+          "p75": 1.0,
+          "p95": 1.0,
+          "p100": 1.0,
+          "mean": 1.0,
+          "n": 13568
+        },
+        "support_points": {
+          "p0": 27.0,
+          "p5": 713.4000000000001,
+          "p25": 1132.0,
+          "p50": 1247.0,
+          "p75": 1381.0,
+          "p95": 1633.7999999999997,
+          "p100": 2047.0,
+          "mean": 1236.6565656565656,
+          "n": 297
+        },
+        "anchor_span_s": 64.33251404762268,
+        "anchors_before_full_history": 0,
+        "slots": [
+          {
+            "target_age_s": 0.0,
+            "status": {
+              "ok": 297
+            },
+            "fill_rate": 1.0,
+            "actual_age_s": {
+              "p0": 0.0,
+              "p5": 0.0,
+              "p25": 0.0,
+              "p50": 0.0,
+              "p75": 0.0,
+              "p95": 0.0,
+              "p100": 0.0,
+              "mean": 0.0,
+              "n": 297
+            },
+            "origin_shift_m": {
+              "p0": 0.0,
+              "p5": 0.0,
+              "p25": 0.0,
+              "p50": 0.0,
+              "p75": 0.0,
+              "p95": 0.0,
+              "p100": 0.0,
+              "mean": 0.0,
+              "n": 297
+            },
+            "yaw_delta_deg": {
+              "p0": 0.0,
+              "p5": 0.0,
+              "p25": 0.0,
+              "p50": 0.0,
+              "p75": 0.0,
+              "p95": 0.0,
+              "p100": 0.0,
+              "mean": 0.0,
+              "n": 297
+            },
+            "points_in_crop": {
+              "p0": 27.0,
+              "p5": 713.4000000000001,
+              "p25": 1132.0,
+              "p50": 1247.0,
+              "p75": 1381.0,
+              "p95": 1633.7999999999997,
+              "p100": 2047.0,
+              "mean": 1236.6565656565656,
+              "n": 297
+            }
+          }
+        ]
+      },
+      "bev_frames": 0,
+      "seg_frames": 0
+    },
+    "VolleyBallTest8.reslam": {
+      "run_id": "VolleyBallTest8.reslam",
+      "mcap_path": "/home/brandon/Documents/Rocklabel/rocklabel/recordings/volleyball/reslam/VolleyBallTest8.reslam.mcap",
+      "labels_path": "/home/brandon/Documents/Rocklabel/rocklabel/labels/volleyball/VolleyBallTest8.reslam.labels.json",
+      "rock_count": 4,
+      "arena_vertices": 4,
+      "z_band": [
+        -2.4392,
+        -0.478
+      ],
+      "level": {
+        "mode": "manual",
+        "roll_deg": 2.1472,
+        "pitch_deg": 34.6278,
+        "floor_z": -0.8019
+      },
+      "intensity_available": true,
+      "frames_skipped_pose": 0,
+      "stamp_fallbacks": 0,
+      "generated": "2026-09-21T19:49:56Z",
+      "preprocessing_version": 2,
+      "feature_schema": "dx,dy,dz,intensity|query_height",
+      "formats": [
+        "points"
+      ],
+      "sweep_cache": "/home/brandon/Documents/Rocklabel/rocklabel/training/caches/neighborhood-history-v1/_sweeps/VolleyBallTest8.reslam",
+      "frames_kept": 252,
+      "frames_skipped_empty": 0,
+      "point_samples": 12629,
+      "sample_labels": {
+        "rock": 1244,
+        "clear": 11385
+      },
+      "candidates_total": 265213,
+      "candidates_selected": {
+        "rock": 1926,
+        "clear": 13110
+      },
+      "unscorable": {
+        "rock": 682,
+        "clear": 1725
+      },
+      "history_resets": 0,
+      "sweeps_seen": 1008,
+      "diagnostics": {
+        "input_contract": {
+          "preprocessing_version": 2,
+          "radius": "adaptive 0.20-0.75 m, target 256 real points",
+          "neighborhood_mode": "adaptive",
+          "radius_m": 0.5,
+          "adaptive_radius_min_m": 0.2,
+          "adaptive_radius_max_m": 0.75,
+          "adaptive_k": 256,
+          "history": "current sweep only",
+          "history_ages_s": [
+            0.0
+          ],
+          "history_tolerance_s": 0.1,
+          "frame_window_s": 0.05,
+          "feature_schema": "dx,dy,dz,intensity|query_height"
+        },
+        "radius_m": {
+          "p0": 0.36650580167770386,
+          "p5": 0.6294602513313293,
+          "p25": 0.75,
+          "p50": 0.75,
+          "p75": 0.75,
+          "p95": 0.75,
+          "p100": 0.75,
+          "mean": 0.7350168761825494,
+          "n": 12629
+        },
+        "radius_at_min_frac": 0.0,
+        "radius_at_max_frac": 0.8555705123129306,
+        "shortfall_below_k_frac": 0.8555705123129306,
+        "below_n_points_frac": 0.8555705123129306,
+        "ball_count": {
+          "p0": 20.0,
+          "p5": 24.0,
+          "p25": 52.0,
+          "p50": 114.0,
+          "p75": 207.0,
+          "p95": 256.0,
+          "p100": 257.0,
+          "mean": 129.69878850265263,
+          "n": 12629
+        },
+        "ball_voxels": {
+          "p0": 18.0,
+          "p5": 24.0,
+          "p25": 52.0,
+          "p50": 114.0,
+          "p75": 204.0,
+          "p95": 253.0,
+          "p100": 257.0,
+          "mean": 127.77654604481748,
+          "n": 12629
+        },
+        "points_per_voxel": {
+          "p0": 1.0,
+          "p5": 1.0,
+          "p25": 1.0,
+          "p50": 1.0,
+          "p75": 1.0046511627906978,
+          "p95": 1.0534979423868314,
+          "p100": 1.5833333333333333,
+          "mean": 1.0099702335536798,
+          "n": 12629
+        },
+        "ball_sweeps": {
+          "p0": 1.0,
+          "p5": 1.0,
+          "p25": 1.0,
+          "p50": 1.0,
+          "p75": 1.0,
+          "p95": 1.0,
+          "p100": 1.0,
+          "mean": 1.0,
+          "n": 12629
+        },
+        "support_points": {
+          "p0": 150.0,
+          "p5": 819.95,
+          "p25": 1217.25,
+          "p50": 1347.5,
+          "p75": 1492.0,
+          "p95": 1735.6,
+          "p100": 2285.0,
+          "mean": 1339.8690476190477,
+          "n": 252
+        },
+        "anchor_span_s": 54.027618408203125,
+        "anchors_before_full_history": 0,
+        "slots": [
+          {
+            "target_age_s": 0.0,
+            "status": {
+              "ok": 252
+            },
+            "fill_rate": 1.0,
+            "actual_age_s": {
+              "p0": 0.0,
+              "p5": 0.0,
+              "p25": 0.0,
+              "p50": 0.0,
+              "p75": 0.0,
+              "p95": 0.0,
+              "p100": 0.0,
+              "mean": 0.0,
+              "n": 252
+            },
+            "origin_shift_m": {
+              "p0": 0.0,
+              "p5": 0.0,
+              "p25": 0.0,
+              "p50": 0.0,
+              "p75": 0.0,
+              "p95": 0.0,
+              "p100": 0.0,
+              "mean": 0.0,
+              "n": 252
+            },
+            "yaw_delta_deg": {
+              "p0": 0.0,
+              "p5": 0.0,
+              "p25": 0.0,
+              "p50": 0.0,
+              "p75": 0.0,
+              "p95": 0.0,
+              "p100": 0.0,
+              "mean": 0.0,
+              "n": 252
+            },
+            "points_in_crop": {
+              "p0": 150.0,
+              "p5": 819.95,
+              "p25": 1217.25,
+              "p50": 1347.5,
+              "p75": 1492.0,
+              "p95": 1735.6,
+              "p100": 2285.0,
+              "mean": 1339.8690476190477,
+              "n": 252
+            }
+          }
+        ]
+      },
+      "bev_frames": 0,
+      "seg_frames": 0
+    },
+    "VolleyBallTest9.reslam": {
+      "run_id": "VolleyBallTest9.reslam",
+      "mcap_path": "/home/brandon/Documents/Rocklabel/rocklabel/recordings/volleyball/reslam/VolleyBallTest9.reslam.mcap",
+      "labels_path": "/home/brandon/Documents/Rocklabel/rocklabel/labels/volleyball/VolleyBallTest9.reslam.labels.json",
+      "rock_count": 7,
+      "arena_vertices": 4,
+      "z_band": [
+        -2.4214,
+        -0.401
+      ],
+      "level": {
+        "mode": "manual",
+        "roll_deg": 0.7125,
+        "pitch_deg": 21.8845,
+        "floor_z": -0.8677
+      },
+      "intensity_available": true,
+      "frames_skipped_pose": 0,
+      "stamp_fallbacks": 0,
+      "generated": "2026-09-21T19:50:00Z",
+      "preprocessing_version": 2,
+      "feature_schema": "dx,dy,dz,intensity|query_height",
+      "formats": [
+        "points"
+      ],
+      "sweep_cache": "/home/brandon/Documents/Rocklabel/rocklabel/training/caches/neighborhood-history-v1/_sweeps/VolleyBallTest9.reslam",
+      "frames_kept": 209,
+      "frames_skipped_empty": 0,
+      "point_samples": 11437,
+      "sample_labels": {
+        "rock": 3299,
+        "clear": 8138
+      },
+      "candidates_total": 198262,
+      "candidates_selected": {
+        "rock": 3348,
+        "clear": 9635
+      },
+      "unscorable": {
+        "rock": 49,
+        "clear": 1497
+      },
+      "history_resets": 0,
+      "sweeps_seen": 836,
+      "diagnostics": {
+        "input_contract": {
+          "preprocessing_version": 2,
+          "radius": "adaptive 0.20-0.75 m, target 256 real points",
+          "neighborhood_mode": "adaptive",
+          "radius_m": 0.5,
+          "adaptive_radius_min_m": 0.2,
+          "adaptive_radius_max_m": 0.75,
+          "adaptive_k": 256,
+          "history": "current sweep only",
+          "history_ages_s": [
+            0.0
+          ],
+          "history_tolerance_s": 0.1,
+          "frame_window_s": 0.05,
+          "feature_schema": "dx,dy,dz,intensity|query_height"
+        },
+        "radius_m": {
+          "p0": 0.39966797828674316,
+          "p5": 0.7207928538322449,
+          "p25": 0.75,
+          "p50": 0.75,
+          "p75": 0.75,
+          "p95": 0.75,
+          "p100": 0.75,
+          "mean": 0.7441006086006483,
+          "n": 11437
+        },
+        "radius_at_min_frac": 0.0,
+        "radius_at_max_frac": 0.932237474862289,
+        "shortfall_below_k_frac": 0.932237474862289,
+        "below_n_points_frac": 0.932237474862289,
+        "ball_count": {
+          "p0": 20.0,
+          "p5": 25.0,
+          "p25": 50.0,
+          "p50": 97.0,
+          "p75": 170.0,
+          "p95": 256.0,
+          "p100": 257.0,
+          "mean": 114.16499081927078,
+          "n": 11437
+        },
+        "ball_voxels": {
+          "p0": 19.0,
+          "p5": 25.0,
+          "p25": 50.0,
+          "p50": 97.0,
+          "p75": 170.0,
+          "p95": 251.0,
+          "p100": 256.0,
+          "mean": 113.41846638104398,
+          "n": 11437
+        },
+        "points_per_voxel": {
+          "p0": 1.0,
+          "p5": 1.0,
+          "p25": 1.0,
+          "p50": 1.0,
+          "p75": 1.0,
+          "p95": 1.0199203187250996,
+          "p100": 1.299492385786802,
+          "mean": 1.0038222623384252,
+          "n": 11437
+        },
+        "ball_sweeps": {
+          "p0": 1.0,
+          "p5": 1.0,
+          "p25": 1.0,
+          "p50": 1.0,
+          "p75": 1.0,
+          "p95": 1.0,
+          "p100": 1.0,
+          "mean": 1.0,
+          "n": 11437
+        },
+        "support_points": {
+          "p0": 398.0,
+          "p5": 840.4,
+          "p25": 1127.0,
+          "p50": 1210.0,
+          "p75": 1327.0,
+          "p95": 1514.3999999999999,
+          "p100": 2072.0,
+          "mean": 1221.8516746411483,
+          "n": 209
+        },
+        "anchor_span_s": 44.32081913948059,
+        "anchors_before_full_history": 0,
+        "slots": [
+          {
+            "target_age_s": 0.0,
+            "status": {
+              "ok": 209
+            },
+            "fill_rate": 1.0,
+            "actual_age_s": {
+              "p0": 0.0,
+              "p5": 0.0,
+              "p25": 0.0,
+              "p50": 0.0,
+              "p75": 0.0,
+              "p95": 0.0,
+              "p100": 0.0,
+              "mean": 0.0,
+              "n": 209
+            },
+            "origin_shift_m": {
+              "p0": 0.0,
+              "p5": 0.0,
+              "p25": 0.0,
+              "p50": 0.0,
+              "p75": 0.0,
+              "p95": 0.0,
+              "p100": 0.0,
+              "mean": 0.0,
+              "n": 209
+            },
+            "yaw_delta_deg": {
+              "p0": 0.0,
+              "p5": 0.0,
+              "p25": 0.0,
+              "p50": 0.0,
+              "p75": 0.0,
+              "p95": 0.0,
+              "p100": 0.0,
+              "mean": 0.0,
+              "n": 209
+            },
+            "points_in_crop": {
+              "p0": 398.0,
+              "p5": 840.4,
+              "p25": 1127.0,
+              "p50": 1210.0,
+              "p75": 1327.0,
+              "p95": 1514.3999999999999,
+              "p100": 2072.0,
+              "mean": 1221.8516746411483,
+              "n": 209
+            }
+          }
+        ]
+      },
+      "bev_frames": 0,
+      "seg_frames": 0
+    },
+    "VolleyBallTest10.reslam": {
+      "run_id": "VolleyBallTest10.reslam",
+      "mcap_path": "/home/brandon/Documents/Rocklabel/rocklabel/recordings/volleyball/reslam/VolleyBallTest10.reslam.mcap",
+      "labels_path": "/home/brandon/Documents/Rocklabel/rocklabel/labels/volleyball/VolleyBallTest10.reslam.labels.json",
+      "rock_count": 4,
+      "arena_vertices": 4,
+      "z_band": [
+        -2.32,
+        -0.139
+      ],
+      "level": {
+        "mode": "manual",
+        "roll_deg": 1.7325,
+        "pitch_deg": 31.5054,
+        "floor_z": -0.8412
+      },
+      "intensity_available": true,
+      "frames_skipped_pose": 0,
+      "stamp_fallbacks": 0,
+      "generated": "2026-09-21T19:50:04Z",
+      "preprocessing_version": 2,
+      "feature_schema": "dx,dy,dz,intensity|query_height",
+      "formats": [
+        "points"
+      ],
+      "sweep_cache": "/home/brandon/Documents/Rocklabel/rocklabel/training/caches/neighborhood-history-v1/_sweeps/VolleyBallTest10.reslam",
+      "frames_kept": 212,
+      "frames_skipped_empty": 0,
+      "point_samples": 10063,
+      "sample_labels": {
+        "rock": 1342,
+        "clear": 8721
+      },
+      "candidates_total": 205810,
+      "candidates_selected": {
+        "rock": 1700,
+        "clear": 10229
+      },
+      "unscorable": {
+        "rock": 358,
+        "clear": 1508
+      },
+      "history_resets": 0,
+      "sweeps_seen": 846,
+      "diagnostics": {
+        "input_contract": {
+          "preprocessing_version": 2,
+          "radius": "adaptive 0.20-0.75 m, target 256 real points",
+          "neighborhood_mode": "adaptive",
+          "radius_m": 0.5,
+          "adaptive_radius_min_m": 0.2,
+          "adaptive_radius_max_m": 0.75,
+          "adaptive_k": 256,
+          "history": "current sweep only",
+          "history_ages_s": [
+            0.0
+          ],
+          "history_tolerance_s": 0.1,
+          "frame_window_s": 0.05,
+          "feature_schema": "dx,dy,dz,intensity|query_height"
+        },
+        "radius_m": {
+          "p0": 0.44435015320777893,
+          "p5": 0.7347238540649415,
+          "p25": 0.75,
+          "p50": 0.75,
+          "p75": 0.75,
+          "p95": 0.75,
+          "p100": 0.75,
+          "mean": 0.7449506925183713,
+          "n": 10063
+        },
+        "radius_at_min_frac": 0.0,
+        "radius_at_max_frac": 0.9416674947828679,
+        "shortfall_below_k_frac": 0.9416674947828679,
+        "below_n_points_frac": 0.9416674947828679,
+        "ball_count": {
+          "p0": 20.0,
+          "p5": 23.0,
+          "p25": 45.0,
+          "p50": 90.0,
+          "p75": 164.0,
+          "p95": 256.0,
+          "p100": 256.0,
+          "mean": 108.46149259664116,
+          "n": 10063
+        },
+        "ball_voxels": {
+          "p0": 17.0,
+          "p5": 23.0,
+          "p25": 44.0,
+          "p50": 89.0,
+          "p75": 164.0,
+          "p95": 248.0,
+          "p100": 256.0,
+          "mean": 107.52449567723343,
+          "n": 10063
+        },
+        "points_per_voxel": {
+          "p0": 1.0,
+          "p5": 1.0,
+          "p25": 1.0,
+          "p50": 1.0,
+          "p75": 1.0,
+          "p95": 1.0301212741087082,
+          "p100": 1.3333333333333333,
+          "mean": 1.0058089053074468,
+          "n": 10063
+        },
+        "ball_sweeps": {
+          "p0": 1.0,
+          "p5": 1.0,
+          "p25": 1.0,
+          "p50": 1.0,
+          "p75": 1.0,
+          "p95": 1.0,
+          "p100": 1.0,
+          "mean": 1.0,
+          "n": 10063
+        },
+        "support_points": {
+          "p0": 363.0,
+          "p5": 776.75,
+          "p25": 1166.75,
+          "p50": 1258.0,
+          "p75": 1363.75,
+          "p95": 1605.35,
+          "p100": 2026.0,
+          "mean": 1256.1415094339623,
+          "n": 212
+        },
+        "anchor_span_s": 44.98139762878418,
+        "anchors_before_full_history": 0,
+        "slots": [
+          {
+            "target_age_s": 0.0,
+            "status": {
+              "ok": 212
+            },
+            "fill_rate": 1.0,
+            "actual_age_s": {
+              "p0": 0.0,
+              "p5": 0.0,
+              "p25": 0.0,
+              "p50": 0.0,
+              "p75": 0.0,
+              "p95": 0.0,
+              "p100": 0.0,
+              "mean": 0.0,
+              "n": 212
+            },
+            "origin_shift_m": {
+              "p0": 0.0,
+              "p5": 0.0,
+              "p25": 0.0,
+              "p50": 0.0,
+              "p75": 0.0,
+              "p95": 0.0,
+              "p100": 0.0,
+              "mean": 0.0,
+              "n": 212
+            },
+            "yaw_delta_deg": {
+              "p0": 0.0,
+              "p5": 0.0,
+              "p25": 0.0,
+              "p50": 0.0,
+              "p75": 0.0,
+              "p95": 0.0,
+              "p100": 0.0,
+              "mean": 0.0,
+              "n": 212
+            },
+            "points_in_crop": {
+              "p0": 363.0,
+              "p5": 776.75,
+              "p25": 1166.75,
+              "p50": 1258.0,
+              "p75": 1363.75,
+              "p95": 1605.35,
+              "p100": 2026.0,
+              "mean": 1256.1415094339623,
+              "n": 212
+            }
+          }
+        ]
+      },
+      "bev_frames": 0,
+      "seg_frames": 0
+    },
+    "VolleyBallTest11.reslam": {
+      "run_id": "VolleyBallTest11.reslam",
+      "mcap_path": "/home/brandon/Documents/Rocklabel/rocklabel/recordings/volleyball/reslam/VolleyBallTest11.reslam.mcap",
+      "labels_path": "/home/brandon/Documents/Rocklabel/rocklabel/labels/volleyball/VolleyBallTest11.reslam.labels.json",
+      "rock_count": 7,
+      "arena_vertices": 4,
+      "z_band": [
+        -2.115,
+        -0.286
+      ],
+      "level": {
+        "mode": "manual",
+        "roll_deg": 0.2209,
+        "pitch_deg": 30.9737,
+        "floor_z": -0.8127
+      },
+      "intensity_available": true,
+      "frames_skipped_pose": 0,
+      "stamp_fallbacks": 0,
+      "generated": "2026-09-21T19:50:08Z",
+      "preprocessing_version": 2,
+      "feature_schema": "dx,dy,dz,intensity|query_height",
+      "formats": [
+        "points"
+      ],
+      "sweep_cache": "/home/brandon/Documents/Rocklabel/rocklabel/training/caches/neighborhood-history-v1/_sweeps/VolleyBallTest11.reslam",
+      "frames_kept": 160,
+      "frames_skipped_empty": 0,
+      "point_samples": 7663,
+      "sample_labels": {
+        "rock": 2431,
+        "clear": 5232
+      },
+      "candidates_total": 124221,
+      "candidates_selected": {
+        "rock": 2558,
+        "clear": 6086
+      },
+      "unscorable": {
+        "rock": 127,
+        "clear": 854
+      },
+      "history_resets": 0,
+      "sweeps_seen": 644,
+      "diagnostics": {
+        "input_contract": {
+          "preprocessing_version": 2,
+          "radius": "adaptive 0.20-0.75 m, target 256 real points",
+          "neighborhood_mode": "adaptive",
+          "radius_m": 0.5,
+          "adaptive_radius_min_m": 0.2,
+          "adaptive_radius_max_m": 0.75,
+          "adaptive_k": 256,
+          "history": "current sweep only",
+          "history_ages_s": [
+            0.0
+          ],
+          "history_tolerance_s": 0.1,
+          "frame_window_s": 0.05,
+          "feature_schema": "dx,dy,dz,intensity|query_height"
+        },
+        "radius_m": {
+          "p0": 0.41768893599510193,
+          "p5": 0.6933899223804474,
+          "p25": 0.75,
+          "p50": 0.75,
+          "p75": 0.75,
+          "p95": 0.75,
+          "p100": 0.75,
+          "mean": 0.7422747074367638,
+          "n": 7663
+        },
+        "radius_at_min_frac": 0.0,
+        "radius_at_max_frac": 0.9065640088738092,
+        "shortfall_below_k_frac": 0.9065640088738092,
+        "below_n_points_frac": 0.9065640088738092,
+        "ball_count": {
+          "p0": 20.0,
+          "p5": 25.0,
+          "p25": 54.0,
+          "p50": 120.0,
+          "p75": 193.0,
+          "p95": 256.0,
+          "p100": 257.0,
+          "mean": 127.3653921440689,
+          "n": 7663
+        },
+        "ball_voxels": {
+          "p0": 20.0,
+          "p5": 25.0,
+          "p25": 54.0,
+          "p50": 119.0,
+          "p75": 191.0,
+          "p95": 252.0,
+          "p100": 257.0,
+          "mean": 125.81365000652485,
+          "n": 7663
+        },
+        "points_per_voxel": {
+          "p0": 1.0,
+          "p5": 1.0,
+          "p25": 1.0,
+          "p50": 1.0,
+          "p75": 1.0,
+          "p95": 1.0448979591836736,
+          "p100": 1.3837837837837839,
+          "mean": 1.0083052611372942,
+          "n": 7663
+        },
+        "ball_sweeps": {
+          "p0": 1.0,
+          "p5": 1.0,
+          "p25": 1.0,
+          "p50": 1.0,
+          "p75": 1.0,
+          "p95": 1.0,
+          "p100": 1.0,
+          "mean": 1.0,
+          "n": 7663
+        },
+        "support_points": {
+          "p0": 293.0,
+          "p5": 890.75,
+          "p25": 1210.0,
+          "p50": 1317.5,
+          "p75": 1444.25,
+          "p95": 1661.6,
+          "p100": 1908.0,
+          "mean": 1304.81875,
+          "n": 160
+        },
+        "anchor_span_s": 34.479161739349365,
+        "anchors_before_full_history": 0,
+        "slots": [
+          {
+            "target_age_s": 0.0,
+            "status": {
+              "ok": 160
+            },
+            "fill_rate": 1.0,
+            "actual_age_s": {
+              "p0": 0.0,
+              "p5": 0.0,
+              "p25": 0.0,
+              "p50": 0.0,
+              "p75": 0.0,
+              "p95": 0.0,
+              "p100": 0.0,
+              "mean": 0.0,
+              "n": 160
+            },
+            "origin_shift_m": {
+              "p0": 0.0,
+              "p5": 0.0,
+              "p25": 0.0,
+              "p50": 0.0,
+              "p75": 0.0,
+              "p95": 0.0,
+              "p100": 0.0,
+              "mean": 0.0,
+              "n": 160
+            },
+            "yaw_delta_deg": {
+              "p0": 0.0,
+              "p5": 0.0,
+              "p25": 0.0,
+              "p50": 0.0,
+              "p75": 0.0,
+              "p95": 0.0,
+              "p100": 0.0,
+              "mean": 0.0,
+              "n": 160
+            },
+            "points_in_crop": {
+              "p0": 293.0,
+              "p5": 890.75,
+              "p25": 1210.0,
+              "p50": 1317.5,
+              "p75": 1444.25,
+              "p95": 1661.6,
+              "p100": 1908.0,
+              "mean": 1304.81875,
+              "n": 160
+            }
+          }
+        ]
+      },
+      "bev_frames": 0,
+      "seg_frames": 0
+    },
+    "VolleyBallTest12.reslam": {
+      "run_id": "VolleyBallTest12.reslam",
+      "mcap_path": "/home/brandon/Documents/Rocklabel/rocklabel/recordings/volleyball/reslam/VolleyBallTest12.reslam.mcap",
+      "labels_path": "/home/brandon/Documents/Rocklabel/rocklabel/labels/volleyball/VolleyBallTest12.reslam.labels.json",
+      "rock_count": 6,
+      "arena_vertices": 5,
+      "z_band": [
+        -2.083,
+        -0.438
+      ],
+      "level": {
+        "mode": "manual",
+        "roll_deg": 1.5679,
+        "pitch_deg": 31.0838,
+        "floor_z": -0.8429
+      },
+      "intensity_available": true,
+      "frames_skipped_pose": 0,
+      "stamp_fallbacks": 0,
+      "generated": "2026-09-21T19:50:13Z",
+      "preprocessing_version": 2,
+      "feature_schema": "dx,dy,dz,intensity|query_height",
+      "formats": [
+        "points"
+      ],
+      "sweep_cache": "/home/brandon/Documents/Rocklabel/rocklabel/training/caches/neighborhood-history-v1/_sweeps/VolleyBallTest12.reslam",
+      "frames_kept": 194,
+      "frames_skipped_empty": 0,
+      "point_samples": 10092,
+      "sample_labels": {
+        "rock": 2831,
+        "clear": 7261
+      },
+      "candidates_total": 169379,
+      "candidates_selected": {
+        "rock": 3157,
+        "clear": 8410
+      },
+      "unscorable": {
+        "rock": 326,
+        "clear": 1149
+      },
+      "history_resets": 0,
+      "sweeps_seen": 774,
+      "diagnostics": {
+        "input_contract": {
+          "preprocessing_version": 2,
+          "radius": "adaptive 0.20-0.75 m, target 256 real points",
+          "neighborhood_mode": "adaptive",
+          "radius_m": 0.5,
+          "adaptive_radius_min_m": 0.2,
+          "adaptive_radius_max_m": 0.75,
+          "adaptive_k": 256,
+          "history": "current sweep only",
+          "history_ages_s": [
+            0.0
+          ],
+          "history_tolerance_s": 0.1,
+          "frame_window_s": 0.05,
+          "feature_schema": "dx,dy,dz,intensity|query_height"
+        },
+        "radius_m": {
+          "p0": 0.38788360357284546,
+          "p5": 0.6699735909700394,
+          "p25": 0.75,
+          "p50": 0.75,
+          "p75": 0.75,
+          "p95": 0.75,
+          "p100": 0.75,
+          "mean": 0.7398828986620223,
+          "n": 10092
+        },
+        "radius_at_min_frac": 0.0,
+        "radius_at_max_frac": 0.8926872770511296,
+        "shortfall_below_k_frac": 0.8926872770511296,
+        "below_n_points_frac": 0.8926872770511296,
+        "ball_count": {
+          "p0": 20.0,
+          "p5": 24.0,
+          "p25": 60.75,
+          "p50": 127.0,
+          "p75": 199.0,
+          "p95": 256.0,
+          "p100": 257.0,
+          "mean": 133.11018628616725,
+          "n": 10092
+        },
+        "ball_voxels": {
+          "p0": 18.0,
+          "p5": 24.0,
+          "p25": 60.0,
+          "p50": 126.0,
+          "p75": 198.0,
+          "p95": 252.0,
+          "p100": 256.0,
+          "mean": 131.76872770511295,
+          "n": 10092
+        },
+        "points_per_voxel": {
+          "p0": 1.0,
+          "p5": 1.0,
+          "p25": 1.0,
+          "p50": 1.0,
+          "p75": 1.0040201127089001,
+          "p95": 1.0364372469635628,
+          "p100": 1.303030303030303,
+          "mean": 1.006881997696078,
+          "n": 10092
+        },
+        "ball_sweeps": {
+          "p0": 1.0,
+          "p5": 1.0,
+          "p25": 1.0,
+          "p50": 1.0,
+          "p75": 1.0,
+          "p95": 1.0,
+          "p100": 1.0,
+          "mean": 1.0,
+          "n": 10092
+        },
+        "support_points": {
+          "p0": 610.0,
+          "p5": 974.75,
+          "p25": 1173.25,
+          "p50": 1292.0,
+          "p75": 1418.5,
+          "p95": 1601.5,
+          "p100": 2035.0,
+          "mean": 1297.6237113402062,
+          "n": 194
+        },
+        "anchor_span_s": 41.188026905059814,
+        "anchors_before_full_history": 0,
+        "slots": [
+          {
+            "target_age_s": 0.0,
+            "status": {
+              "ok": 194
+            },
+            "fill_rate": 1.0,
+            "actual_age_s": {
+              "p0": 0.0,
+              "p5": 0.0,
+              "p25": 0.0,
+              "p50": 0.0,
+              "p75": 0.0,
+              "p95": 0.0,
+              "p100": 0.0,
+              "mean": 0.0,
+              "n": 194
+            },
+            "origin_shift_m": {
+              "p0": 0.0,
+              "p5": 0.0,
+              "p25": 0.0,
+              "p50": 0.0,
+              "p75": 0.0,
+              "p95": 0.0,
+              "p100": 0.0,
+              "mean": 0.0,
+              "n": 194
+            },
+            "yaw_delta_deg": {
+              "p0": 0.0,
+              "p5": 0.0,
+              "p25": 0.0,
+              "p50": 0.0,
+              "p75": 0.0,
+              "p95": 0.0,
+              "p100": 0.0,
+              "mean": 0.0,
+              "n": 194
+            },
+            "points_in_crop": {
+              "p0": 610.0,
+              "p5": 974.75,
+              "p25": 1173.25,
+              "p50": 1292.0,
+              "p75": 1418.5,
+              "p95": 1601.5,
+              "p100": 2035.0,
+              "mean": 1297.6237113402062,
+              "n": 194
+            }
+          }
+        ]
+      },
+      "bev_frames": 0,
+      "seg_frames": 0
+    }
+  },
+  "generated": "2026-09-21T19:50:13Z"
+}

@@ -14,6 +14,7 @@ from __future__ import annotations
 MODELS: dict[str, tuple[str, str]] = {
     "pointnet":      ("classify", "PointNet (sliding-window classifier)"),
     "pointnet_qz":   ("classify", "PointNet classifier told how high its candidate sits"),
+    "pointnet_age":  ("classify", "PointNet classifier told how old each point's sweep is"),
     "pointnet_stats": ("classify", "PointNet classifier with regional support statistics"),
     "pointnet2":     ("classify", "PointNet++ (sliding-window classifier)"),
     "pointnet2_seg": ("segment",  "PointNet++ (per-point segmentation)"),

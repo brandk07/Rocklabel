@@ -2701,6 +2701,7 @@ function sourceOptions(source) {
     recordings: S.inv.recordings, labels: S.inv.labels, datasets: S.inv.datasets,
     checkpoints: S.inv.checkpoints, configs: S.inv.configs, cache_runs: S.inv.cache_runs,
     caches: S.inv.caches, profiles: S.inv.profiles,
+    map_clouds: S.inv.map_clouds, map_models: S.inv.map_models,
   };
   const list = map[source];
   if (!list) return null;

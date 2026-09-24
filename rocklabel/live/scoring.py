@@ -146,6 +146,8 @@ class LiveScorer:
     height_warning: str | None = None
     _last_thin: tuple[int, int] | None = None
     _cleared = 0
+    _history_policy = None
+    _last_history: dict | None = None
 
     def __init__(
         self,
@@ -211,7 +213,32 @@ class LiveScorer:
         self._model.eval().to(self._device)
 
         self._rng = np.random.default_rng(int(self._gcfg["seed"]))
+        #: Version-2 passes draw candidates, point samples and the history cap
+        #: from three separate streams, as dataset generation does. Sharing one
+        #: let a policy that samples more points (a wider ball, more history)
+        #: shift which candidates the *next* capped pass picked, so two
+        #: policies watching the same scene were not offered the same balls.
+        seed = int(self._gcfg["seed"])
+        self._candidate_rng = np.random.default_rng([seed, 0])
+        self._sample_rng = np.random.default_rng([seed, 1])
+        self._cap_rng = np.random.default_rng([seed, 2])
         self._inten_scale: float | None = None
+
+        #: Version-2 classifiers are fed from assembled sweeps and their own
+        #: history/radius contract (rocklabel/dataset/history.py), never from
+        #: the raw scoring window: a history model scored on one sweep is
+        #: being measured on inputs it never trained on.
+        from rocklabel.dataset.history import HistoryPolicy, is_legacy
+        self._history_policy = None
+        if self.task == "classify" and not is_legacy(self._gcfg):
+            self._history_policy = HistoryPolicy.from_generator(self._gcfg)
+            configure = getattr(engine, "configure_sweep_history", None)
+            if callable(configure):
+                configure(self.frame_window_s, self._history_policy.retention_s)
+        #: Last pass's history instrumentation, for the panel and for tests:
+        #: slots filled, their ages, support before/after the cloud cap, and
+        #: candidates that had too few neighbours to score.
+        self._last_history: dict | None = None
 
         #: Geometric free-space evidence beside the prediction map, rebuilt
         #: whenever the settings that define it change (they are live knobs and
@@ -516,6 +543,71 @@ class LiveScorer:
             "predictions may miss rocks; use a model validated for the required floor band"
         )
 
+    def _score_history_pass(self, base: np.ndarray):
+        """Version-2 classifier input: newest sweep + its history, own crop.
+
+        Returns ``(centers, probs)`` or None. The global cloud cap applies to
+        the *historical* points only - the current sweep is where candidates
+        come from and is never thinned - and how often it binds is recorded,
+        because a history whose points are mostly discarded is not the history
+        the model trained with.
+        """
+        from rocklabel.dataset.history import Support, assemble_support
+        from rocklabel.train.policy_scoring import score_classifier
+
+        s, g = self.settings, self._gcfg
+        slots = self._engine.history_slots(self._history_policy)
+        if slots is None:
+            return None
+        support = assemble_support(slots, lambda xyz: self.crop_mask(xyz, base))
+        n_support = len(support)
+        cur = support.current
+        n_cur = int(cur.sum())
+        self._last_in_region = n_cur
+        # Candidates come from the current sweep, but the minimum-neighbour
+        # rule belongs to each ball *after* history is added: a sparse newest
+        # sweep over a well-seen patch is exactly what history is for. The
+        # shared builder rejects the individual balls that stay too thin.
+        if n_cur == 0:
+            return None
+        capped = False
+        if n_support > int(s.max_cloud_points):
+            old = np.flatnonzero(~cur)
+            room = max(int(s.max_cloud_points) - n_cur, 0)
+            take = np.sort(np.concatenate([np.flatnonzero(cur),
+                                           self._cap_rng.choice(old, min(room, len(old)),
+                                                            replace=False)]))
+            support = Support(support.xyz[take], support.intensity[take],
+                              support.age[take], support.slot[take],
+                              support.slots, support.slot_points)
+            cur = support.current
+            capped = True
+        inten = support.intensity.astype(np.float32, copy=True)
+        inten[~np.isfinite(inten)] = 0.0
+        if self._inten_scale is None and np.any(inten > 0):
+            self._inten_scale = self._probe_intensity_scale(inten)
+        inten *= (self._inten_scale or 1.0)
+        support.intensity = inten
+        centers, probs, diag = score_classifier(
+            support.xyz[cur], inten[cur], g, self._model, self._device, 0,
+            self._batch, support=support, max_centers=int(s.max_centers),
+            rngs=(self._candidate_rng, self._sample_rng))
+        self._last_centers_capped = bool(diag.get("capped"))
+        self._last_history = {
+            "slots_filled": int(sum(sl.sweep is not None for sl in slots)),
+            "slots": len(slots),
+            "ages_s": [None if sl.sweep is None else round(float(sl.age_s), 3)
+                       for sl in slots],
+            "support_points": int(n_support), "support_scored": int(len(support)),
+            "support_capped": capped, "candidates": int(diag["candidates"]),
+            "unscorable": int(diag["unscorable"]),
+            "preprocess_ms": 1e3 * float(diag["preprocess_s"]),
+            "network_ms": 1e3 * float(diag["network_s"]),
+        }
+        if not len(probs):
+            return None
+        return centers.astype(np.float64), probs
+
     def _score_once(self) -> None:
         t0 = time.perf_counter()
         s, g = self.settings, self._gcfg
@@ -526,6 +618,18 @@ class LiveScorer:
             self._cleared = 0
         pts, inten, origins, stamps = self._engine.recent_snapshot(
             float(s.window_sec or 0.0), with_origins=True, with_stamps=True)
+        if self._history_policy is not None:
+            # Fed from assembled sweeps, not this window: its point count says
+            # nothing about whether the model has enough support to score.
+            base = self._engine.current_pose()[0]
+            if pts.shape[0]:
+                self._observe_free_space(pts, origins, stamps)
+            self._last_miss = None
+            scored = self._score_history_pass(base)
+            if scored is None:
+                return
+            self._finish_pass(scored, t0)
+            return
         if pts.shape[0] < int(g["min_neighbors"]):
             return
 
@@ -565,6 +669,11 @@ class LiveScorer:
                   else self._score_balls(xyz, vals))
         if scored is None:
             return
+        self._finish_pass(scored, t0)
+
+    def _finish_pass(self, scored, t0: float) -> None:
+        """Merge one pass's ``(centers, probs)`` into the map and publish it."""
+        s, g = self.settings, self._gcfg
         centers, probs = scored
 
         # Merge outside the lock (the map can be large); only swap under it.
@@ -685,6 +794,8 @@ class LiveScorer:
             "model_name": self.model_name,
             "task": self.task,
             "cleared": int(self._cleared),
+            # None for single-sweep checkpoints; see _score_history_pass.
+            "history": self._last_history,
         }
 
     def status(self) -> str:

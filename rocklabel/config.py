@@ -108,8 +108,55 @@ DEFAULTS: dict = {
         # Format B: BEV rasters
         "bev_cell_m": 0.10,
         "seed": 42,
+        # --- Neighborhood/history contract (see dataset/history.py) --------
+        # Every key below is hash-neutral at its default (see HASH_NEUTRAL),
+        # so datasets and checkpoints built before these existed keep the
+        # config hash they were written under.
+        #
+        # 1 = the original single-sweep builder, one RNG for negatives and
+        # point sampling. 2 = the shared causal-history builder: candidates
+        # from the current sweep, support from the selected sweeps, separate
+        # RNGs for candidate selection and point sampling. Anything that is
+        # not the legacy geometry has to say 2 explicitly.
+        "preprocessing_version": 1,
+        # "fixed" uses neighborhood_radius_m. "adaptive" takes the distance to
+        # the adaptive_k-th nearest support point, clipped to
+        # [adaptive_radius_min_m, adaptive_radius_max_m].
+        "neighborhood_mode": "fixed",
+        "adaptive_radius_min_m": 0.20,
+        "adaptive_radius_max_m": 0.50,
+        "adaptive_k": 256,
+        # Desired ages (s) of the assembled sweeps that supply neighborhood
+        # points. 0 is the current sweep and must be present. Older slots take
+        # the latest sweep at or before the target time, and are left empty
+        # (never duplicated) when that sweep is more than history_tolerance_s
+        # older than asked for.
+        "history_ages_s": [0.0],
+        "history_tolerance_s": 0.10,
+        # Which dataset formats `generate` writes. The history builder writes
+        # format A only.
+        "formats": ["points", "seg", "bev"],
     },
 }
+
+#: Keys dropped from the hash while they hold these values. They were added
+#: after datasets existed, and hashing their defaults would have given every
+#: existing dataset and checkpoint a new identity it was never built under.
+HASH_NEUTRAL: dict[str, dict] = {
+    "generator": {
+        "preprocessing_version": 1,
+        "neighborhood_mode": "fixed",
+        "adaptive_radius_min_m": 0.20,
+        "adaptive_radius_max_m": 0.50,
+        "adaptive_k": 256,
+        "history_ages_s": [0.0],
+        "history_tolerance_s": 0.10,
+        "formats": ["points", "seg", "bev"],
+    },
+}
+
+NEIGHBORHOOD_MODES = ("fixed", "adaptive")
+FORMATS = ("points", "seg", "bev")
 
 
 class ConfigError(Exception):
@@ -137,7 +184,53 @@ def load_config(path: str | None = None) -> dict:
         user = yaml.safe_load(f) or {}
     if not isinstance(user, dict):
         raise ConfigError(f"Config file {path} must contain a YAML mapping")
-    return _merge(DEFAULTS, user)
+    cfg = _merge(DEFAULTS, user)
+    validate_generator(cfg["generator"])
+    return cfg
+
+
+def validate_generator(g: dict) -> None:
+    """Reject neighborhood/history settings the builders cannot honour.
+
+    Checked at load time rather than first use, so a typo in an arm's YAML
+    fails before an hour of generation rather than halfway through it.
+    """
+    version = int(g.get("preprocessing_version", 1))
+    if version not in (1, 2):
+        raise ConfigError(f"generator.preprocessing_version must be 1 or 2, got {version}")
+    mode = g.get("neighborhood_mode", "fixed")
+    if mode not in NEIGHBORHOOD_MODES:
+        raise ConfigError(f"generator.neighborhood_mode must be one of "
+                          f"{list(NEIGHBORHOOD_MODES)}, got {mode!r}")
+    r_min = float(g.get("adaptive_radius_min_m", 0.2))
+    r_max = float(g.get("adaptive_radius_max_m", 0.5))
+    if not (0.0 < r_min <= r_max):
+        raise ConfigError(f"adaptive radius bounds must satisfy 0 < min <= max, "
+                          f"got {r_min} and {r_max}")
+    if int(g.get("adaptive_k", 256)) < 1:
+        raise ConfigError("generator.adaptive_k must be at least 1")
+    if float(g.get("neighborhood_radius_m", 0.5)) <= 0.0:
+        raise ConfigError("generator.neighborhood_radius_m must be positive")
+    ages = [float(a) for a in (g.get("history_ages_s") or [])]
+    if not ages or ages[0] != 0.0 or any(a < 0 for a in ages) \
+            or any(b <= a for a, b in zip(ages, ages[1:])):
+        raise ConfigError("generator.history_ages_s must start at 0 and strictly "
+                          f"increase, got {ages}")
+    if len(ages) > 255:
+        raise ConfigError("generator.history_ages_s holds at most 255 slots")
+    if float(g.get("history_tolerance_s", 0.1)) < 0.0:
+        raise ConfigError("generator.history_tolerance_s must be non-negative")
+    formats = list(g.get("formats") or [])
+    if not formats or any(f not in FORMATS for f in formats):
+        raise ConfigError(f"generator.formats must be a non-empty subset of "
+                          f"{list(FORMATS)}, got {formats}")
+    if version == 1 and (mode != "fixed" or ages != [0.0]):
+        raise ConfigError(
+            "adaptive neighborhoods and scan history need the version-2 builder: "
+            "set generator.preprocessing_version: 2")
+    if version == 2 and formats != ["points"]:
+        raise ConfigError("the version-2 builder writes format A only: set "
+                          "generator.formats: [points]")
 
 
 def apply_overrides(cfg: dict, overrides: dict) -> dict:
@@ -153,7 +246,27 @@ def apply_overrides(cfg: dict, overrides: dict) -> dict:
     return cfg
 
 
+def _same(a, b) -> bool:
+    """Value equality that treats a YAML list and a tuple, or 0 and 0.0, alike."""
+    if isinstance(a, (list, tuple)) and isinstance(b, (list, tuple)):
+        return len(a) == len(b) and all(_same(x, y) for x, y in zip(a, b))
+    return a == b
+
+
 def config_hash(cfg: dict) -> str:
-    """SHA-256 over the canonical JSON encoding of the resolved config."""
+    """SHA-256 over the canonical JSON encoding of the resolved config.
+
+    Keys listed in :data:`HASH_NEUTRAL` are left out while they hold their
+    legacy value, so a config written before they existed and the same config
+    written after hash identically.
+    """
+    cfg = copy.deepcopy(cfg)
+    for section, neutral in HASH_NEUTRAL.items():
+        part = cfg.get(section)
+        if not isinstance(part, dict):
+            continue
+        for key, value in neutral.items():
+            if key in part and _same(part[key], value):
+                del part[key]
     blob = json.dumps(cfg, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()

@@ -175,6 +175,12 @@ def build_parser() -> argparse.ArgumentParser:
     _add_config_arg(p)
     p.add_argument("--out", help="dataset output directory (default: "
                                  "datasets/<profile>/<recording name>)")
+    p.add_argument("--sweep-cache", metavar="DIR",
+                   help="read already-decoded sweeps from DIR instead of decoding "
+                        "the recording (version-2 configs only; written by "
+                        "`rocklabel-train nhcampaign --phase prepare`). Refused "
+                        "if DIR was built from a different recording, label file "
+                        "or levelling")
     _add_level_args(p)
 
     p = sub.add_parser(
@@ -348,7 +354,10 @@ def main(argv: list[str] | None = None) -> int:
             cfg = _apply_level_args(cfg, args)
             out = args.out or default_dataset_dir(args.profile, mcap)
             from .dataset.generate import run_generate
-            run_generate(mcap, labels, out, cfg, profile=args.profile)
+            from .config import validate_generator
+            validate_generator(cfg["generator"])
+            run_generate(mcap, labels, out, cfg, profile=args.profile,
+                         sweep_cache=args.sweep_cache)
         elif args.command == "trim":
             from .recording.trim import run_trim
             run_trim(_resolve_mcap(args, parser), args.out, cfg, extra_topics=args.topic,

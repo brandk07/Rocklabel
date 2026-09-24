@@ -24,6 +24,7 @@ reports/<experiment>/
 | `reflect/` | the quick brightness check that reads the cache directly and trains nothing |
 | `compare/` | `rocklabel-train compare` output — comparison bars, ROC/PR curves, confusion matrices |
 | `archive-compare-fused/` | the same for the old Comforter recordings |
+| `mapnet-v1/` | **the map model**: rocks found on the robot's accumulated map instead of one sweep, graded on the arena beside every earlier model. Start with `summary.md` |
 
 ## Regenerating
 

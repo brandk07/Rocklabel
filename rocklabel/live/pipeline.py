@@ -292,6 +292,15 @@ class IngestEngine:
         self._recent_lock = threading.Lock()
         self._recent_max_sec = 5.0
         self._recent_max_batches = 512
+        #: Assembled full sweeps for checkpoints that read scan history (see
+        #: rocklabel/dataset/history.py). Off until a scorer asks for it: a
+        #: 30-second history of raw batches would not fit the 5 s / 512-batch
+        #: window above, and keeping whole sweeps costs nothing for a checkpoint
+        #: that never reads them. Kept separate from the prediction map, which
+        #: accumulates *outputs*; this holds *inputs*.
+        self._sweep_lock = threading.Lock()
+        self._sweep_assembler = None
+        self._sweep_history = None
         self._crop = config.crop
         self._floating = config.floating
         self._use_imu = config.motion.use_imu
@@ -447,6 +456,12 @@ class IngestEngine:
         self.accum.clear()
         with self._recent_lock:
             self._recent.clear()
+        # A reset or a replay seek starts a new history; the old sweeps belong
+        # to a different moment and must never be mixed into the next scan.
+        with self._sweep_lock:
+            if self._sweep_assembler is not None:
+                self._sweep_assembler.reset()
+                self._sweep_history.reset()
         if reset_slam and self.slam is not None:
             self.slam.reset()
             self.leveler.recalibrate()  # no-op in "off"/"manual" modes
@@ -537,6 +552,41 @@ class IngestEngine:
         if with_stamps:
             out += (np.concatenate([np.full(len(b[1]), b[0]) for b in batches]),)
         return out
+
+    def configure_sweep_history(self, window_s: float, retention_s: float) -> None:
+        """Start (or widen) the assembled-sweep history a history model reads.
+
+        Called by each scorer that needs it; two scorers comparing models share
+        one buffer sized for the longer of their histories.
+        """
+        from rocklabel.dataset.history import SweepAssembler, SweepHistory
+
+        with self._sweep_lock:
+            if self._sweep_assembler is None or \
+                    abs(self._sweep_assembler.window_s - float(window_s)) > 1e-9:
+                self._sweep_assembler = SweepAssembler(window_s)
+                self._sweep_history = SweepHistory(retention_s)
+            else:
+                self._sweep_history.retention_s = max(self._sweep_history.retention_s,
+                                                      float(retention_s))
+
+    def history_slots(self, policy):
+        """The newest completed sweep and its history under ``policy``, or None.
+
+        Returns the :class:`~rocklabel.dataset.history.HistorySlot` list; the
+        sweeps it references are never mutated after assembly, so the caller
+        may read them without holding any lock.
+        """
+        with self._sweep_lock:
+            if self._sweep_history is None or not len(self._sweep_history):
+                return None
+            return self._sweep_history.select(policy)
+
+    def sweep_history_stats(self) -> tuple[int, int, int] | None:
+        """``(sweeps held, points held, resets)`` of the sweep history, if any."""
+        with self._sweep_lock:
+            h = self._sweep_history
+            return None if h is None else (len(h), h.points_held, h.resets)
 
     def pose_status(self) -> str:
         """Human-readable pose / IMU state for the stats readout."""
@@ -762,14 +812,22 @@ class IngestEngine:
                             batch.timestamp,
                         )
             # Fresh-scan window for live model scoring (full resolution).
+            origin = self.current_pose()[0].astype(np.float64)
             with self._recent_lock:
-                self._recent.append((batch.timestamp, points, inten,
-                                     self.current_pose()[0].astype(np.float64)))
+                self._recent.append((batch.timestamp, points, inten, origin))
                 while (
                     len(self._recent) > self._recent_max_batches
                     or batch.timestamp - self._recent[0][0] > self._recent_max_sec
                 ):
                     self._recent.popleft()
+            # Whole sweeps for history models: the same filtered, levelled
+            # points the scoring window holds, grouped exactly as the offline
+            # WindowedScanStream groups them.
+            with self._sweep_lock:
+                if self._sweep_assembler is not None:
+                    done = self._sweep_assembler.add(batch.timestamp, points, inten, origin)
+                    if done is not None:
+                        self._sweep_history.push(done)
             # 2. Region-of-interest crop (z-band / range gate) BEFORE fusion so
             #    wall/ceiling returns from a 360° scan never enter the heightmap.
             #    The range gate is measured from the sensor, not the origin, so

@@ -262,7 +262,10 @@ def build_scores(geometry_dir: str, checkpoint: str, out_dir: str,
 
     import torch
 
-    from .mcapview import _score_balls, _score_frame
+    import resource
+
+    from .mcapview import _score_frame
+    from .policy_scoring import history_policy, score_classifier
     from .visual_audit import _load_checkpoint
 
     geometry = json.load(open(os.path.join(geometry_dir, "settings.json")))
@@ -270,39 +273,162 @@ def build_scores(geometry_dir: str, checkpoint: str, out_dir: str,
     shutil.rmtree(out_dir, ignore_errors=True)
     os.makedirs(out_dir, exist_ok=True)
     dev = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
+    if dev.type == "cuda":
+        torch.cuda.reset_peak_memory_stats(dev)
     loaded = _load_checkpoint(checkpoint, dev)
     g = loaded["generator"]
     frames = sorted(f for f in os.listdir(geometry_dir) if f.startswith("frame-"))
+    hist = history_policy(g) if loaded["task"] == "classify" else None
+    # A history checkpoint needs the sweeps between the cached ones, which the
+    # geometry cache (every stride-th window) does not hold: replay them.
+    supports = (_history_supports(geometry, geometry_dir, frames, hist)
+                if hist is not None else None)
+    legacy = loaded["task"] != "classify" or g.get("preprocessing_version", 1) < 2
     t0 = time.monotonic()
+    timing = {"assemble_s": [], "preprocess_s": [], "network_s": [], "total_s": []}
+    counts = {"candidates": 0, "scored": 0, "unscorable": 0, "support_points": []}
+    slot_fill: list[list[float]] = []
     for i, name in enumerate(frames):
         with np.load(os.path.join(geometry_dir, name)) as z:
-            xyz = z["xyz"].astype(np.float64)
+            # Version 1 always scored float64; version 2 keeps the sweep's own
+            # precision, as its training data did.
+            xyz = z["xyz"].astype(np.float64) if legacy else z["xyz"]
             inten = z["intensity"].astype(np.float32)
             base = z["base"]
             index = int(z["index"])
-        rng = np.random.default_rng([int(g["seed"]), index])
+        extra = {}
+        assemble_s = 0.0
+        support = None
+        if supports is not None:
+            support, assemble_s = next(supports)
+        t_frame = time.perf_counter()
         if loaded["task"] == "classify":
-            pos, prob = _score_balls(xyz, inten, g, loaded["model"], dev, rng, batch)
+            if support is not None:
+                cur = support.current
+                if int(cur.sum()) != len(xyz):
+                    raise RuntimeError(
+                        f"{name}: replayed current sweep has {int(cur.sum())} points "
+                        f"in the band, cached geometry has {len(xyz)} - the replay "
+                        "and the cache disagree")
+                xyz, inten = support.xyz[cur], support.intensity[cur]
+                slot_fill.append([float(a) for a in support.slot_points])
+                now = support.slots[0].sweep
+                extra["slot_age"] = np.asarray([sl.age_s for sl in support.slots], np.float32)
+                extra["slot_shift"] = np.asarray(
+                    [np.nan if sl.sweep is None else
+                     float(np.linalg.norm(sl.sweep.origin - now.origin))
+                     for sl in support.slots], np.float32)
+            pos, prob, diag = score_classifier(xyz, inten, g, loaded["model"], dev,
+                                               index, batch, support=support)
+            timing["assemble_s"].append(assemble_s)
+            timing["preprocess_s"].append(diag["preprocess_s"])
+            timing["network_s"].append(diag["network_s"])
+            for key in ("candidates", "scored", "unscorable"):
+                counts[key] += int(diag[key])
+            counts["support_points"].append(int(diag["support_points"]))
+            if "radius" in diag:
+                extra["radius"] = np.asarray(diag["radius"], np.float16)
+            if "ball_count" in diag:
+                extra["ball_count"] = np.minimum(diag["ball_count"], 65535).astype(np.uint16)
         else:
+            rng = np.random.default_rng([int(g["seed"]), index])
             pos, prob = _score_frame(xyz, inten, base, g, loaded["model"], dev, rng)
+        timing["total_s"].append(time.perf_counter() - t_frame + assemble_s)
         np.savez_compressed(os.path.join(out_dir, name),
                             positions=np.asarray(pos, np.float32),
-                            probabilities=np.asarray(prob, np.float32))
+                            probabilities=np.asarray(prob, np.float32), **extra)
         if (i + 1) % 200 == 0:
             print(f"  scored {i + 1}/{len(frames)} ({time.monotonic() - t0:.0f}s)",
                   flush=True)
+
+    def pct(v):
+        v = np.asarray(v, float)
+        return ({"p50_ms": float(np.percentile(v, 50) * 1e3),
+                 "p95_ms": float(np.percentile(v, 95) * 1e3),
+                 "mean_ms": float(v.mean() * 1e3)} if len(v) else None)
+
+    from ..dataset.history import input_contract
     meta = {"checkpoint": os.path.abspath(checkpoint),
             "checkpoint_sha256": _sha256(checkpoint),
             "model": loaded["name"], "task": loaded["task"],
             "threshold": loaded["threshold"], "generator": g,
+            "input_contract": input_contract(g),
             "frames": len(frames), "device": str(dev),
             "geometry_identity": geometry_identity(geometry),
-            "wall_seconds": round(time.monotonic() - t0, 1)}
+            "wall_seconds": round(time.monotonic() - t0, 1),
+            "latency": {k: pct(v) for k, v in timing.items()},
+            "candidates": counts["candidates"], "scored": counts["scored"],
+            "unscorable": counts["unscorable"],
+            "support_points": (None if not counts["support_points"] else
+                               {"p50": float(np.percentile(counts["support_points"], 50)),
+                                "p95": float(np.percentile(counts["support_points"], 95))}),
+            "history_slot_fill": (None if not slot_fill else
+                                  [float(np.mean(np.asarray(slot_fill)[:, j] > 0))
+                                   for j in range(len(slot_fill[0]))]),
+            "peak_rss_mb": round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024, 1),
+            "peak_vram_mb": (round(torch.cuda.max_memory_allocated(dev) / 2**20, 1)
+                             if dev.type == "cuda" else None)}
     _atomic_json(os.path.join(out_dir, "meta.json"), meta)
     shutil.rmtree(published, ignore_errors=True)
     os.replace(out_dir, published)
     print(f"scores: {len(frames)} windows in {meta['wall_seconds']:.0f}s", flush=True)
     return meta
+
+
+def _history_supports(geometry: dict, geometry_dir: str, frames: list[str], hist):
+    """Yield one history Support per cached frame, in order, by causal replay.
+
+    The recording is decoded again under the geometry cache's own levelling and
+    window, every window enters one buffer, and a window whose acquisition
+    index matches the next cached frame is cropped with that frame's band and
+    range around its own base - today's box for every older sweep.
+    """
+    from ..config import load_config
+    from ..dataset.history import Sweep, SweepHistory, assemble_support
+    from ..geometry.leveling import pin_level_to_labels
+    from ..labels import load_labels
+    from ..recording.pipeline import ScanStream
+
+    wanted = []
+    for name in frames:
+        with np.load(os.path.join(geometry_dir, name)) as z:
+            wanted.append(int(z["index"]))
+    labels = load_labels(geometry["labels"])
+    cfg = pin_level_to_labels(load_config(None), labels.level)
+    stream = ScanStream(geometry["recording"], cfg, stride=1, progress=False)
+    floor = float(geometry["floor_z"])
+    buffer = SweepHistory(hist.retention_s)
+    pos = 0
+    for members in _windows(stream, float(geometry["window_s"])):
+        if pos >= len(wanted):
+            break
+        last = members[-1]
+        sweep = Sweep(int(last.index), float(last.time_s),
+                      np.concatenate([m.xyz_odom for m in members]),
+                      np.concatenate([m.intensity for m in members]).astype(np.float32),
+                      np.asarray(last.T_odom_lidar[:3, 3], np.float64))
+        buffer.push(sweep)
+        if int(last.index) != wanted[pos]:
+            continue
+        base = last.T_odom_base[:3, 3].astype(np.float64)
+        lo = np.array([base[0] - MAX_RANGE_M, base[1] - MAX_RANGE_M, floor + FLOOR_BAND[0]])
+        hi = np.array([base[0] + MAX_RANGE_M, base[1] + MAX_RANGE_M, floor + FLOOR_BAND[1]])
+
+        def crop(xyz, lo=lo, hi=hi, base=base):
+            keep = ((xyz >= lo) & (xyz <= hi)).all(axis=1)
+            d = xyz[:, :2] - base[:2]
+            return keep & ((d * d).sum(axis=1) <= MAX_RANGE_M ** 2)
+
+        # Selecting slots and cropping them is work the live scorer does every
+        # pass, so it is timed; decoding the recording is replay overhead the
+        # robot never pays, so it is not.
+        t0 = time.perf_counter()
+        support = assemble_support(buffer.select(hist), crop)
+        yield support, time.perf_counter() - t0
+        pos += 1
+    if pos != len(wanted):
+        raise RuntimeError(f"history replay matched {pos} of {len(wanted)} cached "
+                           "frames - the recording changed since the geometry was cached")
 
 
 # --------------------------------------------------------------------------- #
@@ -618,11 +744,17 @@ def threshold_frontier(m, labels, shell, visible) -> list[dict]:
     false_fp = np.cumsum(footprint[order] == LABEL_CLEAR)
     # Per rock: this cell is one of that rock's observed ground cells.
     per_rock = {}
+    pos_sorted, ids_sorted = pos[order], ids[order]
     for rock in labels.rocks:
         seen = visible[rock.id]
         if not seen:
             continue
-        on_cell = np.array([tuple(k) in seen for k in ids[order]], bool)
+        on_cell = np.array([tuple(k) in seen for k in ids_sorted], bool)
+        # Attribution is membership of *this* rock's shape, the same test the
+        # stored-threshold coverage uses. ``label_rocks`` returns classes
+        # (clear/rock/ignore), not rock identities: comparing it with the rock
+        # id credited only the rock that happened to be numbered 1.
+        on_rock = points_in_rock(pos_sorted, rock)
         per_rock[rock.id] = {
             "seen": len(seen),
             # Occupied: the cell is claimed at all. The representative is the
@@ -633,7 +765,7 @@ def threshold_frontier(m, labels, shell, visible) -> list[dict]:
             # Attributed: the representative also lies on the rock's own 3D
             # geometry. A floating positive over a rock occupies its cell and
             # is not attributed to it.
-            "attributed": np.cumsum(on_cell & (attributed[order] == rock.id)),
+            "attributed": np.cumsum(on_cell & on_rock),
         }
 
     # One row per distinct score: the last index holding that value.
@@ -656,6 +788,67 @@ def threshold_frontier(m, labels, shell, visible) -> list[dict]:
             "worst_rock_coverage_footprint": min(occ) if occ else None,
         })
     return rows
+
+
+class _FrozenMap:
+    """A finished map loaded back from ``map-<name>.npz``, for re-reading."""
+
+    def __init__(self, name: str, path: str):
+        self.name = name
+        with np.load(path) as z:
+            self._cells = CellMap(z["positions"].astype(np.float64),
+                                  z["probabilities"].astype(np.float64),
+                                  z["cell_ids"].astype(np.int64))
+
+    def cells(self):
+        return self._cells
+
+
+def refresh_frontier(out_dir: str, geometry_dir: str, labels_path: str | None = None,
+                     shell: float | None = None) -> dict:
+    """Recompute ``threshold-frontier.csv`` (and the budgets in ``summary.json``)
+    from the finished maps an earlier :func:`evaluate` saved.
+
+    The frontier needs only the final map and each rock's visible ground cells,
+    so a correction to how it is read does not need the recording replayed or
+    the checkpoint rescored. The visible cells are rebuilt from the geometry
+    cache and checked against the ``visible_cells`` the original run recorded
+    in ``per-rock.csv``, so a report cannot be re-read against the wrong
+    geometry.
+    """
+    from ..labels import load_labels
+
+    geo = json.load(open(os.path.join(geometry_dir, "settings.json")))
+    summary_path = os.path.join(out_dir, "summary.json")
+    summary = json.load(open(summary_path)) if os.path.exists(summary_path) else None
+    if shell is None:
+        shell = float((summary or {}).get("scores", {}).get("generator", {})
+                      .get("boundary_shell_m", 0.05))
+    labels = load_labels(labels_path or geo["labels"])
+    visible: dict[int, set] = {r.id: set() for r in labels.rocks}
+    for name in sorted(f for f in os.listdir(geometry_dir) if f.startswith("frame-")):
+        with np.load(os.path.join(geometry_dir, name)) as z:
+            for rid, i, j in z["raw_rock_cells"]:
+                visible[int(rid)].add((int(i), int(j)))
+    with open(os.path.join(out_dir, "per-rock.csv")) as f:
+        recorded = {(r["map"], int(r["rock_id"])): int(r["visible_cells"])
+                    for r in csv.DictReader(f)}
+    for (_, rid), n in recorded.items():
+        if len(visible.get(rid, ())) != n:
+            raise SystemExit(f"{out_dir}: rock {rid} had {n} visible cells, this "
+                             f"geometry gives {len(visible.get(rid, ()))} - wrong geometry")
+    names = sorted({m for m, _ in recorded})
+    maps = [_FrozenMap(n, os.path.join(out_dir, f"map-{n}.npz")) for n in names
+            if os.path.exists(os.path.join(out_dir, f"map-{n}.npz"))]
+    curve = [row for m in maps for row in threshold_frontier(m, labels, shell, visible)]
+    _write_csv(os.path.join(out_dir, "threshold-frontier.csv"), curve)
+    budgets = {m.name: {str(b): at_budget([r for r in curve if r["map"] == m.name], b)
+                        for b in (2200, 1700, 1000, 500, 200)} for m in maps}
+    if summary is not None:
+        summary["budgets"] = budgets
+        summary["frontier_refreshed"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+        _atomic_json(summary_path, summary)
+    return budgets
 
 
 def at_budget(rows: list[dict], budget: int, column: str = "false_cells_footprint"):

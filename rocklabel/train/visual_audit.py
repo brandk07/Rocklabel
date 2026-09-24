@@ -19,6 +19,8 @@ from typing import Iterable
 
 import numpy as np
 
+from ..dataset.history import (HistoryPolicy, Sweep, SweepHistory, assemble_support,
+                               input_contract)
 from ..dataset.labeling import LABEL_CLEAR, inside_arena, label_rocks, points_in_rock
 from ..geometry.leveling import check_level_match, level_record, pin_level_to_labels
 from ..labels import LabelSet, Rock, load_labels
@@ -32,6 +34,9 @@ class AuditFrame:
     base: np.ndarray
     xyz: np.ndarray
     intensity: np.ndarray
+    #: History policy key -> Support for checkpoints that read older sweeps,
+    #: cropped with this frame's own crop. Empty for single-sweep checkpoints.
+    support: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -62,6 +67,9 @@ class ModelResult:
     false_cells: int
     false_components: int
     boundary_shell_m: float = 0.05
+    #: Totals over the interval's scoring passes: candidates offered, scored,
+    #: unscorable, support points, and preprocessing versus network seconds.
+    scoring: dict = field(default_factory=dict)
 
 
 def cell_ids(xy: np.ndarray, cell_m: float) -> np.ndarray:
@@ -178,18 +186,32 @@ def _crop_limits(generators: list[dict]) -> dict[str, float]:
     }
 
 
-def _crop_frame(scan, limits: dict[str, float], floor_z: float,
-                floor_band: tuple[float, float], max_range: float | None) -> AuditFrame | None:
-    base = scan.T_odom_base[:3, 3].astype(float)
-    xyz = scan.xyz_odom
+def _crop_mask_fn(base: np.ndarray, limits: dict[str, float], floor_z: float,
+                  floor_band: tuple[float, float], max_range: float | None):
+    """The audit crop around ``base`` as a reusable ``xyz -> mask`` function.
+
+    One function for the current sweep and every historical one, so a history
+    model's older points are clipped by today's box, never their own.
+    """
     lo = np.array([base[0] - limits["backward"], base[1] - limits["right"],
                    max(base[2] - limits["down"], floor_z + floor_band[0])])
     hi = np.array([base[0] + limits["forward"], base[1] + limits["left"],
                    min(base[2] + limits["up"], floor_z + floor_band[1])])
-    keep = ((xyz >= lo) & (xyz <= hi)).all(axis=1)
-    if max_range is not None and max_range > 0:
-        dxy = xyz[:, :2] - base[:2]
-        keep &= (dxy * dxy).sum(axis=1) <= max_range * max_range
+
+    def crop(xyz: np.ndarray) -> np.ndarray:
+        keep = ((xyz >= lo) & (xyz <= hi)).all(axis=1)
+        if max_range is not None and max_range > 0:
+            dxy = xyz[:, :2] - base[:2]
+            keep &= (dxy * dxy).sum(axis=1) <= max_range * max_range
+        return keep
+    return crop
+
+
+def _crop_frame(scan, limits: dict[str, float], floor_z: float,
+                floor_band: tuple[float, float], max_range: float | None) -> AuditFrame | None:
+    base = scan.T_odom_base[:3, 3].astype(float)
+    xyz = scan.xyz_odom
+    keep = _crop_mask_fn(base, limits, floor_z, floor_band, max_range)(xyz)
     if not keep.any():
         return None
     return AuditFrame(int(scan.index), float(scan.time_s), base,
@@ -217,8 +239,18 @@ def collect_intervals(recording: str, labels: LabelSet, labels_path: str, cfg: d
                       max_range: float | None, stride: int, window_s: float,
                       accum_seconds: float, candidates_per_rock: int,
                       min_visible_points: int, start_s: float | None,
-                      end_s: float | None, cell_m: float) -> tuple[list[AuditInterval], float]:
-    """Decode once and retain visibility-rich accumulated intervals per rock."""
+                      end_s: float | None, cell_m: float,
+                      histories: list[HistoryPolicy] | None = None,
+                      keep_all: bool = False) -> tuple[list[AuditInterval], float]:
+    """Decode once and retain visibility-rich accumulated intervals per rock.
+
+    ``histories`` are the history policies of the checkpoints being audited.
+    Every decoded sweep - including the ones the scoring stride skips and the
+    ones before ``start_s`` - enters one causal buffer, so a selected interval
+    starts with up to its full history already warm, and the recording's true
+    start is the only place history is empty. ``keep_all`` retains every
+    interval instead of the most visible few per rock (whole-recording mode).
+    """
     stream = ScanStream(recording, cfg, stride=1, progress=True, desc="visual audit")
     check_level_match(labels.level, level_record(stream), labels_path)
     solution = getattr(stream, "solution", None)
@@ -230,6 +262,10 @@ def collect_intervals(recording: str, labels: LabelSet, labels_path: str, cfg: d
                          "levelling or a config whose level mode measures ground")
     limits = _crop_limits(generators)
     scans = WindowedScanStream(stream, window_s) if window_s > 0 else stream
+    histories = [h for h in (histories or []) if h.uses_history]
+    buffer = (SweepHistory(max(h.retention_s for h in histories))
+              if histories else None)
+    kept_all: list[AuditInterval] = []
 
     # A small heap per physical rock prevents one frequently visible rock from
     # owning the entire audit. Intervals can be shared by several heaps.
@@ -244,6 +280,9 @@ def collect_intervals(recording: str, labels: LabelSet, labels_path: str, cfg: d
     def offer(interval: AuditInterval | None) -> None:
         if interval is None:
             return
+        if keep_all:
+            kept_all.append(interval)
+            return
         for rock in labels.rocks:
             visible = interval.visible_points.get(rock.id, 0)
             if visible < min_visible_points:
@@ -256,10 +295,13 @@ def collect_intervals(recording: str, labels: LabelSet, labels_path: str, cfg: d
                 heapq.heapreplace(heap, item)
 
     for k, scan in enumerate(scans):
-        if k % max(int(stride), 1):
-            continue
+        # History first: a skipped sweep is still a sweep a later frame may use.
+        if buffer is not None:
+            buffer.push(Sweep.from_scan(scan))
         if origin is None:
             origin = float(scan.time_s)
+        if k % max(int(stride), 1):
+            continue
         rel = float(scan.time_s) - origin
         if start_s is not None and rel < start_s:
             continue
@@ -277,8 +319,15 @@ def collect_intervals(recording: str, labels: LabelSet, labels_path: str, cfg: d
             # Reports and case names use recording-relative time. Absolute ROS
             # stamps are useless to a person seeking the same replay position.
             frame.time_s = rel
+            if buffer is not None:
+                crop = _crop_mask_fn(frame.base, limits, float(floor_z), floor_band,
+                                     max_range)
+                for h in histories:
+                    frame.support[h.key()] = assemble_support(buffer.select(h), crop)
             current.append(frame)
     offer(_finish_interval(sequence, current, labels, cell_m))
+    if keep_all:
+        return kept_all, float(floor_z)
 
     selected: dict[int, AuditInterval] = {}
     for heap in best.values():
@@ -299,22 +348,35 @@ def _load_checkpoint(path: str, device):
     return {
         "path": os.path.abspath(path), "name": c["model"],
         "task": model_task(c["model"]), "threshold": float(ck.get("threshold", 0.5)),
-        "generator": g, "model": model,
+        "generator": g, "model": model, "input_contract": input_contract(g),
     }
 
 
 def _score_interval(interval: AuditInterval, loaded: dict, device, batch: int,
                     cell_m: float, labels: LabelSet) -> ModelResult:
-    from .mcapview import _score_balls, _score_frame
+    from .mcapview import _score_frame
+    from .policy_scoring import history_policy, score_classifier
 
     g, model = loaded["generator"], loaded["model"]
     accum = PredictionAccumulator(float(g["centers_voxel_m"]))
+    hist = history_policy(g)
+    stats = {"frames": 0, "candidates": 0, "scored": 0, "unscorable": 0,
+             "support_points": 0, "preprocess_s": 0.0, "network_s": 0.0}
     for frame in interval.frames:
-        rng = np.random.default_rng([int(g["seed"]), frame.index])
         if loaded["task"] == "classify":
-            pos, prob = _score_balls(frame.xyz, frame.intensity, g, model,
-                                     device, rng, batch)
+            support = frame.support.get(hist.key()) if hist is not None else None
+            if hist is not None and support is None:
+                raise RuntimeError("history checkpoint scored without its history "
+                                   "support; collect_intervals was not given its policy")
+            pos, prob, diag = score_classifier(frame.xyz, frame.intensity, g, model,
+                                               device, frame.index, batch, support=support)
+            stats["frames"] += 1
+            for key in ("candidates", "scored", "unscorable", "support_points"):
+                stats[key] += int(diag[key])
+            stats["preprocess_s"] += diag["preprocess_s"]
+            stats["network_s"] += diag["network_s"]
         else:
+            rng = np.random.default_rng([int(g["seed"]), frame.index])
             pos, prob = _score_frame(frame.xyz, frame.intensity, frame.base, g,
                                      model, device, rng)
         accum.update(pos, prob)
@@ -332,7 +394,8 @@ def _score_interval(interval: AuditInterval, loaded: dict, device, batch: int,
         false = set()
     return ModelResult(loaded["path"], loaded["name"], loaded["task"],
                        loaded["threshold"], cells, hot_cells, len(false),
-                       connected_components(false), float(g.get("boundary_shell_m", 0.05)))
+                       connected_components(false), float(g.get("boundary_shell_m", 0.05)),
+                       scoring=stats)
 
 
 def _rock_outline(ax, rock: Rock, color: str, linewidth: float = 1.5) -> None:
@@ -464,6 +527,53 @@ def render_case(path: str, interval: AuditInterval, target: Rock, labels: LabelS
     plt.close(fig)
 
 
+#: History maturity bands, by seconds since the recording started: no older
+#: sweep can exist yet, some slots can, every slot of a 30 s policy can.
+HISTORY_STAGES = (("startup 0-4 s", 0.0, 4.0), ("partial 4-30 s", 4.0, 30.0),
+                  ("mature >30 s", 30.0, float("inf")))
+
+
+def history_stage(start_s: float, end_s: float | None = None) -> str:
+    """The maturity band an interval lies in, or ``"straddles ..."``.
+
+    An interval is given a band only when it lies wholly inside it: a 0-5 s
+    interval holds 4-5 s frames whose 4 s slot can already be filled, so
+    calling it "startup 0-4 s" would mix the two things being compared.
+    """
+    end_s = start_s if end_s is None else end_s
+    for name, lo, hi in HISTORY_STAGES:
+        if lo <= start_s < hi:
+            if end_s <= hi:
+                return name
+            return "straddles " + name.split()[0] + "/next"
+    return HISTORY_STAGES[-1][0]
+
+
+def stage_rows(observations: list[dict], model_keys: list[str],
+               min_coverage: float) -> list[dict]:
+    """Coverage by history stage, each rock weighted once within a stage."""
+    rows = []
+    for name, _lo, _hi in HISTORY_STAGES:
+        obs = [o for o in observations if o["history_stage"] == name]
+        row = {"stage": name, "observations": len(obs),
+               "rocks": len({o["rock_id"] for o in obs})}
+        for key in model_keys:
+            per_rock = {}
+            for o in obs:
+                per_rock.setdefault(o["rock_id"], []).append(o[key]["coverage"])
+            med = [float(np.median(v)) for v in per_rock.values()]
+            row[f"{key}_macro_median_coverage"] = float(np.mean(med)) if med else None
+            row[f"{key}_detected_frac"] = (float(np.mean([m >= min_coverage for m in med]))
+                                           if med else None)
+        rows.append(row)
+    rows.append({"stage": "straddling (excluded)",
+                 "observations": sum(o["history_stage"].startswith("straddles")
+                                     for o in observations),
+                 "rocks": len({o["rock_id"] for o in observations
+                               if o["history_stage"].startswith("straddles")})})
+    return rows
+
+
 def _summarize_rocks(observations: list[dict], model_keys: list[str],
                      min_coverage: float) -> list[dict]:
     rows = []
@@ -560,11 +670,13 @@ def comparison_summary(observations: list[dict], per_rock: list[dict],
 
 def _write_reports(out_dir: str, settings: dict, checkpoints: list[dict],
                    observations: list[dict], per_rock: list[dict], cases: list[dict],
-                   comparison: dict, model_keys: list[str]) -> None:
+                   comparison: dict, model_keys: list[str],
+                   history_stages: list[dict] | None = None) -> None:
     os.makedirs(out_dir, exist_ok=True)
     payload = {"settings": settings, "checkpoints": checkpoints,
                "observations": observations, "per_rock": per_rock,
-               "comparison": comparison, "cases": cases}
+               "comparison": comparison, "cases": cases,
+               "history_stages": history_stages or []}
     with open(os.path.join(out_dir, "audit.json"), "w") as f:
         json.dump(payload, f, indent=2)
 
@@ -725,10 +837,15 @@ def run_visual_audit(recording: str, labels_path: str, model_a: str, model_b: st
                              "pass --stride explicitly and report the mismatch")
         stride = strides[0]
 
+    from .policy_scoring import history_policy
+    histories = [h for h in (history_policy(g) for g in generators) if h is not None]
+    for m in loaded:
+        print(f"input contract {m['name']} ({os.path.basename(os.path.dirname(m['path']))}): "
+              f"{m['input_contract']['radius']}, {m['input_contract']['history']}")
     intervals, floor_z = collect_intervals(
         recording, labels, labels_path, cfg, generators, floor_band, max_range,
         stride, window_s, accum_seconds, candidates_per_rock,
-        min_visible_points, start_s, end_s, cell_m)
+        min_visible_points, start_s, end_s, cell_m, histories=histories)
     if not intervals:
         raise ValueError("no interval contained a sufficiently visible labeled rock")
     print(f"selected {len(intervals)} visibility-rich accumulated intervals", flush=True)
@@ -750,6 +867,7 @@ def run_visual_audit(recording: str, labels_path: str, model_a: str, model_b: st
             obs = {
                 "rock_id": rock.id, "interval_sequence": interval.sequence,
                 "start_s": interval.start_s, "end_s": interval.end_s,
+                "history_stage": history_stage(interval.start_s, interval.end_s),
                 "visible_points": interval.visible_points[rock.id],
                 "visible_cells": interval.visible_cells[rock.id],
             }
@@ -759,6 +877,14 @@ def run_visual_audit(recording: str, labels_path: str, model_a: str, model_b: st
             observations.append(obs)
 
     per_rock = _summarize_rocks(observations, model_keys, min_coverage)
+    stages = stage_rows(observations, model_keys, min_coverage)
+    scoring_totals = []
+    for i, _m in enumerate(loaded):
+        tot: dict = {}
+        for results in scored.values():
+            for k, v in results[i].scoring.items():
+                tot[k] = tot.get(k, 0) + v
+        scoring_totals.append(tot)
     comparison = comparison_summary(observations, per_rock, model_keys, material_gap)
     cases = select_cases(observations, model_keys, max_cases)
     case_dir = os.path.join(out_dir, "cases")
@@ -785,17 +911,49 @@ def run_visual_audit(recording: str, labels_path: str, model_a: str, model_b: st
         "filtering": "none: live floating/outlier filters are not applied",
         "unaudited_rock_ids": sorted({r.id for r in labels.rocks} - {r["rock_id"] for r in per_rock}),
     }
-    checkpoints = [{k: m[k] for k in ("path", "name", "task", "threshold")}
-                   for m in loaded]
+    checkpoints = [{k: m[k] for k in ("path", "name", "task", "threshold",
+                                      "input_contract")} | {"scoring": tot}
+                   for m, tot in zip(loaded, scoring_totals)]
     _write_reports(out_dir, settings, checkpoints, observations, per_rock, cases,
-                   comparison, model_keys)
+                   comparison, model_keys, stages)
     rows = operating_point_rows(intervals, scored, labels, cell_m, min_coverage,
                                 min_visible_points)
     with open(os.path.join(out_dir, "operating-points.csv"), "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=list(rows[0]))
         writer.writeheader()
         writer.writerows(rows)
+    with open(os.path.join(out_dir, "history-stages.csv"), "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=list(stages[0]), restval="")
+        writer.writeheader()
+        writer.writerows(stages)
     with open(os.path.join(out_dir, "summary.md"), "a") as f:
+        f.write("\n## Input contracts and scoring cost\n\n"
+                "Each checkpoint is scored with its own radius and history policy. "
+                "History comes from one causal buffer fed every decoded sweep, "
+                "including sweeps the scoring stride skips and sweeps before the "
+                "audit window. Unscorable candidates stay in every coverage "
+                "denominator; they only fail to produce a prediction.\n\n"
+                "| model | radius | history | candidates | unscorable | "
+                "mean support points | preprocess s | network s |\n"
+                "|---|---|---|---:|---:|---:|---:|---:|\n")
+        for i, ck in enumerate(checkpoints):
+            t, c = ck["scoring"], ck["input_contract"]
+            frames = max(int(t.get("frames", 0)), 1)
+            f.write(f"| model {i + 1} | {c['radius']} | {c['history']} | "
+                    f"{t.get('candidates', 0)} | {t.get('unscorable', 0)} | "
+                    f"{t.get('support_points', 0) / frames:.0f} | "
+                    f"{t.get('preprocess_s', 0.0):.1f} | {t.get('network_s', 0.0):.1f} |\n")
+        f.write("\n## Coverage by history stage\n\n"
+                "Stage is seconds since the recording began; an interval counts in a "
+                "stage only if it lies wholly inside it, and the ones that straddle a "
+                "boundary are counted but excluded. Within a stage each rock "
+                "contributes its median interval once.\n\n"
+                "| stage | rocks | model 1 macro median coverage | model 2 macro median "
+                "coverage |\n|---|---:|---:|---:|\n")
+        for row in stages:
+            cells = [("-" if row.get(f"{k}_macro_median_coverage") is None
+                      else f"{row[f'{k}_macro_median_coverage']:.0%}") for k in model_keys]
+            f.write(f"| {row['stage']} | {row['rocks']} | {cells[0]} | {cells[1]} |\n")
         f.write("\n## Evaluation scope and threshold diagnostics\n\n"
                 "This is an unfiltered model-input audit. Live floating-point rejection "
                 "and heightmap outlier rejection are not applied. The sampled, independent "
@@ -808,4 +966,4 @@ def run_visual_audit(recording: str, labels_path: str, model_a: str, model_b: st
     print(f"wrote visual audit to {out_dir}")
     return {"settings": settings, "checkpoints": checkpoints,
             "observations": observations, "per_rock": per_rock,
-            "comparison": comparison, "cases": cases}
+            "comparison": comparison, "cases": cases, "history_stages": stages}

@@ -39,7 +39,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from ..dataset.neighborhoods import (FEATURES, GEOMETRY,  # noqa: F401  (re-exported)
+from ..dataset.neighborhoods import (AGE_CHANNEL, FEATURES, GEOMETRY,  # noqa: F401
                                      QUERY_HEIGHT_CHANNEL, SAMPLE_CHANNELS,
                                      has_query_height, resolve_features)
 from .models_meta import (BEV_CHANNELS, BEV_DENSITY, MODELS,  # noqa: F401  (re-exported)
@@ -242,6 +242,39 @@ def _ortho_penalty(t: torch.Tensor) -> torch.Tensor:
     eye = torch.eye(t.shape[1], device=t.device)[None]
     return ((torch.bmm(t, t.transpose(1, 2)) - eye) ** 2).sum(dim=(1, 2)).mean()
 
+
+
+class PointNetAge(PointNet):
+    """Vanilla PointNet that also reads each point's age.
+
+    A history model stacks up to five sweeps into one ball, and without this
+    it cannot tell a point measured now from one measured thirty seconds ago:
+    a surface seen twice from two places and a surface that moved look the
+    same. This model gets the seconds-before-now of every row as one more
+    per-point input channel (:data:`~rocklabel.dataset.neighborhoods.AGE_CHANNEL`,
+    appended at load time from the dataset's ``point_age`` array) and is
+    otherwise plain PointNet - the one change the follow-up measures.
+    """
+
+    input_channels = AGE_CHANNEL + 1
+    #: Read by the loaders and the scorer to append the channel.
+    reads_point_age = True
+
+    def __init__(self, tnet: bool = False, dropout: float = 0.3,
+                 features: list[str] | None = None):
+        super().__init__(tnet=tnet, dropout=dropout, features=features)
+        self.mlp1 = _mlp1d([len(self.features) + 1, 64, 64])
+        self.register_buffer(
+            "feature_idx", torch.cat([_feature_buffer(self.features),
+                                      torch.tensor([AGE_CHANNEL])]), persistent=False)
+
+    def forward(self, points: torch.Tensor, counts: torch.Tensor) -> torch.Tensor:
+        if not torch.jit.is_tracing() and int(points.shape[-1]) <= AGE_CHANNEL:
+            raise ValueError(
+                f"{type(self).__name__} needs the point-age channel, but this sample "
+                f"tensor is {points.shape[-1]} wide. Only history (version-2) datasets "
+                "record point ages; the loader appends them.")
+        return super().forward(points, counts)
 
 class PointNetStats(nn.Module):
     """Experimental classifier retaining support beyond feature maxima.
@@ -890,6 +923,9 @@ def build_model(name: str, tnet: bool = False, dropout: float | None = None,
     if name == "pointnet_qz":
         return PointNetQZ(tnet=tnet, dropout=0.3 if dropout is None else dropout,
                           features=features)
+    if name == "pointnet_age":
+        return PointNetAge(tnet=tnet, dropout=0.3 if dropout is None else dropout,
+                           features=features)
     if name == "pointnet_stats":
         if tnet:
             raise ValueError("pointnet_stats does not use T-Nets")

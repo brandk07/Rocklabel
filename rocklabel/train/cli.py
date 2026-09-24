@@ -366,6 +366,13 @@ def build_parser() -> argparse.ArgumentParser:
                         "unseen run left to score it on, so it writes "
                         "val_metrics.json rather than test_metrics.json and "
                         "cannot appear in any leave-one-run-out table.")
+    p.add_argument("--val-runs", nargs="+", default=None, metavar="RUN",
+                   help="validate on these whole recordings instead of the tail "
+                        "block of every training run. They are left out of "
+                        "training entirely and pick the epoch and the stored "
+                        "threshold. Needed when a model reads long scan history: "
+                        "a tail block cannot be separated from its training "
+                        "frames by that much time in a 45-second recording")
     _add_common(p)
     _add_train_args(p)
     _add_gpu_arg(p)
@@ -451,6 +458,14 @@ def build_parser() -> argparse.ArgumentParser:
     _lancebench_args(p)
 
     p = sub.add_parser(
+        "nhcampaign",
+        help="neighborhood-size x scan-history screen: 24 PointNet arms trained on "
+             "Volleyball, judged on the Lance recording (plan, preflight, prepare, "
+             "smoke, train, evaluate, alignment, summarize)")
+    from .neighborhood_campaign import add_arguments as _nh_args
+    _nh_args(p)
+
+    p = sub.add_parser(
         "mapeval",
         help="replay a whole recording and grade the prediction map it builds "
              "(per-rock coverage, false ground, acquisition timing), optionally "
@@ -487,6 +502,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--rebuild", action="store_true",
                    help="ignore the cached geometry and scores and replay from "
                         "the recording again")
+    p.add_argument("--frontier-only", action="store_true",
+                   help="re-read the finished maps already saved in --out at "
+                        "every threshold and rewrite threshold-frontier.csv and "
+                        "the false-area budgets, without replaying or "
+                        "rescoring. For reports written before the September "
+                        "2026 fix, whose budget coverage credited only rock 1")
     g = p.add_argument_group(
         "free-space cleanup",
         "An optional second map, accumulated from the identical scores in the "
@@ -547,6 +568,38 @@ def build_parser() -> argparse.ArgumentParser:
                         "without it also having to stand clear of a surface. "
                         "Clears more; this is the arm that says what the "
                         "detachment gate is worth")
+
+    # The map model: rocks segmented on the accumulated map, not on one sweep.
+    p = sub.add_parser(
+        "mapnet-cloud",
+        help="decode a recording once into the stacked point cloud the map model "
+             "trains and grades on")
+    from .mapnet.clouds import add_arguments as _mn_cloud_args
+    _mn_cloud_args(p)
+    p = sub.add_parser(
+        "mapnet-train",
+        help="train the map model (a U-Net over the accumulated height map) and "
+             "grade it on the arena every epoch")
+    from .mapnet.train import add_arguments as _mn_train_args
+    _mn_train_args(p)
+    p = sub.add_parser(
+        "mapnet-eval",
+        help="grade map-model checkpoints on the whole arena recording, as mapeval "
+             "grades the per-ball models, with pictures and a timeline")
+    from .mapnet.evaluate import add_arguments as _mn_eval_args
+    _mn_eval_args(p)
+    p = sub.add_parser(
+        "mapnet-view",
+        help="draw where a map model thinks the rocks are on any stacked recording, "
+             "labelled or not")
+    from .mapnet.view import add_arguments as _mn_view_args
+    _mn_view_args(p)
+    p = sub.add_parser(
+        "mapnet-stitch",
+        help="one cross-validated arena map from the two spatial-fold models, "
+             "graded on every rock")
+    from .mapnet.stitch import add_arguments as _mn_stitch_args
+    _mn_stitch_args(p)
 
     p = sub.add_parser("report", help="regenerate figures/tables from existing runs")
     p.add_argument("--models", nargs="+", default=["pointnet", "pointnet2"],
@@ -659,6 +712,11 @@ def main(argv: list[str] | None = None) -> int:
         from .data import load_cache_meta
         from .engine import train_fold
         runs = sorted(load_cache_meta(args.cache_dir)["runs"])
+        val_runs = list(args.val_runs or [])
+        unknown = [r for r in val_runs if r not in runs]
+        if unknown:
+            raise SystemExit(f"validation run(s) {unknown} not in cache; available: {runs}")
+        runs = [r for r in runs if r not in val_runs]
         if args.test_run == TRAIN_ALL:
             cfg = _train_cfg(args, args.model, runs, "")
             fold_name = "trainall"
@@ -669,6 +727,9 @@ def main(argv: list[str] | None = None) -> int:
             cfg = _train_cfg(args, args.model, [r for r in runs if r != args.test_run],
                              args.test_run)
             fold_name = f"loro_{args.test_run}"
+        if val_runs:
+            cfg["val_runs"] = val_runs
+            fold_name += "_val-" + "-".join(r.split(".")[0] for r in val_runs)
         run_dir = os.path.join(args.runs_root,
                                run_dir_name(args.model, fold_name, args.features))
         train_fold(cfg, run_dir, resume=not args.fresh)
@@ -713,11 +774,42 @@ def main(argv: list[str] | None = None) -> int:
         run_lancebench(args)
         return 0
 
+    if args.command == "nhcampaign":
+        from .neighborhood_campaign import run as run_nhcampaign
+        return run_nhcampaign(args)
+
+    if args.command == "mapnet-cloud":
+        from .mapnet.clouds import run as _run
+        return _run(args)
+    if args.command == "mapnet-train":
+        from .mapnet.train import run as _run
+        return _run(args)
+    if args.command == "mapnet-eval":
+        from .mapnet.evaluate import run as _run
+        return _run(args)
+    if args.command == "mapnet-view":
+        from .mapnet.view import run as _run
+        return _run(args)
+    if args.command == "mapnet-stitch":
+        from .mapnet.stitch import run as _run
+        return _run(args)
+
     if args.command == "mapeval":
         from .map_eval import (build_geometry, build_scores, check_geometry_cache,
                                check_scores_cache, evaluate,
                                evidence_settings_from_args)
         geo_dir = os.path.join(args.frames_dir, "geometry")
+        if args.frontier_only:
+            from .map_eval import refresh_frontier
+            budgets = refresh_frontier(args.out, geo_dir, args.labels)
+            for name, rows in budgets.items():
+                for b, row in rows.items():
+                    if row:
+                        print(f"{name:8s} <= {b:>4s} footprint false cells: "
+                              f"coverage {row['macro_coverage']:.4f}  "
+                              f"worst rock {row['worst_rock_coverage']:.4f}")
+            print(f"rewrote {os.path.join(args.out, 'threshold-frontier.csv')}")
+            return 0
         # A cache is reused only when it was built from these sources under
         # these settings and is complete. "The folder exists" is not that: it
         # is how a stride change silently graded the wrong frames.

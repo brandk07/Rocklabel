@@ -112,3 +112,15 @@ training/reports/**/*.json
 # know what a sweep concluded without retraining it.
 !training/reports/**/*summary.json
 !training/reports/lance-checkpoints/results.json
+
+# Per-checkpoint output of a campaign: one grade and one visual-audit write-up
+# for every arm and seed, and the generated config each arm was built from.
+# The campaign's summary.md and results.md carry the conclusions, and all of
+# this regenerates from rocklabel/train/neighborhood_campaign.py. Without these
+# rules one campaign offered 280 files for commit.
+training/reports/*/audits/
+training/reports/*/mapeval/
+training/reports/*/configs/
+
+# Smoke-test datasets are scratch: a few frames each, to check a profile runs.
+/datasets/**/_smoke/

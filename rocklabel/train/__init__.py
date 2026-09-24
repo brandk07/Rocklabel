@@ -25,6 +25,12 @@ TRAIN_DEFAULTS: dict = {
     "cache_dir": "training/cache",
     "train_runs": [],
     "test_run": "",
+    # Whole recordings used for early stopping and the stored threshold. Empty
+    # keeps the historical tail-block validation inside each training run. Set,
+    # every training run is used whole and nothing else is validated on - the
+    # split a long scan history needs, because a tail block of a 45-second
+    # recording cannot be separated from its training frames by 30 seconds.
+    "val_runs": [],
     "val_frac": 0.15,
     "gap_frames": 25,
     # Sized in seconds, not frames: 25 kept frames is 0.54 s on this sensor,

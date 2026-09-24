@@ -71,9 +71,21 @@ def check_manifest(out_dir: str, cfg: dict, profile: str | None = None) -> dict:
 
 
 def run_generate(mcap_path: str, labels_path: str, out_dir: str, cfg: dict,
-                 profile: str | None = None) -> dict:
-    """Generate both dataset formats for one recording. Returns the run's manifest entry."""
+                 profile: str | None = None, sweep_cache: str | None = None) -> dict:
+    """Generate both dataset formats for one recording. Returns the run's manifest entry.
+
+    A config with ``generator.preprocessing_version: 2`` goes to the causal
+    history builder instead (format A only; see dataset/history_generate.py),
+    which can also read its sweeps from a decoded ``sweep_cache``.
+    """
     gcfg = cfg["generator"]
+    if int(gcfg.get("preprocessing_version", 1)) >= 2:
+        from .history_generate import run_generate_history
+        return run_generate_history(mcap_path, labels_path, out_dir, cfg,
+                                    profile=profile, sweep_cache=sweep_cache)
+    if sweep_cache:
+        raise ValueError("--sweep-cache is only read by the version-2 builder "
+                         "(generator.preprocessing_version: 2)")
     labelset = load_labels(labels_path)
     run_id = labelset.run_id or os.path.splitext(os.path.basename(mcap_path))[0]
 
