@@ -85,7 +85,13 @@ During real-world evaluations with the robot, the models have shown remarkably a
 ![Live Replay Reflectivity Map](https://github.com/user-attachments/assets/32c68995-bc6e-4a9f-84b2-7c5b08155898)
 ![Live Replay Binary Segmentation](https://github.com/user-attachments/assets/94ed6baf-2d46-4f1d-adda-6273b70748cb)
 
-Future testing must occur to see how well this transfers to a competition environment with actual lunar simulant, but early signs are very promising.
+Running with live lidar on the robot. This was from a training run on the volleyball court test set, so it transfers well to different a flat terrain environment.
+
+<img width="442" height="248" alt="image" src="https://github.com/user-attachments/assets/b9fd2db8-34b9-4bc7-afdd-03e0b68273de" />
+<img width="480" height="270" alt="Screenshot from 2026-09-26 13-58-25" src="https://github.com/user-attachments/assets/8e613ac6-aa57-4a79-bc28-bad9289031a3" />
+
+
+Future testing must occur to see how well this transfers to a competition environment with actual lunar stimulant, but early signs are very promising.
 
 ---
 
