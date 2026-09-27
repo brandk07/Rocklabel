@@ -2,7 +2,7 @@
 
 Deep-learning LiDAR rock perception for the **NASA Lunabotics** competition.
 
-Label rocks **once** per recording on the fused point cloud, auto-generate training samples from **every** frame, train a PointNet/PointNet++ classifier, then run it on the live sensor.
+This project contains the full pipeline for collecting data with built in SLAM, labeling the collected point clouds in Open3D, generating datasets from the labelled data for training, training different models such as PointNet and PointNet++ as both sliding window classifiers and segmentation based, comparing trained models, and running the models live on incoming scan data. 
 
 Reads ROS 2 `rosbag2` mcaps and native `lidarrig` recordings automatically—no ROS 2 install required.
 
@@ -31,8 +31,6 @@ rocklabel-train compare                                            # 6. train + 
 rocklabel live --source udp --model best.pt                        # 7. live inference
 ```
 
-> **Tip:** You can also drive everything from the web dashboard. Run `rocklabel dash` and open `http://localhost:8765` in your browser.
-
 ---
 
 ## Tech Stack
@@ -51,10 +49,10 @@ Software & Machine Learning
 
 Labeling is done via an interactive 3D GUI. You can drop bounding shapes (spheres, boxes, lassos) on the fused cloud, set crop limits, and adjust reflectivity ranges to build your dataset.
 
-![Labeling GUI - Height Mapping](https://github.com/user-attachments/assets/1360e401-3b8d-4711-9a56-4f3f02132882)
-![Labeling GUI - Relief Mapping](https://github.com/user-attachments/assets/9c7e4200-5ed2-48d6-bb65-4b58cd2fde4d)
+<img width="442" height="248" alt="Labeling GUI - Height Mapping" src="https://github.com/user-attachments/assets/1360e401-3b8d-4711-9a56-4f3f02132882" />
+<img width="442" height="248" alt="Labeling GUI - Relief Mapping" src="https://github.com/user-attachments/assets/9c7e4200-5ed2-48d6-bb65-4b58cd2fde4d" />
 
-Evaluation is strictly **leave-one-run-out**. Consecutive frames barely move, so a random split would leak near-duplicates and inflate scores. Deployable models (ONNX + TorchScript + metadata) are saved to `training/exported/`.
+Evaluation is strictly **leave-one-run-out**. Consecutive frames barely move, so a random split would leak near-duplicates and inflate scores. Deployable models are saved to `training/exported/`.
 
 ---
 
@@ -62,17 +60,7 @@ Evaluation is strictly **leave-one-run-out**. Consecutive frames barely move, so
 
 Model evaluation was not limited to software testing with fabricated data. To simulate uneven lunar terrain, data was collected in various environments, including a sand volleyball court scattered with obstacle rocks.
 
-![Volleyball Court Environment](https://github.com/user-attachments/assets/1afc3d59-2e2d-439b-a0fd-fc814e3003f7)
-
----
-
-## Hardware Testbed Build
-
-To validate the models outside of pure software evaluation, I designed and built a custom two-wheeled autonomous rover testbed from scratch. The chassis is constructed from slotted flat angle steel for a rigid frame. Electrically, it runs on a 3S LiPo power system and uses an ESP32 microcontroller paired with CAN bus transceivers and motor controllers to drive DC gear motors with encoders.
-
-This setup allows me to replicate closed-loop control and gather realistic, live LiDAR data on the fly to help ensure the viability of the models in the real world.
-
-![Robot Testbed](https://github.com/user-attachments/assets/91364a2a-3d37-4625-8a48-6180bfa6bc78)
+<img width="442" height="248" alt="Volleyball Court Environment" src="https://github.com/user-attachments/assets/1afc3d59-2e2d-439b-a0fd-fc814e3003f7" />
 
 ---
 
@@ -82,10 +70,12 @@ During real-world evaluations with the robot, the models have shown remarkably a
 
 **Live Inference Results:**
 
-![Live Replay Reflectivity Map](https://github.com/user-attachments/assets/32c68995-bc6e-4a9f-84b2-7c5b08155898)
-![Live Replay Binary Segmentation](https://github.com/user-attachments/assets/94ed6baf-2d46-4f1d-adda-6273b70748cb)
+One of the early model's being used on the left out run of its training batch:
 
-Running with live lidar on the robot. This was from a training run on the volleyball court test set, so it transfers well to different a flat terrain environment.
+<img width="442" height="248" alt="Live Replay Reflectivity Map" src="https://github.com/user-attachments/assets/32c68995-bc6e-4a9f-84b2-7c5b08155898" />
+<img width="442" height="248" alt="Live Replay Binary Segmentation" src="https://github.com/user-attachments/assets/94ed6baf-2d46-4f1d-adda-6273b70748cb" />
+
+Running with live lidar on the robot. This was from a training run on the volleyball court test set, so it transfers well to different a flat terrain environment:
 
 <img width="442" height="248" alt="image" src="https://github.com/user-attachments/assets/b9fd2db8-34b9-4bc7-afdd-03e0b68273de" />
 <img width="480" height="270" alt="Screenshot from 2026-09-26 13-58-25" src="https://github.com/user-attachments/assets/8e613ac6-aa57-4a79-bc28-bad9289031a3" />
@@ -95,6 +85,14 @@ Future testing must occur to see how well this transfers to a competition enviro
 
 ---
 
-**[Full documentation → DOCS.md](DOCS.md)**
+## Hardware Testbed Build
+
+To validate the models outside of pure software evaluation, I designed and built a custom two-wheeled autonomous rover testbed from scratch. The chassis is constructed from slotted flat angle steel for a rigid frame. Electrically, it runs on a 3S LiPo power system and uses an ESP32 microcontroller paired with CAN bus transceivers and motor controllers to drive DC gear motors with encoders.
+
+This setup allows me to replicate closed-loop control and gather realistic, live LiDAR data on the fly to help ensure the viability of the models in the real world.
+
+<img width="248" height="442" alt="Robot Testbed" src="https://github.com/user-attachments/assets/91364a2a-3d37-4625-8a48-6180bfa6bc78" />
+
+---
 
 *Built with AI assistance (Claude Code).*
