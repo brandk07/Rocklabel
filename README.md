@@ -58,9 +58,10 @@ Evaluation is strictly **leave-one-run-out**. Consecutive frames barely move, so
 
 ## Real-World Use & Data Collection
 
-Model evaluation was not limited to software testing with fabricated data. To simulate uneven lunar terrain, data was collected in various environments, including a sand volleyball court scattered with obstacle rocks.
+Model evaluation was not limited to software testing with fabricated data. To simulate uneven lunar terrain, data was collected in various environments, including a sand volleyball court scattered with obstacle rocks. Two separate tests have been conducted, one holding the lidar by hand, and the other driving the actual robot around.
 
 <img width="442" height="248" alt="Volleyball Court Environment" src="https://github.com/user-attachments/assets/1afc3d59-2e2d-439b-a0fd-fc814e3003f7" />
+<img width="412" height="248" alt="image" src="https://github.com/user-attachments/assets/f825409a-8193-41a2-97cf-5265c59ce71f" />
 
 ---
 
